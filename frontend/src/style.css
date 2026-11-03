@@ -1274,8 +1274,7 @@ summary:focus-visible {
   gap: 24px;
 }
 
-.portal-side,
-.portal-main > * {
+.portal-side {
   border: 1px solid var(--line);
   background: var(--panel);
   border-radius: var(--radius);
@@ -1366,8 +1365,8 @@ summary:focus-visible {
 }
 
 .portal-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: block;
+  width: 100%;
 }
 
 .portal-stats > div {

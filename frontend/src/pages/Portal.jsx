@@ -27,6 +27,7 @@ import { authApi, portalApi, publicApi } from '../lib/api.js';
 import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
+import { useTheme } from '../lib/theme.jsx';
 import { date, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
 import {
   Badge,
@@ -111,9 +112,13 @@ export function PortalLayout() {
         desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition.name}.`}
         aside={
           <div className="title-badges">
-            <Badge tone={user?.studentVerified ? 'good' : 'muted'}>
-              {user?.studentVerified ? 'Student verified' : 'Verification open'}
-            </Badge>
+            {isStaff ? (
+              <Badge tone="accent">Staff Access</Badge>
+            ) : (
+              <Badge tone={user?.studentVerified ? 'good' : 'muted'}>
+                {user?.studentVerified ? 'Student verified' : 'Verification open'}
+              </Badge>
+            )}
             {user?.profileComplete ? <Badge tone="accent">Profile complete</Badge> : null}
             {isStaff ? (
               <Link to="/manage" className="button ghost small" style={{ fontSize: 11, padding: '4px 8px' }}>
@@ -150,7 +155,13 @@ export function PortalLayout() {
           <div className="avatar">{initials(user?.fullName)}</div>
           <h3>{user?.fullName}</h3>
           <p>{user?.email}</p>
-          <span className="pill">{user?.studentVerified ? 'Verified student' : 'Student check pending'}</span>
+          {isStaff ? (
+            <span className="pill staff-pill" style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)' }}>
+              Staff Administrator
+            </span>
+          ) : (
+            <span className="pill">{user?.studentVerified ? 'Verified student' : 'Student check pending'}</span>
+          )}
           <nav aria-label="Participant portal">
             {PORTAL_NAV.map(([label, to, end]) => (
               <NavLink key={to} to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -218,6 +229,7 @@ function PassStatusCard({ pass, policy }) {
 }
 
 export function PortalOverview() {
+  const { user, isStaff } = useAuth();
   const { editionId, policy } = useSite();
   const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
@@ -263,7 +275,9 @@ export function PortalOverview() {
         <Panel className="next-card">
           <Eyebrow>NEXT STEP</Eyebrow>
           <h3>
-            {!passData
+            {isStaff
+              ? 'Staff Administration Active'
+              : !passData
               ? 'Buy your convention pass'
               : !selection?.valid
                 ? 'Complete your included selection'
@@ -272,7 +286,9 @@ export function PortalOverview() {
                   : 'You are ready for the convention'}
           </h3>
           <p>
-            {!passData
+            {isStaff
+              ? 'You are signed in with staff privileges. Monitor live event registrations, scan badges at the door, and adjust convention controls.'
+              : !passData
               ? 'The pass is mandatory and includes lunch, entry and the included-event allowance.'
               : !selection?.valid
                 ? selection?.message || 'Choose included events within the published allowance.'
@@ -282,7 +298,9 @@ export function PortalOverview() {
           </p>
           <Button
             to={
-              !passData
+              isStaff
+                ? '/manage'
+                : !passData
                 ? '/portal/pass'
                 : !selection?.valid
                   ? '/portal/select-events'
@@ -292,7 +310,7 @@ export function PortalOverview() {
             }
             icon={ArrowRight}
           >
-            Continue
+            {isStaff ? 'Open Staff Console' : 'Continue'}
           </Button>
         </Panel>
         <Panel>
@@ -310,7 +328,9 @@ export function PortalOverview() {
           </div>
           <div className="detail-row">
             <span>Verification</span>
-            <b>{verificationStatus?.status || 'unverified'}</b>
+            <b style={isStaff ? { color: 'var(--cyan)' } : {}}>
+              {isStaff ? 'Staff Exempt' : (verificationStatus?.status || 'unverified')}
+            </b>
           </div>
           <div className="detail-row">
             <span>Lunch</span>
@@ -841,6 +861,8 @@ export function PortalRegistrations() {
 export function PortalTickets() {
   const { user } = useAuth();
   const { edition, editionId } = useSite();
+  const { accent } = useTheme();
+  const [qrTheme, setQrTheme] = useState('auto');
   const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
@@ -848,6 +870,8 @@ export function PortalTickets() {
   const [message, setMessage] = useState(null);
   const rows = tickets.data?.data || [];
   const prof = profile.data?.data || {};
+
+  const effectiveQrAccent = qrTheme === 'auto' ? accent : qrTheme;
 
   const copy = async (token) => {
     try {
@@ -864,15 +888,15 @@ export function PortalTickets() {
 
   const downloadQr = async (ticket) => {
     try {
-      const url = portalApi.ticketQrUrl(editionId, ticket.id);
+      const url = portalApi.ticketQrUrl(editionId, ticket.id, effectiveQrAccent);
       const res = await fetch(url);
       const blob = await res.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `parallax-pass-${ticket.token}.svg`;
+      a.download = `parallax-pass-${ticket.token}-${effectiveQrAccent}.svg`;
       a.click();
       URL.revokeObjectURL(a.href);
-      setMessage({ tone: 'success', text: 'Pass QR code downloaded.' });
+      setMessage({ tone: 'success', text: `Pass QR code downloaded (${effectiveQrAccent} theme).` });
     } catch {
       setMessage({ tone: 'error', text: 'Could not download QR code.' });
     }
@@ -913,13 +937,12 @@ export function PortalTickets() {
 
             {/* Badge Masthead */}
             <div className="badge-masthead">
-              <div className="badge-brand-row">
-                <img src={LOGO} alt="Parallax" className="badge-logo" />
-                <div className="badge-brand-text">
-                  <span className="badge-super">{edition?.name || 'PARALLAX 2026'}</span>
-                  <span className="badge-sub">{edition?.organizer || 'ISTE STATE STUDENT CONVENTION'}</span>
+              <div className="badge-brand-center">
+                <img src={LOGO} alt="Parallax" className="badge-logo-center" />
+                <div className="badge-sub-row">
+                  <img src={ISTE} alt="ISTE" className="badge-host-logo-inline" />
+                  <span className="badge-sub">{edition?.organizer || 'ISTE STUDENT CHAPTER · NSSCE'}</span>
                 </div>
-                <img src={ISTE} alt="ISTE" className="badge-host-logo" />
               </div>
               <div className="badge-campus-tag">
                 <MapPin size={12} />
@@ -957,7 +980,7 @@ export function PortalTickets() {
               <div className="notch-cut notch-right" />
             </div>
 
-            {/* Core QR Matrix Box */}
+            {/* Core QR Matrix Box with Theme Styling & Laser Sweep */}
             <div className="badge-qr-box">
               <div className="qr-reticle reticle-tl" />
               <div className="qr-reticle reticle-tr" />
@@ -965,14 +988,33 @@ export function PortalTickets() {
               <div className="qr-reticle reticle-br" />
               <div className="qr-matrix-surface">
                 <img
-                  src={portalApi.ticketQrUrl(editionId, ticket.id)}
+                  src={portalApi.ticketQrUrl(editionId, ticket.id, effectiveQrAccent)}
                   alt={`QR entry pass for ${ticket.title}`}
                   className="qr-img"
                   width="200"
                   height="200"
                 />
               </div>
-              <span className="qr-scan-hint">SCAN FOR GATE ENTRY · DAY 1 & 2</span>
+
+              {/* QR Theme Quick Switcher */}
+              <div className="qr-mode-selector">
+                <button
+                  type="button"
+                  className={`qr-mode-pill ${qrTheme === 'auto' ? 'is-active' : ''}`}
+                  onClick={() => setQrTheme('auto')}
+                  title="Follow active website theme"
+                >
+                  Theme Auto
+                </button>
+                <button
+                  type="button"
+                  className={`qr-mode-pill ${qrTheme === 'light' ? 'is-active' : ''}`}
+                  onClick={() => setQrTheme('light')}
+                  title="High-contrast print mode"
+                >
+                  Print High-Contrast
+                </button>
+              </div>
             </div>
 
             {/* Security Token Bar */}

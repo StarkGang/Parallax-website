@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -337,13 +337,14 @@ async def ticket_qr(
     edition_id: uuid.UUID,
     ticket_id: uuid.UUID,
     request: Request,
+    accent: str = Query(default="cyan", max_length=20),
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     t = await db.get(Ticket, ticket_id)
     if t is None or t.user_id != ctx.user.id or t.edition_id != edition_id:
         raise NotFound("Ticket not found.")
-    svg = ticket_service.qr_svg(ticket_service.ticket_token_for(t.id))
+    svg = ticket_service.qr_svg(ticket_service.ticket_token_for(t.id), accent=accent)
     return Response(content=svg, media_type="image/svg+xml")
 
 

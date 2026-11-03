@@ -107,7 +107,6 @@ export function AdminLayout() {
         <div className="admin-brand-lockup">
           <Link to="/manage" className="admin-brand-link" aria-label="Staff operations home">
             <img src={LOGO} alt={edition?.name || 'Parallax'} className="admin-brand-logo" />
-            <span className="admin-brand-name">PARALLAX</span>
           </Link>
           <span className="admin-badge-console">Staff Console</span>
           {edition?.name ? <span className="admin-edition-chip">{edition.name}</span> : null}
