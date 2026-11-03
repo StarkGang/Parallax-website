@@ -1,0 +1,3 @@
+# Contributing
+
+Use focused branches such as `feat/faq-policy` or `docs/deployment-guide`; commit with a concise conventional prefix (`feat:`, `fix:`, `docs:`, `style:`). Keep edition policy in config, event records in data, pure pricing rules in utilities and API access behind services. Update docs when policy or routes change. Preserve user-supplied originals under `images/`; document asset use. Before review run `npm run build`; run `npm test` when adding pricing or service logic. Check keyboard navigation and narrow mobile widths for UI changes. Never commit credentials, personal information or real payment data.
