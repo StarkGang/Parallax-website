@@ -254,140 +254,103 @@ def _set_oauth_cookie(response: Response, payload: dict) -> None:
 
 
 
-@router.get("/google/login", dependencies=[Depends(limiter("auth_login", 20, 600))])
-
-async def google_login(request: Request, next: str = Query("/portal")) -> Response:
-
+def resolve_google_redirect_uri(request: Request | None = None) -> str:
     settings = get_settings()
+    if settings.google_redirect_uri and settings.google_redirect_uri.startswith("http"):
+        if ".vercel.app" in settings.google_redirect_uri and not settings.google_redirect_uri.startswith("https://parallax-iste.vercel.app"):
+            return "https://parallax-iste.vercel.app/google/callback"
+        return settings.google_redirect_uri
 
+    if request:
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        if "localhost" in host or "127.0.0.1" in host:
+            proto = request.headers.get("x-forwarded-proto") or "http"
+            return f"{proto}://{host}/google/callback"
+
+    return "https://parallax-iste.vercel.app/google/callback"
+
+
+@router.get("/google/login", dependencies=[Depends(limiter("auth_login", 20, 600))])
+async def google_login(request: Request, next: str = Query("/portal")) -> Response:
+    settings = get_settings()
     if not settings.google_configured:
-
         return _fail_redirect("google_not_configured")
 
-    state = new_token(24)
-
     nonce = new_token(24)
-
     verifier = new_token(48)
-
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
 
-    params = {
+    redirect_uri = resolve_google_redirect_uri(request)
 
-        "client_id": settings.google_client_id,
-
-        "redirect_uri": settings.google_redirect_uri,
-
-        "response_type": "code",
-
-        "scope": "openid email profile",
-
-        "state": state,
-
+    state_payload = {
         "nonce": nonce,
-
-        "code_challenge": challenge,
-
-        "code_challenge_method": "S256",
-
-        "access_type": "online",
-
-        "prompt": "select_account",
-
+        "verifier": verifier,
+        "redirect_uri": redirect_uri,
+        "next": valid_next(next),
+        "issued": int(datetime.now(UTC).timestamp()),
     }
+    state_token = _sign(state_payload)
 
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state_token,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "access_type": "online",
+        "prompt": "select_account",
+    }
     response = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}", status_code=302)
-
-    _set_oauth_cookie(
-
-        response,
-
-        {
-
-            "state": state,
-
-            "nonce": nonce,
-
-            "verifier": verifier,
-
-            "next": valid_next(next),
-
-            "issued": int(datetime.now(UTC).timestamp()),
-
-        },
-
-    )
-
+    _set_oauth_cookie(response, state_payload)
     return response
 
 
-
-
-
 @router.get("/google/callback", dependencies=[Depends(limiter("auth_callback", 20, 600))])
-
 async def google_callback(
-
     request: Request,
-
     code: str | None = None,
-
     state: str | None = None,
-
     error: str | None = None,
-
     db: AsyncSession = Depends(get_db),
-
 ) -> Response:
-
     settings = get_settings()
 
-    if error or not code or not state:
+    code = code or request.query_params.get("code")
+    state = state or request.query_params.get("state")
+    error = error or request.query_params.get("error")
 
+    if error or not code or not state:
         return _fail_redirect()
 
-    data = _unsign(request.cookies.get(settings.oauth_cookie))
+    # Verify state: try stateless signed token from query param first, then signed cookie
+    data = _unsign(state)
+    if not data:
+        data = _unsign(request.cookies.get(settings.oauth_cookie))
 
     if not data:
-
-        return _fail_redirect()
-
-    if not constant_compare(str(data.get("state", "")), state):
-
-        security_event("oauth_state_mismatch")
-
+        security_event("oauth_state_invalid")
         return _fail_redirect()
 
     if int(datetime.now(UTC).timestamp()) - int(data.get("issued", 0)) > 600:
+        return _fail_redirect("session_expired")
 
-        return _fail_redirect()
-
-
+    token_redirect_uri = data.get("redirect_uri") or resolve_google_redirect_uri(request)
 
     try:
-
         async with httpx.AsyncClient(timeout=15) as client:
-
             response = await client.post(
-
                 GOOGLE_TOKEN_URL,
-
                 data={
-
                     "code": code,
-
                     "client_id": settings.google_client_id,
-
                     "client_secret": settings.google_client_secret,
-
-                    "redirect_uri": settings.google_redirect_uri,
-
+                    "redirect_uri": token_redirect_uri,
                     "grant_type": "authorization_code",
-
                     "code_verifier": data.get("verifier"),
-
                 },
-
             )
 
         if response.status_code >= 400:
@@ -417,7 +380,7 @@ async def google_callback(
             issuer=ISSUERS,
 
             options={"require": ["exp", "iat", "sub", "aud", "iss"]},
-
+            leeway=300,
         )
 
         nonce = claims.get("nonce")
@@ -448,6 +411,8 @@ async def google_callback(
 
 
     target = valid_next(data.get("next"))
+    if is_staff and target == "/portal":
+        target = "/manage"
 
     redirect = RedirectResponse(f"{settings.frontend_origin}{target}", status_code=302)
 

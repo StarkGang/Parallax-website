@@ -3,11 +3,12 @@
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import current_context
@@ -16,7 +17,7 @@ from app.core.config import get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger, request_id_ctx
 from app.core.csrf import SAFE_METHODS
-from app.db.session import dispose_engine, session_scope
+from app.db.session import dispose_engine, get_db, session_scope
 from app.db.base import Base
 
 logger = get_logger("app")
@@ -66,7 +67,10 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
             settings = get_settings()
             if origin:
                 origin_clean = origin.rstrip("/")
-                is_allowed = origin_clean in settings.allowed_origins
+                is_allowed = (
+                    origin_clean in settings.allowed_origins
+                    or origin_clean.endswith(".vercel.app")
+                )
                 if not is_allowed and settings.is_development:
                     if (
                         origin_clean.startswith("http://localhost:")
@@ -92,14 +96,17 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
 
 async def _bootstrap_local_dev() -> None:
     settings = get_settings()
-    if not settings.is_development:
-        return
     from app.db.session import get_engine
     from app.seed import seed_if_empty
 
-    async with get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    if settings.seed_demo_data:
+    if settings.auto_create_tables:
+        try:
+            async with get_engine().begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+        except Exception as exc:
+            logger.warning("schema_init_failed", error=str(exc))
+
+    if settings.seed_demo_data or settings.is_development:
         try:
             async with session_scope() as db:
                 await seed_if_empty(db)
@@ -142,7 +149,8 @@ def create_app() -> FastAPI:
     else:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=[settings.frontend_origin],
+            allow_origins=settings.allowed_origins,
+            allow_origin_regex=r"^https://([a-zA-Z0-9-]+\.)*vercel\.app$",
             allow_credentials=True,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-Request-ID"],
@@ -163,6 +171,24 @@ def create_app() -> FastAPI:
     app.include_router(participant.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
     app.include_router(webhooks.router, prefix="/api/v1")
+
+    # Top-level callback aliases for Google OAuth redirect URIs (/google/callback, /auth/, /auth)
+    @app.get("/auth/", include_in_schema=False)
+    @app.get("/auth", include_in_schema=False)
+    @app.get("/google/callback", include_in_schema=False)
+    async def top_level_google_callback(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        db: AsyncSession = Depends(get_db),
+    ):
+        code = code or request.query_params.get("code")
+        state = state or request.query_params.get("state")
+        error = error or request.query_params.get("error")
+        return await auth.google_callback(
+            request=request, code=code, state=state, error=error, db=db
+        )
 
     @app.get("/health/live", tags=["health"])
     @app.get("/healthz", include_in_schema=False)

@@ -6,16 +6,24 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_delete_pattern
 from app.core.errors import Conflict, NotFound, ValidationFailed
-from app.models.commerce import ConventionPass, PaymentOrder, Registration, Team
+from app.models.commerce import (
+    ConventionPass,
+    IncludedEventSelection,
+    PaymentOrder,
+    Registration,
+    Team,
+)
 from app.models.edition import ConventionEdition, Event, EventCategory
 from app.schemas.participant import RegistrationView
 from app.services.audit import record
 from app.services.editions import aware, current_policy
-from app.services.events import seats_taken
+from app.services.events import event_open, seats_taken
+from app.services.tickets import issue_for_registration, revoke_for_registration
 
 
 def _number(kind: str) -> str:
@@ -87,26 +95,46 @@ async def create_addon_registrations(
     event_ids: list[uuid.UUID],
 ) -> tuple[list[Registration], PaymentOrder | None]:
     policy = await current_policy(db, edition.id)
-    if policy.addon_requires_pass:
-        user_pass = (
-            await db.execute(
-                select(ConventionPass).where(
-                    ConventionPass.user_id == user_id,
-                    ConventionPass.edition_id == edition.id,
-                    ConventionPass.status == "active",
-                )
+    user_pass = (
+        await db.execute(
+            select(ConventionPass).where(
+                ConventionPass.user_id == user_id,
+                ConventionPass.edition_id == edition.id,
             )
-        ).scalar_one_or_none()
-        if user_pass is None:
-            raise ValidationFailed("You must hold an active pass to register for add-on events.")
+        )
+    ).scalar_one_or_none()
+    if policy.addon_requires_pass and (user_pass is None or user_pass.status != "active"):
+        raise ValidationFailed("You must hold an active pass to register for add-on events.")
+
+    unique_ids = list(dict.fromkeys(event_ids))
+    if len(unique_ids) != len(event_ids):
+        raise ValidationFailed("The same event was selected twice.")
+    event_ids = unique_ids
+
+    # Release abandoned unpaid holds before checking capacity.
+    await expire_reservations(db)
+
+    declared: set[uuid.UUID] = set()
+    if user_pass is not None:
+        declared = set(
+            (
+                await db.execute(
+                    select(IncludedEventSelection.event_id).where(
+                        IncludedEventSelection.pass_id == user_pass.id
+                    )
+                )
+            ).scalars()
+        )
 
     events = list(
         (
             await db.execute(
-                select(Event).where(
+                select(Event)
+                .where(
                     Event.id.in_(event_ids),
                     Event.edition_id == edition.id,
                 )
+                .with_for_update()
             )
         ).scalars()
     )
@@ -117,14 +145,21 @@ async def create_addon_registrations(
     total_paise = 0
     regs = []
     for e in events:
+        if not event_open(e):
+            raise Conflict(f"Registration for '{e.title}' is closed.")
+        if e.id in declared:
+            raise Conflict(
+                f"'{e.title}' is already claimed inside your pass allowance. Remove it from your "
+                "included selection before booking it as an add-on."
+            )
         await _assert_capacity(db, e)
-        # Check duplicate
+        # Check duplicate across every live registration state
         existing = (
             await db.execute(
                 select(Registration).where(
                     Registration.user_id == user_id,
                     Registration.event_id == e.id,
-                    Registration.status.in_(["confirmed", "reserved"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending"]),
                 )
             )
         ).scalar_one_or_none()
@@ -162,7 +197,16 @@ async def create_addon_registrations(
         for r in regs:
             r.order_id = order.id
         await db.flush()
+        from app.services.payments import attach_gateway_order
 
+        await attach_gateway_order(db, order)
+    else:
+        # Free add-ons are confirmed immediately, so they need their tickets now.
+        for r in regs:
+            await issue_for_registration(db, r)
+
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
     return regs, order
 
 
@@ -189,6 +233,32 @@ async def cancel_registration(
         return
     reg.status = "cancelled"
     reg.cancelled_at = datetime.now(UTC)
+    await revoke_for_registration(db, reg.id)
+    if reg.kind == "included":
+        user_pass = (
+            (
+                await db.execute(
+                    select(ConventionPass)
+                    .where(
+                        ConventionPass.user_id == reg.user_id,
+                        ConventionPass.edition_id == reg.edition_id,
+                    )
+                    .order_by(ConventionPass.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if user_pass is not None:
+            await db.execute(
+                delete(IncludedEventSelection).where(
+                    IncludedEventSelection.pass_id == user_pass.id,
+                    IncludedEventSelection.event_id == reg.event_id,
+                )
+            )
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
     await record(
         db,
         request,
@@ -205,15 +275,39 @@ async def expire_reservations(db: AsyncSession) -> int:
     from sqlalchemy import update
 
     now = datetime.now(UTC)
-    result = await db.execute(
-        update(Registration)
+    expired_ids = list(
+        (
+            await db.execute(
+                select(Registration.id).where(
+                    Registration.status == "reserved",
+                    Registration.reservation_expires_at.is_not(None),
+                    Registration.reservation_expires_at < now,
+                )
+            )
+        ).scalars()
+    )
+    if not expired_ids:
+        return 0
+
+    await db.execute(
+        update(PaymentOrder)
         .where(
-            Registration.status == "reserved",
-            Registration.reservation_expires_at < now,
+            PaymentOrder.status == "created",
+            PaymentOrder.purpose == "registration",
+            PaymentOrder.id.in_(
+                select(Registration.order_id).where(Registration.id.in_(expired_ids))
+            ),
         )
+        .values(status="expired")
+    )
+    await db.execute(
+        update(Registration)
+        .where(Registration.id.in_(expired_ids))
         .values(status="cancelled", cancelled_at=now)
     )
-    return result.rowcount or 0
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
+    return len(expired_ids)
 
 
 async def team_member_count(db: AsyncSession, team_id: uuid.UUID) -> int:

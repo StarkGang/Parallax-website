@@ -193,8 +193,90 @@ SUMMARIES = {
 
 
 def _at(days_from_now: int, hour: int = 9, minute: int = 0) -> datetime:
-    base = datetime(2026, 11, 3, 0, 0, 0, tzinfo=UTC)
+    """Anchor the demo schedule to today so a fresh seed is always usable."""
+    base = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     return base + timedelta(days=days_from_now, hours=hour, minutes=minute)
+
+
+def _same_shape(value: datetime, template: datetime) -> datetime:
+    """Preserve the naive/aware representation of the stored column value."""
+    return value.replace(tzinfo=None) if template.tzinfo is None else value
+
+
+async def _refresh_demo_timeline(db: AsyncSession, edition: ConventionEdition) -> None:
+    """Keep the demo edition usable after its dates drift into the past.
+
+    The demo edition is presentation data, not a real convention. When its
+    selection deadline or closing day has already passed, the schedule is
+    re-anchored around today so the participant workflow stays testable.
+    Non-development environments and non-demo editions are never touched.
+    """
+    settings = get_settings()
+    if settings.app_env not in ("development", "test") or not settings.seed_demo_data:
+        return
+    # Never reshape a shared or remote database: this repair is for the local
+    # SQLite demo copy only.
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    def _aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+    now = datetime.now(UTC)
+    starts = _aware(edition.starts_at)
+    ends = _aware(edition.ends_at)
+    policy = (
+        await db.execute(
+            select(EditionPolicy).where(
+                EditionPolicy.edition_id == edition.id,
+                EditionPolicy.is_current.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    deadline = _aware(policy.selection_change_deadline) if policy else None
+
+    # Only ever re-anchor an edition that has actually finished. An edition
+    # whose dates were set by staff must never be moved, even when its policy
+    # windows are stale (that is a console/configuration problem, not seed data).
+    if starts is None or ends is None or ends > now:
+        return
+
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    new_start = base + timedelta(days=1, hours=9)
+    shift = new_start - starts
+
+    edition.starts_at = _same_shape(new_start, edition.starts_at)
+    edition.ends_at = _same_shape(base + timedelta(days=2, hours=18), edition.ends_at)
+    if edition.registration_opens_at is not None:
+        edition.registration_opens_at = _same_shape(
+            base - timedelta(days=30), edition.registration_opens_at
+        )
+    if edition.registration_closes_at is not None:
+        edition.registration_closes_at = _same_shape(
+            base + timedelta(days=1, hours=12), edition.registration_closes_at
+        )
+
+    if policy is not None and policy.selection_change_deadline is not None:
+        policy.selection_change_deadline = _same_shape(
+            base + timedelta(days=1, hours=10), policy.selection_change_deadline
+        )
+
+    events = list(
+        (await db.execute(select(Event).where(Event.edition_id == edition.id))).scalars()
+    )
+    for event in events:
+        event.starts_at = _same_shape(_aware(event.starts_at) + shift, event.starts_at)
+        event.ends_at = _same_shape(_aware(event.ends_at) + shift, event.ends_at)
+        event.registration_opens_at = _same_shape(
+            base - timedelta(days=30), event.registration_opens_at
+        )
+        event.registration_closes_at = _same_shape(
+            _aware(event.registration_closes_at) + shift, event.registration_closes_at
+        )
+
+    await db.flush()
 
 
 async def seed_if_empty(db: AsyncSession) -> None:
@@ -345,6 +427,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
         db.add(a)
     else:
         edition = ext
+        await _refresh_demo_timeline(db, edition)
 
     # Seed administrator / owner (configurable via env BOOTSTRAP_OWNER_EMAIL or DEV_ADMIN_EMAIL)
     settings = get_settings()

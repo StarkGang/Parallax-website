@@ -28,7 +28,7 @@ import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { useTheme } from '../lib/theme.jsx';
-import { date, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
+import { date, dateRange, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
 import {
   Badge,
   Button,
@@ -544,22 +544,57 @@ export function PortalSelectEvents() {
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
 
-  useEffect(() => {
-    if (!selection) return;
-    setSelected(selection.selections.filter((item) => item.selected).map((item) => item.eventId));
-  }, [selection?.passId, selection?.count, selection?.valuePaise]);
+  // Re-sync the draft only when the server's saved selection actually changes,
+  // not on every unrelated refresh of the pass document.
+  const savedSignature = useMemo(
+    () =>
+      (selection?.selections || [])
+        .filter((item) => item.selected)
+        .map((item) => item.eventId)
+        .sort()
+        .join('|'),
+    [selection],
+  );
 
-  const options = selection?.selections || [];
+  useEffect(() => {
+    setSelected(savedSignature ? savedSignature.split('|') : []);
+  }, [savedSignature]);
+
   const required = selection?.requiredCount ?? policy?.includedEventCount ?? 0;
   const mode = selection?.mode || policy?.includedSelectionMode || 'up_to';
   const cap = selection?.capPaise ?? policy?.includedValueCapPaise ?? 0;
+  const capInclusive = selection?.capInclusive !== false;
+
+  const addonRegisteredIds = new Set(
+    (regs.data?.data || [])
+      .filter(
+        (row) =>
+          row.kind === 'addon' && ['confirmed', 'reserved', 'pending'].includes(row.status),
+      )
+      .map((row) => row.eventId),
+  );
+
+  // An event already booked as an add-on cannot also be claimed inside the pass.
+  const options = (selection?.selections || []).filter(
+    (item) => !addonRegisteredIds.has(item.eventId) || selected.includes(item.eventId),
+  );
+
   const value = options
     .filter((item) => selected.includes(item.eventId))
     .reduce((sum, item) => sum + item.baseValuePaise, 0);
 
-  const withinCap = selection?.capInclusive === false ? value < cap : value <= cap;
+  const withinCap = capInclusive ? value <= cap : value < cap;
   const withinCount = mode === 'exact' ? selected.length === required : selected.length <= required;
-  const valid = withinCap && withinCount;
+  const valid = withinCap && withinCount && !selection?.locked;
+
+  const canAdd = (event) => {
+    if (selection?.locked) return false;
+    if (selected.includes(event.eventId)) return true;
+    if (event.selectable === false) return false;
+    if (selected.length >= required) return false;
+    const nextValue = value + event.baseValuePaise;
+    return capInclusive ? nextValue <= cap : nextValue < cap;
+  };
 
   const registeredEventIds = new Set(
     (regs.data?.data || [])
@@ -581,23 +616,40 @@ export function PortalSelectEvents() {
       setMessage({ tone: 'error', text: 'Included selections are locked after the deadline.' });
       return;
     }
-    const next = selected.includes(eventId)
-      ? selected.filter((id) => id !== eventId)
-      : [...selected, eventId];
-    const nextValue = options
-      .filter((item) => next.includes(item.eventId))
-      .reduce((sum, item) => sum + item.baseValuePaise, 0);
-    if (mode === 'exact' ? next.length > required : next.length > required) {
-      setMessage({ tone: 'error', text: `You can include ${mode === 'exact' ? 'exactly' : 'up to'} ${required} events.` });
+    if (selected.includes(eventId)) {
+      setMessage(null);
+      setSelected(selected.filter((id) => id !== eventId));
       return;
     }
-    const capOk = selection?.capInclusive === false ? nextValue < cap : nextValue <= cap;
-    if (!capOk) {
-      setMessage({ tone: 'error', text: `That choice would exceed the ${money(cap)} base-value cap.` });
+    const option = options.find((item) => item.eventId === eventId);
+    if (!option) {
+      setMessage({ tone: 'error', text: 'That event is not available for included selection.' });
+      return;
+    }
+    if (option.selectable === false) {
+      setMessage({ tone: 'error', text: `${option.title} is full. Pick another event or join the waitlist at the desk.` });
+      return;
+    }
+    if (selected.length >= required) {
+      setMessage({
+        tone: 'error',
+        text:
+          mode === 'exact'
+            ? `This pass includes exactly ${required} events. Remove one before adding another.`
+            : `You can include up to ${required} events. Remove one before adding another.`,
+      });
+      return;
+    }
+    const nextValue = value + option.baseValuePaise;
+    if (capInclusive ? nextValue > cap : nextValue >= cap) {
+      setMessage({
+        tone: 'error',
+        text: `Adding ${option.title} would take you past the ${money(cap)} base-value cap.`,
+      });
       return;
     }
     setMessage(null);
-    setSelected(next);
+    setSelected([...selected, eventId]);
   };
 
   const save = async () => {
@@ -690,14 +742,25 @@ export function PortalSelectEvents() {
       <p className="muted">
         Toggling a choice updates the total immediately. Save once the allowance is satisfied.
       </p>
+      {addonRegisteredIds.size ? (
+        <InlineMessage tone="info">
+          Events already booked as add-ons are excluded from the included allowance. Cancel that
+          add-on first if you would rather claim it inside the pass.
+        </InlineMessage>
+      ) : null}
       <div className="choice-list">
-        {options.map((event) => (
-          <label className={`choice ${selected.includes(event.eventId) ? 'is-selected' : ''}`.trim()} key={event.eventId}>
+        {options.map((event) => {
+          const blocked = !canAdd(event) && !selected.includes(event.eventId);
+          return (
+          <label
+            className={`choice ${selected.includes(event.eventId) ? 'is-selected' : ''} ${blocked ? 'is-blocked' : ''}`.trim()}
+            key={event.eventId}
+          >
             <input
               type="checkbox"
               checked={selected.includes(event.eventId)}
               onChange={() => toggle(event.eventId)}
-              disabled={selection?.locked}
+              disabled={Boolean(selection?.locked) || event.selectable === false}
             />
             <span className="choice-check">
               {selected.includes(event.eventId) ? <Check size={14} strokeWidth={2.2} /> : <Plus size={14} strokeWidth={1.8} />}
@@ -710,21 +773,34 @@ export function PortalSelectEvents() {
             </span>
             <span className="choice-price">
               Base {money(event.baseValuePaise)}
-              <small>Add-on {money(event.addonPricePaise)}</small>
+              <small>
+                {event.selectable === false
+                  ? 'Full'
+                  : event.seatsLeft != null
+                    ? `${event.seatsLeft} seats left`
+                    : `Add-on ${money(event.addonPricePaise)}`}
+              </small>
             </span>
           </label>
-        ))}
+          );
+        })}
       </div>
       <div className="save-row">
-        <Button onClick={save} disabled={busy === 'save' || selection?.locked} icon={Check}>
+        <Button
+          onClick={save}
+          disabled={busy === 'save' || Boolean(selection?.locked) || !valid}
+          icon={Check}
+        >
           {busy === 'save' ? 'Saving' : 'Save included selections'}
         </Button>
         <span className={valid ? 'valid-note' : 'invalid-note'}>
           {valid
             ? 'Within the allowance'
-            : mode === 'exact' && selected.length === required
-              ? 'Value exceeds the cap'
-              : `Choose ${mode === 'exact' ? 'exactly' : 'up to'} ${required} events within ${money(cap)}`}
+            : selection?.locked
+              ? 'Locked after the deadline'
+              : !withinCap
+                ? `Value exceeds the ${money(cap)} cap`
+                : `${selected.length} of ${required} chosen — ${mode === 'exact' ? 'exactly' : 'up to'} ${required} within ${money(cap)}`}
         </span>
       </div>
 
@@ -1038,21 +1114,25 @@ export function PortalTickets() {
                 <Calendar size={13} />
                 <div>
                   <span className="cell-lbl">DATES</span>
-                  <b>04 - 05 NOV 2026</b>
+                  <b>{ticket.startsAt ? dateTime(ticket.startsAt) : dateRange(edition?.startsAt, edition?.endsAt)}</b>
                 </div>
               </div>
               <div className="logistics-cell">
                 <Utensils size={13} />
                 <div>
                   <span className="cell-lbl">MEALS</span>
-                  <b>LUNCH INCLUDED</b>
+                  <b>{(edition?.policy?.lunchIncludedDays || ['day1', 'day2']).length ? 'LUNCH INCLUDED' : 'NOT INCLUDED'}</b>
                 </div>
               </div>
               <div className="logistics-cell full-width">
                 <MapPin size={13} />
                 <div>
                   <span className="cell-lbl">VENUE & CHECK-IN</span>
-                  <b>NSSCE CAMPUS, PALAKKAD</b>
+                  <b>
+                    {ticket.venueRoom
+                      ? `${ticket.venueRoom.toUpperCase()} · ${(edition?.venue || 'NSSCE CAMPUS').toUpperCase()}`
+                      : (edition?.venue ? edition.venue.toUpperCase() : 'NSSCE CAMPUS, PALAKKAD')}
+                  </b>
                 </div>
               </div>
             </div>

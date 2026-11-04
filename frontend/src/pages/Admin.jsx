@@ -26,7 +26,6 @@ import {
   X,
 } from 'lucide-react';
 
-const LOGO = String(import.meta.env.BASE_URL) + 'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png';
 import { adminApi, publicApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
@@ -59,7 +58,11 @@ import {
   Toggle,
   useAsync,
   useDebounced,
+  clearAsyncCache,
+  AdminErrorBoundary,
 } from '../components/ui.jsx';
+
+const LOGO = String(import.meta.env.BASE_URL) + 'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png';
 
 const NAV = [
   ['Overview', '/manage', LayoutDashboard, true],
@@ -86,18 +89,52 @@ const ROLE_LABELS = {
   participant: 'Participant',
 };
 
-const ACCENTS = ['cyan', 'amber', 'violet', 'lime', 'rose', 'ice'];
+const ACCENTS = ['cyan', 'amber', 'orange', 'violet', 'lime', 'rose', 'ice'];
 
 export function AdminLayout() {
-  const { isStaff, roles, user, logout } = useAuth();
-  const { edition } = useSite();
+  const { isStaff, roles, user, loading, logout } = useAuth();
+  const site = useSite();
+  const { edition, editionId } = site;
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncToast, setSyncToast] = useState(null);
   const location = useLocation();
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
 
+  const handleForceRefresh = async () => {
+    setSyncing(true);
+    setSyncToast(null);
+    try {
+      if (editionId) {
+        await adminApi.sync(editionId);
+      }
+      clearAsyncCache();
+      try {
+        sessionStorage.removeItem('px_cached_edition');
+        sessionStorage.removeItem('px_cached_config');
+      } catch {}
+      site.refresh();
+      setSyncToast('Caches purged & synchronized with database!');
+      setTimeout(() => setSyncToast(null), 3500);
+    } catch {
+      clearAsyncCache();
+      try {
+        sessionStorage.removeItem('px_cached_edition');
+        sessionStorage.removeItem('px_cached_config');
+      } catch {}
+      site.refresh();
+      setSyncToast('Client cache purged & reloaded!');
+      setTimeout(() => setSyncToast(null), 3500);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (loading) return <Loading label="Verifying staff credentials…" rows={0} />;
+  if (!user) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   if (!isStaff) return <Navigate to="/portal" replace />;
 
   return (
@@ -125,6 +162,18 @@ export function AdminLayout() {
             <span className="hide-xs">Live Site</span>
           </Link>
 
+          {/* Force Cache Refresh */}
+          <button
+            className="admin-link-pill admin-sync-pill"
+            onClick={handleForceRefresh}
+            title="Force purge all caches and reload live database state"
+            disabled={syncing}
+            type="button"
+          >
+            <RefreshCw size={13} strokeWidth={1.8} className={syncing ? 'spin' : ''} />
+            <span className="hide-xs">{syncing ? 'Syncing…' : 'Force Refresh'}</span>
+          </button>
+
           {/* Staff Identity Pill */}
           <div className="admin-user-pill">
             <span className="admin-role-tag">{ROLE_LABELS[roles[0]] || 'Staff'}</span>
@@ -148,6 +197,13 @@ export function AdminLayout() {
           </button>
         </nav>
       </header>
+
+      {syncToast ? (
+        <div className="admin-sync-banner" role="status">
+          <Check size={14} />
+          <span>{syncToast}</span>
+        </div>
+      ) : null}
 
       {/* Horizontal Swipeable Mobile Tabs */}
       <nav className="admin-mobile-tabs" aria-label="Staff quick modules">
@@ -232,7 +288,9 @@ export function AdminLayout() {
         </aside>
 
         <main className="admin-content-area" id="admin-main">
-          <Outlet />
+          <AdminErrorBoundary key={location.pathname}>
+            <Outlet />
+          </AdminErrorBoundary>
         </main>
       </div>
     </div>
@@ -1009,7 +1067,26 @@ export function AdminPolicy() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!current) return;
+    if (!current) {
+      if (!policies.loading && rows.length === 0) {
+        setForm({
+          passPrice: '350',
+          includedEventCount: 3,
+          mode: 'up_to',
+          cap: '450',
+          capInclusive: true,
+          lunchDays: ['day1', 'day2'],
+          addonRequiresPass: true,
+          teamMembersRequirePass: true,
+          holdMinutes: 15,
+          deadline: '',
+          teamFeeBasisDefault: 'per_participant',
+          gstNote: 'Inclusive of all applicable taxes',
+          reason: 'Initial policy setup',
+        });
+      }
+      return;
+    }
     setForm({
       passPrice: rupees(current.passPricePaise),
       includedEventCount: current.includedEventCount,
@@ -1226,13 +1303,22 @@ export function AdminRegistrations() {
   const { editionId } = useSite();
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
   const debounced = useDebounced(query);
   const rows = useAsync(
-    () => adminApi.registrations(editionId, { status, q: debounced }),
-    [editionId, status, debounced],
+    () =>
+      adminApi.registrations(editionId, {
+        status,
+        q: debounced,
+        page,
+        page_size: 50,
+      }),
+    [editionId, status, debounced, page],
     { enabled: Boolean(editionId) }
   );
   const list = rows.data?.data || [];
+  const total = rows.data?.total ?? list.length;
+  const pages = Math.max(1, Math.ceil(total / 50));
 
   return (
     <>
@@ -1241,12 +1327,21 @@ export function AdminRegistrations() {
         <Field label="Search participant or registration">
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(1);
+            }}
             placeholder="Name, email, PX-..., or event title..."
           />
         </Field>
         <Field label="Status filter">
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+          <select
+            value={status}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setPage(1);
+            }}
+          >
             <option value="">All statuses</option>
             {['confirmed', 'reserved', 'pending', 'cancelled'].map((value) => (
               <option key={value} value={value}>
@@ -1282,6 +1377,39 @@ export function AdminRegistrations() {
           </tr>
         ))}
       </DataTable>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          marginTop: '12px',
+        }}
+      >
+        <span className="table-sub">
+          {total
+            ? `Showing ${(page - 1) * 50 + 1}-${Math.min(page * 50, total)} of ${total}`
+            : 'No registrations'}
+        </span>
+        {pages > 1 ? (
+          <div style={{ display: 'inline-flex', gap: '8px' }}>
+            <Button
+              variant="ghost"
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              disabled={page <= 1}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setPage((value) => Math.min(pages, value + 1))}
+              disabled={page >= pages}
+            >
+              Next
+            </Button>
+          </div>
+        ) : null}
+      </div>
     </>
   );
 }

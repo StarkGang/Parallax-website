@@ -109,7 +109,17 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def token_from_request(request: Request) -> str | None:
-    return request.cookies.get(get_settings().session_cookie)
+    settings = get_settings()
+    for cookie_name in (settings.session_cookie, settings.session_cookie_name, 'px_session', '__Host-px_session'):
+        if not cookie_name:
+            continue
+        val = request.cookies.get(cookie_name)
+        if val:
+            return val
+    auth_header = request.headers.get('authorization')
+    if auth_header and auth_header.lower().startswith('bearer '):
+        return auth_header[7:].strip()
+    return None
 
 
 async def resolve_session(

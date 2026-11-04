@@ -4,7 +4,9 @@ import { ArrowUpRight, Menu, X } from 'lucide-react';
 import { useAuth } from './lib/auth.jsx';
 import { useSite } from './lib/site.jsx';
 import { ThemeCustomizer } from './lib/theme.jsx';
-import { Button, ErrorBox, Loading } from './components/ui.jsx';
+import { AppErrorBoundary, Button, ErrorBox, Loading } from './components/ui.jsx';
+import { initSmoothScroll, gsap } from './lib/motion.js';
+import { SamaritanBootLoader } from './components/SamaritanBootLoader.jsx';
 import {
   About,
   ContactPage,
@@ -110,7 +112,7 @@ function NotFound() {
 }
 
 export default function App() {
-  const { user, isStaff } = useAuth();
+  const { user, isStaff, loading: authLoading } = useAuth();
   const site = useSite();
   const [menu, setMenu] = useState(false);
   const location = useLocation();
@@ -121,15 +123,30 @@ export default function App() {
   }, [location.pathname]);
 
   const chromeHidden = location.pathname.startsWith('/manage') || location.pathname === '/login';
+  const [booted, setBooted] = useState(() => {
+    try {
+      return Boolean(sessionStorage.getItem('px_booted'));
+    } catch {
+      return false;
+    }
+  });
 
-  if (site.loading) {
+  const isReady = Boolean(!site.loading && site.edition);
+
+  if (!booted && location.pathname === '/') {
     return (
-      <div className="boot">
-        <img src={LOGO} alt="Parallax" />
-        <span className="boot-line" />
-        <p>Loading the convention</p>
-      </div>
+      <SamaritanBootLoader
+        isReady={isReady}
+        onComplete={() => {
+          try { sessionStorage.setItem('px_booted', '1'); } catch {}
+          setBooted(true);
+        }}
+      />
     );
+  }
+
+  if (site.loading && !site.edition) {
+    return <Loading label="Connecting to Parallax convention…" rows={0} />;
   }
 
   if (site.error || !site.edition) {
@@ -142,7 +159,7 @@ export default function App() {
           onRetry={site.refresh}
         />
         <p className="muted">
-          Start the FastAPI backend on <code>127.0.0.1:8000</code>, then retry. The site needs the
+          Please check your connection and retry. The site needs the
           edition record before it can render.
         </p>
       </div>
@@ -152,6 +169,7 @@ export default function App() {
   return (
     <>
       <ScrollToTop />
+      <div className='site-lensgrid' aria-hidden='true' />
       <a className="skip" href="#main">
         Skip to content
       </a>
@@ -181,7 +199,7 @@ export default function App() {
               </Link>
             ))}
             <Link className="portal-link" to={user ? (isStaff ? '/manage' : '/portal') : '/login'}>
-              {user ? (isStaff ? 'Staff console' : 'My portal') : 'Sign in'}
+              {authLoading ? 'Portal' : user ? (isStaff ? 'Staff console' : 'My portal') : 'Sign in'}
               <ArrowUpRight size={15} strokeWidth={1.6} />
             </Link>
           </nav>
@@ -189,6 +207,7 @@ export default function App() {
       ) : null}
 
       <main id="main">
+        <AppErrorBoundary key={location.pathname}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/about" element={<About />} />
@@ -199,6 +218,7 @@ export default function App() {
           <Route path="/venue" element={<VenuePage />} />
           <Route path="/faq" element={<FAQPage />} />
           <Route path="/contact" element={<ContactPage />} />
+
           <Route path="/login" element={<Login />} />
 
           <Route
@@ -229,22 +249,25 @@ export default function App() {
           >
             <Route index element={<AdminOverview />} />
             <Route path="events" element={<AdminEvents />} />
-            <Route path="policy" element={<AdminPolicy />} />
             <Route path="registrations" element={<AdminRegistrations />} />
+            <Route path="attendance" element={<AdminAttendance />} />
+            <Route path="check-in" element={<AdminCheckin />} />
+            <Route path="checkin" element={<AdminCheckin />} />
+            <Route path="policy" element={<AdminPolicy />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="verifications" element={<AdminVerifications />} />
             <Route path="payments" element={<AdminPayments />} />
-            <Route path="check-in" element={<AdminCheckin />} />
             <Route path="announcements" element={<AdminAnnouncements />} />
-            <Route path="attendance" element={<AdminAttendance />} />
             <Route path="audit" element={<AdminAudit />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
 
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </AppErrorBoundary>
       </main>
-      {!location.pathname.startsWith('/manage') && location.pathname !== '/login' ? <Footer /> : null}
+
+      {!chromeHidden ? <Footer edition={site.edition} /> : null}
       <ThemeCustomizer />
     </>
   );

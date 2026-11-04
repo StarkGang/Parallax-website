@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, require_permission
-from app.core.errors import NotFound, ValidationFailed
+from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import permissions_for
 from app.db.session import get_db
 from app.models.commerce import (
@@ -70,6 +70,16 @@ async def overview(
     return {"data": stats.model_dump(by_alias=True)}
 
 
+@router.post("/sync")
+async def sync_data(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("stats.read")),
+) -> dict:
+    from app.core.cache import cache_clear
+    cache_clear()
+    return {"data": {"synced": True, "timestamp": datetime.now(UTC).isoformat()}}
+
+
 @router.get("/my-permissions")
 async def my_permissions(
     edition_id: uuid.UUID,
@@ -120,6 +130,22 @@ async def update_settings(
     if "tagline" in data:
         edition.hero_subtitle = data.pop("tagline")
     data.pop("branding", None)
+
+    from app.core.errors import ValidationFailed
+
+    # A window that closes before it opens silently disables registration for
+    # the entire convention, so reject it before anything is written.
+    opens = data.get("registration_opens_at", edition.registration_opens_at)
+    closes = data.get("registration_closes_at", edition.registration_closes_at)
+    if opens and closes:
+        left, right = opens, closes
+        if left.tzinfo is None and right.tzinfo is not None:
+            right = right.replace(tzinfo=None)
+        elif right.tzinfo is None and left.tzinfo is not None:
+            left = left.replace(tzinfo=None)
+        if right <= left:
+            raise ValidationFailed("Registration must close after it opens.")
+
     for k, v in data.items():
         if hasattr(edition, k):
             setattr(edition, k, v)
@@ -552,6 +578,8 @@ async def create_refund(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     order = await payment_service.order_for(db, payload.order_id)
+    if order.edition_id != edition_id:
+        raise NotFound("Payment order not found.")
     refund = await payment_service.refund_order(
         db,
         order,
@@ -676,6 +704,8 @@ async def registrations(
     event_id: uuid.UUID | None = None,
     status: str | None = None,
     q: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
 ) -> dict:
     stmt = (
         select(Registration, User, Event)
@@ -697,7 +727,18 @@ async def registrations(
                 func.lower(Event.title).like(term),
             )
         )
-    rows = list((await db.execute(stmt.order_by(Registration.created_at.desc()).limit(100))).all())
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar() or 0
+    rows = list(
+        (
+            await db.execute(
+                stmt.order_by(Registration.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+    )
     return {
         "data": [
             {
@@ -712,7 +753,10 @@ async def registrations(
                 "createdAt": edition_service.aware(r.created_at).isoformat() if r.created_at else None,
             }
             for r, u, e in rows
-        ]
+        ],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
     }
 
 
@@ -866,11 +910,34 @@ async def checkin(
     ticket = await ticket_service.resolve(db, payload.token, edition_id)
     user = await db.get(User, ticket.user_id)
     day = payload.day or datetime.now(UTC).strftime("%Y-%m-%d")
+
+    event_id = payload.event_id
+    if ticket.registration_id:
+        registration = await db.get(Registration, ticket.registration_id)
+        if registration is None or registration.status not in ("confirmed", "reserved"):
+            raise Conflict("This registration is no longer valid.")
+        if event_id and event_id != registration.event_id:
+            raise Conflict("This ticket belongs to a different event.")
+        event_id = registration.event_id
+    elif event_id:
+        linked = (
+            await db.execute(
+                select(Registration.id).where(
+                    Registration.user_id == ticket.user_id,
+                    Registration.edition_id == edition_id,
+                    Registration.event_id == event_id,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalar_one_or_none()
+        if linked is None:
+            raise Conflict("This participant is not registered for that event.")
+
     existing = (
         await db.execute(
             select(AttendanceRecord).where(
                 AttendanceRecord.user_id == ticket.user_id,
-                AttendanceRecord.event_id == payload.event_id,
+                AttendanceRecord.event_id == event_id,
                 AttendanceRecord.day == day,
             )
         )
@@ -888,7 +955,7 @@ async def checkin(
         edition_id=edition_id,
         user_id=ticket.user_id,
         ticket_id=ticket.id,
-        event_id=payload.event_id,
+        event_id=event_id,
         day=day,
         result="admitted",
         checked_in_by=ctx.user.id,

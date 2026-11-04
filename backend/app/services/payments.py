@@ -4,14 +4,16 @@ import base64
 import hmac
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_delete_pattern
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, ValidationFailed
 from app.models.commerce import (
@@ -22,8 +24,19 @@ from app.models.commerce import (
     Refund,
     Registration,
 )
-from app.services.passes import activate_mock_pass
-from app.services.tickets import issue_for_pass, issue_for_registration
+from app.services.passes import (
+    activate_mock_pass,
+    selections_for,
+    sync_included_registrations,
+)
+from app.services.tickets import (
+    issue_for_pass,
+    issue_for_registration,
+    revoke_for_pass,
+    revoke_for_registration,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _auth_header() -> dict[str, str]:
@@ -52,6 +65,26 @@ async def create_gateway_order(order: PaymentOrder) -> str | None:
         resp.raise_for_status()
         data = resp.json()
         return data["id"]
+
+
+async def attach_gateway_order(db: AsyncSession, order: PaymentOrder) -> PaymentOrder:
+    """Create the provider order exactly once so checkout can actually open."""
+    if order.gateway_order_id:
+        return order
+    try:
+        order.gateway_order_id = await create_gateway_order(order)
+        order.status = "created"
+        await db.flush()
+    except Exception as exc:  # pragma: no cover - provider failure path
+        logger.warning("Gateway order creation failed for %s: %s", order.id, exc)
+        order.status = "failed"
+        await db.flush()
+        raise AppError(
+            "Could not start the payment. Please try again.",
+            code="PAYMENT_GATEWAY_ERROR",
+            status_code=502,
+        ) from exc
+    return order
 
 
 async def gateway_refund(payment_id: str, amount_paise: int) -> str | None:
@@ -100,7 +133,7 @@ async def create_order(
 async def mark_order_paid(
     db: AsyncSession, order: PaymentOrder, transaction_id: str | None = None
 ) -> None:
-    if order.status == "paid":
+    if order.status in ("paid", "refunded"):
         return
     order.status = "paid"
     order.paid_at = datetime.now(UTC)
@@ -119,6 +152,9 @@ async def mark_order_paid(
             user_pass.status = "active"
             user_pass.paid_at = datetime.now(UTC)
             await issue_for_pass(db, user_pass)
+            await sync_included_registrations(
+                db, user_pass, await selections_for(db, user_pass.id)
+            )
 
     elif order.purpose == "registration":
         regs = list(
@@ -133,6 +169,8 @@ async def mark_order_paid(
             await issue_for_registration(db, r)
 
     await db.flush()
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
 
 
 async def expire_unpaid(db: AsyncSession) -> int:
@@ -194,19 +232,83 @@ async def refund_order(
     reason_note: str | None = None,
     requested_by_id: uuid.UUID | None = None,
 ) -> Refund:
+    if order.status != "paid":
+        raise ValidationFailed("Only a paid order can be refunded.")
+    if amount_paise <= 0:
+        raise ValidationFailed("The refund amount must be greater than zero.")
+
+    already = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order.id,
+                    Refund.status == "processed",
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    remaining = order.amount_paise - int(already or 0)
+    if amount_paise > remaining:
+        raise ValidationFailed(
+            f"Only INR {remaining / 100:.2f} of this order is still refundable."
+        )
+
+    transaction = (
+        (
+            await db.execute(
+                select(PaymentTransaction)
+                .where(PaymentTransaction.order_id == order.id)
+                .order_by(PaymentTransaction.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    gateway_id = None
+    if transaction is not None:
+        gateway_id = await gateway_refund(transaction.gateway_payment_id, amount_paise)
+
     refund = Refund(
         order_id=order.id,
+        transaction_id=transaction.id if transaction else None,
         amount_paise=amount_paise,
         reason_code=reason_code,
         reason_note=reason_note,
         status="processed",
         requested_by=requested_by_id,
         approved_by=requested_by_id,
+        gateway_refund_id=gateway_id,
         processed_at=datetime.now(UTC),
     )
     db.add(refund)
-    order.status = "refunded"
+
+    if amount_paise >= remaining:
+        # A full refund must also take back the entitlement it paid for.
+        order.status = "refunded"
+        if order.purpose == "pass" and order.linked_record_id:
+            user_pass = await db.get(ConventionPass, order.linked_record_id)
+            if user_pass is not None:
+                user_pass.status = "refunded"
+                await revoke_for_pass(db, user_pass.id)
+        registrations = list(
+            (
+                await db.execute(
+                    select(Registration).where(Registration.order_id == order.id)
+                )
+            ).scalars()
+        )
+        for reg in registrations:
+            if reg.status in ("confirmed", "reserved", "pending"):
+                reg.status = "cancelled"
+                reg.cancelled_at = datetime.now(UTC)
+                await revoke_for_registration(db, reg.id)
+
     await db.flush()
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
     return refund
 
 
@@ -227,6 +329,7 @@ def order_url_token(order_id: uuid.UUID) -> str:
 
 __all__ = [
     "_auth_header",
+    "attach_gateway_order",
     "create_gateway_order",
     "gateway_refund",
     "create_order",

@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_get, cache_set
 from app.core.config import get_settings
 from app.core.errors import Forbidden, NotFound
 from app.integrations.storage import LocalStorage, verify_local_signature
@@ -27,11 +28,15 @@ from sqlalchemy import select
 
 router = APIRouter(prefix="/public", tags=["public"])
 
-CACHE_60 = {"Cache-Control": "public, max-age=60, stale-while-revalidate=120"}
+CACHE_EDGE = {"Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600"}
+CACHE_60 = CACHE_EDGE
 
 
 @router.get("/config", response_model=PublicConfig)
 async def config(db: AsyncSession = Depends(get_db)) -> PublicConfig:
+    cached_val = cache_get("public:config")
+    if cached_val is not None:
+        return cached_val
     settings = get_settings()
     slug = None
     support = None
@@ -39,9 +44,9 @@ async def config(db: AsyncSession = Depends(get_db)) -> PublicConfig:
         edition = await current_edition(db)
         slug = edition.slug
         support = edition.contact_email
-    except NotFound:
+    except Exception:
         pass
-    return PublicConfig(
+    result = PublicConfig(
         environment=settings.app_env,
         dev_login=settings.dev_login_available,
         google_login=settings.google_configured,
@@ -49,22 +54,39 @@ async def config(db: AsyncSession = Depends(get_db)) -> PublicConfig:
         edition_slug=slug,
         support_email=support,
     )
+    cache_set("public:config", result, ttl_seconds=60)
+    return result
 
 
 @router.get("/editions/current")
 async def edition_current(response: Response, db: AsyncSession = Depends(get_db)) -> dict:
-    edition = await current_edition(db)
+    response.headers.update(CACHE_EDGE)
+    cached_val = cache_get("public:edition:current")
+    if cached_val is not None:
+        return cached_val
+    try:
+        edition = await current_edition(db)
+    except NotFound:
+        raise
+    except Exception:
+        raise NotFound("Current edition not available yet.")
+
     policy = None
     try:
         policy = await current_policy(db, edition.id)
-    except NotFound:
+    except Exception:
         pass
-    response.headers.update(CACHE_60)
-    return {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    cache_set("public:edition:current", data, ttl_seconds=60)
+    return data
 
 
 @router.get("/editions/{slug}")
 async def edition_detail(slug: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict:
+    response.headers.update(CACHE_EDGE)
+    cached_val = cache_get(f"public:edition:{slug}")
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     if edition.status == "draft":
         raise NotFound("Edition not found.")
@@ -73,12 +95,17 @@ async def edition_detail(slug: str, response: Response, db: AsyncSession = Depen
         policy = await current_policy(db, edition.id)
     except NotFound:
         pass
-    response.headers.update(CACHE_60)
-    return {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    cache_set(f"public:edition:{slug}", data, ttl_seconds=60)
+    return data
 
 
 @router.get("/editions/{slug}/categories")
 async def categories(slug: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict:
+    response.headers.update(CACHE_EDGE)
+    cached_val = cache_get(f"public:categories:{slug}")
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     rows = list(
         (
@@ -89,8 +116,7 @@ async def categories(slug: str, response: Response, db: AsyncSession = Depends(g
             )
         ).scalars()
     )
-    response.headers.update(CACHE_60)
-    return {
+    data = {
         "data": [
             {
                 "id": str(row.id),
@@ -103,6 +129,8 @@ async def categories(slug: str, response: Response, db: AsyncSession = Depends(g
             for row in rows
         ]
     }
+    cache_set(f"public:categories:{slug}", data, ttl_seconds=60)
+    return data
 
 
 @router.get("/editions/{slug}/events")
@@ -117,6 +145,11 @@ async def events(
     page_size: Annotated[int, Query(ge=1, le=100, alias="pageSize")] = 24,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    response.headers.update(CACHE_EDGE)
+    cache_key = f"public:events:{slug}:{category}:{format}:{q}:{featured}:{page}:{page_size}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     rows, total = await event_service.list_public_events(
         db,
@@ -128,26 +161,37 @@ async def events(
         page=page,
         page_size=page_size,
     )
-    response.headers.update(CACHE_60)
-    return paged([row.model_dump(by_alias=True) for row in rows], total, page, page_size)
+    result = paged([row.model_dump(by_alias=True) for row in rows], total, page, page_size)
+    cache_set(cache_key, result, ttl_seconds=30)
+    return result
 
 
 @router.get("/editions/{slug}/events/{event_slug}")
 async def event_detail(
     slug: str, event_slug: str, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict:
+    response.headers.update(CACHE_EDGE)
+    cache_key = f"public:event:{slug}:{event_slug}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     row = await event_service.public_event(db, edition, event_slug)
-    response.headers.update(CACHE_60)
-    return {"data": row.model_dump(by_alias=True)}
+    result = {"data": row.model_dump(by_alias=True)}
+    cache_set(cache_key, result, ttl_seconds=60)
+    return result
 
 
 @router.get("/editions/{slug}/schedule")
 async def schedule(slug: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict:
+    response.headers.update(CACHE_EDGE)
+    cache_key = f"public:schedule:{slug}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     days = await event_service.schedule(db, edition)
-    response.headers.update(CACHE_60)
-    return {
+    result = {
         "data": [
             {
                 "date": day.date.isoformat(),
@@ -157,6 +201,8 @@ async def schedule(slug: str, response: Response, db: AsyncSession = Depends(get
             for day in days
         ]
     }
+    cache_set(cache_key, result, ttl_seconds=60)
+    return result
 
 
 @router.get("/editions/{slug}/announcements")

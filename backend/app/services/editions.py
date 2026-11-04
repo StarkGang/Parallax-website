@@ -8,6 +8,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
 from app.core.errors import NotFound, ValidationFailed
 from app.models.commerce import (
     AttendanceRecord,
@@ -39,7 +40,7 @@ async def current_edition(db: AsyncSession) -> ConventionEdition:
     row = (
         await db.execute(
             select(ConventionEdition)
-            .where(ConventionEdition.status != "archived")
+            .where(ConventionEdition.status.in_(["published", "open"]))
             .order_by(ConventionEdition.starts_at.desc())
             .limit(1)
         )
@@ -141,31 +142,78 @@ def serialize_edition(
 async def check_policy(
     db: AsyncSession, edition_id: uuid.UUID, payload: dict[str, Any]
 ) -> PolicyCheck:
-    blocking = []
-    warnings = []
+    blocking: list[str] = []
+    warnings: list[str] = []
     current = None
     try:
         current = await current_policy(db, edition_id)
     except NotFound:
         pass
 
-    if current and current.pass_price_paise != payload.get("pass_price_paise"):
-        paid_passes = (
+    paid_passes = (
+        (
             await db.execute(
                 select(func.count(ConventionPass.id)).where(
                     ConventionPass.edition_id == edition_id,
                     ConventionPass.status == "active",
                 )
             )
-        ).scalar() or 0
+        ).scalar()
+        or 0
+    )
+
+    next_price = payload.get("pass_price_paise")
+    if current and next_price is not None and current.pass_price_paise != next_price:
         if paid_passes > 0 and not payload.get("override_price_lock"):
-            blocking.append("Cannot change pass price after active passes exist without override.")
+            blocking.append(
+                "Cannot change the pass price after active passes exist without an override."
+            )
+
+    if next_price is not None and next_price < 0:
+        blocking.append("The pass price cannot be negative.")
+
+    count = payload.get("included_event_count")
+    if count is not None and count < 0:
+        blocking.append("The included event count cannot be negative.")
+    cap = payload.get("included_value_cap_paise")
+    if cap is not None and cap < 0:
+        blocking.append("The included value cap cannot be negative.")
+    if (payload.get("hold_minutes") or 0) < 1:
+        blocking.append("Payment hold time must be at least one minute.")
+
+    eligible = list(
+        (
+            await db.execute(
+                select(Event.base_value_paise).where(
+                    Event.edition_id == edition_id,
+                    Event.included_eligible.is_(True),
+                    Event.status.in_(["published", "open"]),
+                )
+            )
+        ).scalars()
+    )
+    if count is not None and eligible and count > len(eligible):
+        blocking.append(
+            f"Only {len(eligible)} included-eligible events exist, so {count} cannot be selected."
+        )
+    if cap is not None and eligible:
+        cheapest = min(eligible)
+        if cheapest > cap:
+            warnings.append(
+                "The value cap is below the cheapest eligible event, so no included selection can be saved."
+            )
+
+    deadline = aware(payload.get("selection_change_deadline"))
+    if deadline is not None and deadline <= datetime.now(UTC):
+        warnings.append(
+            "The selection change deadline is in the past, so participants cannot change included events."
+        )
 
     return PolicyCheck(
         ok=len(blocking) == 0,
         blocking=blocking,
         warnings=warnings,
-        impact={"activePasses": 0},
+        impact={"activePasses": paid_passes, "eligibleEvents": len(eligible)},
     )
 
 
@@ -221,10 +269,17 @@ async def apply_policy(
         after={"version": next_version, "pass_price_paise": new_p.pass_price_paise},
     )
     await db.flush()
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
     return new_p
 
 
 async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
+    cache_key = f"admin:dashboard:{edition_id}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
+
     edition = await edition_by_id(db, edition_id)
 
     passes_sold = (
@@ -232,6 +287,15 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
             select(func.count(ConventionPass.id)).where(
                 ConventionPass.edition_id == edition_id,
                 ConventionPass.status == "active",
+            )
+        )
+    ).scalar() or 0
+
+    passes_pending = (
+        await db.execute(
+            select(func.count(ConventionPass.id)).where(
+                ConventionPass.edition_id == edition_id,
+                ConventionPass.status == "pending",
             )
         )
     ).scalar() or 0
@@ -377,11 +441,11 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         {"category": name, "count": int(count or 0)} for name, count in category_rows
     ]
 
-    return DashboardStats(
+    stats = DashboardStats(
         edition_id=edition.id,
         edition_name=edition.name,
         passes_sold=passes_sold,
-        passes_pending=0,
+        passes_pending=passes_pending,
         revenue_paise=revenue,
         refunded_paise=refunded,
         registrations_confirmed=reg_confirmed,
@@ -396,6 +460,8 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         sales_by_day=sales_by_day,
         category_split=category_split,
     )
+    cache_set(cache_key, stats, ttl_seconds=15.0)
+    return stats
 
 
 __all__ = [

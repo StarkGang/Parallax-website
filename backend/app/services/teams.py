@@ -15,6 +15,8 @@ from app.models.edition import ConventionEdition, Event
 from app.models.user import ParticipantProfile, User
 from app.schemas.participant import TeamMemberView, TeamView
 from app.services.editions import current_policy
+from app.services.events import event_open
+from app.services.tickets import revoke_for_registration
 
 
 def invite_code() -> str:
@@ -111,6 +113,8 @@ async def create_team(
         raise NotFound("Event not found.")
     if event.format != "team":
         raise ValidationFailed("This event is not a team event.")
+    if not event_open(event):
+        raise Conflict("This event is not open for team registration.")
 
     policy = await current_policy(db, edition.id)
     if policy.team_members_require_pass:
@@ -254,7 +258,26 @@ async def leave_team(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.UUID) -
     if mem is None:
         raise NotFound("You are not in this team.")
     if mem.is_leader:
+        # Disbanding must release the team's booking and everyone's membership.
+        from datetime import UTC, datetime
+
         team.status = "disbanded"
+        reg = await team_registration(db, team.id)
+        if reg is not None and reg.status != "cancelled":
+            reg.status = "cancelled"
+            reg.cancelled_at = datetime.now(UTC)
+            await revoke_for_registration(db, reg.id)
+        members = list(
+            (
+                await db.execute(
+                    select(TeamMember).where(TeamMember.team_id == team.id)
+                )
+            ).scalars()
+        )
+        for row in members:
+            await db.delete(row)
+        await db.flush()
+        return
     await db.delete(mem)
     await db.flush()
 

@@ -18,6 +18,12 @@ if str(BACKEND_DIR) not in sys.path:
 
 # Set test environment variables before importing app modules
 os.environ["APP_ENV"] = "test"
+# The checked-in backend/.env enables debug mode, which forces the development
+# environment and makes the suite assert the wrong runtime profile.
+os.environ["DEBUG_MODE"] = "false"
+os.environ["DEBUG"] = "false"
+os.environ["APP_DEBUG"] = "false"
+os.environ["FRONTEND_ORIGIN"] = "http://localhost:5173"
 os.environ["STORAGE_BACKEND"] = "local"
 os.environ["MFA_ENFORCED"] = "false"
 os.environ["ALLOW_DIRECT_LOGIN"] = "true"
@@ -79,7 +85,12 @@ async def client(test_engine) -> AsyncGenerator[AsyncClient, None]:
     """Unauthenticated HTTP test client."""
     app = create_app()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://localhost:8000") as ac:
+    # Unsafe methods require an Origin matching FRONTEND_ORIGIN, exactly like a browser.
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://localhost:8000",
+        headers={"Origin": "http://localhost:5173"},
+    ) as ac:
         yield ac
 
 

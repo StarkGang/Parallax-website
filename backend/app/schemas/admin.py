@@ -105,7 +105,7 @@ class EventUpsert(CamelModel):
     registration_closes_at: datetime | None = None
     requires_approval: bool = False
     icon_id: uuid.UUID | None = None
-    accent: str = Field(default="cyan", pattern="^(cyan|amber|violet|lime|rose|ice)$")
+    accent: str = Field(default="cyan", pattern="^(cyan|amber|orange|violet|lime|rose|ice)$")
     is_featured: bool = False
     sort_order: int = 0
     status: str = Field(default="draft", pattern="^(draft|published|open|closed|cancelled)$")
@@ -139,7 +139,7 @@ class CategoryUpsert(CamelModel):
     name: str
     slug: str = Field(pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$")
     display_order: int = 0
-    accent: str = Field(default="cyan", pattern="^(cyan|amber|violet|lime|rose|ice)$")
+    accent: str = Field(default="cyan", pattern="^(cyan|amber|orange|violet|lime|rose|ice)$")
     icon_id: uuid.UUID | None = None
 
 

@@ -9,6 +9,7 @@ from fastapi import Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_delete_pattern
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.text import render_markdown
 from app.models.commerce import Registration, Team, TeamMember
@@ -313,11 +314,65 @@ def publish_problems(event: Event) -> list[str]:
         problems.append("Title is required.")
     if not event.summary:
         problems.append("Summary is required.")
-    if not event.starts_at or not event.ends_at:
+    starts = _aware(event.starts_at)
+    ends = _aware(event.ends_at)
+    if not starts or not ends:
         problems.append("Start and end times are required.")
-    elif event.ends_at <= event.starts_at:
+    elif ends <= starts:
         problems.append("End time must be after start time.")
+    opens = _aware(event.registration_opens_at)
+    closes = _aware(event.registration_closes_at)
+    if opens and closes and closes <= opens:
+        problems.append("Registration must close after it opens.")
+    if event.format == "team" and (
+        event.team_min_size < 1 or event.team_max_size < event.team_min_size
+    ):
+        problems.append("Team size range is invalid.")
+    if event.capacity < 0:
+        problems.append("Capacity cannot be negative.")
     return problems
+
+
+async def _validate_event(
+    db: AsyncSession, edition_id: uuid.UUID, event: Event, payload: dict[str, Any]
+) -> None:
+    """Reject event states the participant workflow cannot honour."""
+    category = await db.get(EventCategory, event.category_id)
+    if category is None or category.edition_id != edition_id:
+        raise ValidationFailed("Choose a category that belongs to this edition.")
+
+    starts = _aware(event.starts_at)
+    ends = _aware(event.ends_at)
+    if starts and ends and ends <= starts:
+        raise ValidationFailed("The event must end after it starts.")
+
+    opens = _aware(event.registration_opens_at)
+    closes = _aware(event.registration_closes_at)
+    if opens and closes and closes <= opens:
+        raise ValidationFailed("Event registration must close after it opens.")
+    if opens and ends and opens >= ends:
+        raise ValidationFailed("Event registration must open before the event ends.")
+
+    if event.team_min_size < 1 or event.team_max_size < event.team_min_size:
+        raise ValidationFailed(
+            "Team size must start at 1 and the maximum cannot be below the minimum."
+        )
+    if event.capacity < 0:
+        raise ValidationFailed("Capacity cannot be negative.")
+    if (event.base_value_paise or 0) < 0 or (event.addon_price_paise or 0) < 0:
+        raise ValidationFailed("Event prices cannot be negative.")
+
+    if event.id is not None and event.capacity:
+        taken = (await seats_taken(db, [event.id])).get(event.id, 0)
+        if event.capacity < taken:
+            raise Conflict(
+                f"Capacity cannot be lower than the {taken} seats already booked for this event."
+            )
+
+    if event.status in ("published", "open"):
+        problems = publish_problems(event)
+        if problems:
+            raise ValidationFailed(" ".join(problems))
 
 
 async def upsert_event(
@@ -363,6 +418,9 @@ async def upsert_event(
         event = Event(edition_id=edition_id, slug=payload["slug"].strip().lower())
         db.add(event)
 
+    old_base_value = event.base_value_paise
+    old_addon_price = event.addon_price_paise
+
     for field in [
         "category_id",
         "title",
@@ -400,6 +458,38 @@ async def upsert_event(
                 val = "per_participant"
             setattr(event, field, val)
 
+    event.description_html = render_markdown(event.description_md or "")
+    event.rules_html = render_markdown(event.rules_md or "")
+    event.prizes_html = render_markdown(event.prizes_md or "")
+
+    # These columns are NOT NULL, so an omitted window must be filled, not left empty.
+    now = datetime.now(UTC)
+    if event.registration_opens_at is None:
+        event.registration_opens_at = now
+    if event.registration_closes_at is None:
+        starts = _aware(event.starts_at)
+        event.registration_closes_at = (
+            starts if starts and starts > now else now + timedelta(hours=24)
+        )
+
+    await _validate_event(db, edition_id, event, payload)
+
+    if event_id and (
+        old_base_value != event.base_value_paise
+        or old_addon_price != event.addon_price_paise
+    ):
+        db.add(
+            EventPriceHistory(
+                event_id=event.id,
+                old_base_value_paise=old_base_value or 0,
+                new_base_value_paise=event.base_value_paise or 0,
+                old_addon_price_paise=old_addon_price or 0,
+                new_addon_price_paise=event.addon_price_paise or 0,
+                changed_by=actor_id,
+                reason=payload.get("change_reason"),
+            )
+        )
+
     await record(
         db,
         request,
@@ -411,6 +501,8 @@ async def upsert_event(
         after={"slug": event.slug, "title": event.title, "status": event.status},
     )
     await db.flush()
+    cache_delete_pattern('public:*')
+    cache_delete_pattern('admin:dashboard:*')
     return event
 
 

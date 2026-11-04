@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -23,6 +23,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { publicApi } from '../lib/api.js';
+import { useCardTilt, gsap, ScrollTrigger } from '../lib/motion.js';
+
 import { useSite } from '../lib/site.jsx';
 import {
   date,
@@ -70,56 +72,390 @@ function CategoryIcon({ category, size = 30 }) {
   if (cat.includes('engin') || cat.includes('proj')) {
     return <Boxes size={size} strokeWidth={1.5} />;
   }
-  return <Sparkles size={size} strokeWidth={1.5} />;
+  return <Layers size={size} strokeWidth={1.5} />;
+}
+
+function EventIcon({ iconId, category, size = 22 }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <>
+      {(!loaded || failed || !iconId) && (
+        <CategoryIcon category={category} size={size} />
+      )}
+      {iconId && !failed && (
+        <img
+          src={publicApi.iconUrl(iconId)}
+          alt=""
+          className="pro-event-icon-img"
+          style={loaded ? undefined : { display: 'none' }}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      )}
+    </>
+  );
+}
+
+function getEventAccent(event) {
+  if (event.accent && typeof event.accent === 'string') {
+    const raw = event.accent.toLowerCase().trim();
+    if (raw) return raw;
+  }
+  const cat = (event.categorySlug || event.categoryName || '').toLowerCase();
+  if (cat.includes('electr')) return 'orange';
+  if (cat.includes('engin')) return 'amber';
+  if (cat.includes('robot')) return 'lime';
+  if (cat.includes('design')) return 'violet';
+  if (cat.includes('comput') || cat.includes('code')) return 'cyan';
+  return 'cyan';
 }
 
 export function EventCard({ event, index = 0 }) {
+  const tiltRef = useCardTilt({ maxTilt: 4, scale: 1.015 });
   const capacity =
     event.seatsLeft === null || event.seatsLeft === undefined
       ? 'Open capacity'
-      : `${event.seatsLeft} of ${event.capacity} left`;
+      : `${event.seatsLeft} of ${event.capacity} seats left`;
+
+  const isTeam = event.format === 'team';
+
   return (
     <Link
+      ref={tiltRef}
       to={`/events/${event.slug}`}
-      className={`event-card accent-${event.accent || 'cyan'} rise`}
-      style={{ animationDelay: `${index * 70}ms` }}
+      className="pro-event-card rise"
+      style={{ animationDelay: `${index * 50}ms` }}
     >
-      <div className="card-top">
-        <span>{String(index + 1).padStart(2, '0')}</span>
-        <ArrowUpRight size={18} strokeWidth={1.4} />
+      <div className="pro-card-header">
+        <div className="pro-card-tags">
+          <span className="pro-cat-tag">
+            <span className={`pro-cat-dot dot-${getEventAccent(event)}`} />
+            {event.categoryName}
+          </span>
+          <span className="pro-format-tag">
+            {isTeam ? `Team (${event.teamMinSize || 2}–${event.teamMaxSize || 4})` : 'Individual'}
+          </span>
+        </div>
+        <div className="pro-card-arrow" aria-hidden="true">
+          <ArrowUpRight size={16} strokeWidth={1.8} />
+        </div>
       </div>
-      <div className="event-symbol">
-        {event.iconId ? (
-          <img
-            src={publicApi.iconUrl(event.iconId)}
-            alt=""
-            className="event-icon-img"
-            loading="lazy"
+
+      <div className="pro-card-main">
+        <div className="pro-card-icon-box">
+          <EventIcon
+            iconId={event.iconId}
+            category={event.categorySlug || event.categoryName}
+            size={22}
           />
-        ) : (
-          <CategoryIcon category={event.categorySlug || event.categoryName} />
-        )}
+        </div>
+        <h3 className="pro-card-title">{event.title}</h3>
       </div>
-      <div className="event-meta">
-        {event.categoryName} <span>·</span> {event.format}
+
+      <p className="pro-card-desc">{event.summary}</p>
+
+      <div className="pro-card-metrics">
+        <div className="pro-metric-item">
+          <span className="pro-metric-label">Included value</span>
+          <span className="pro-metric-val">{money(event.baseValuePaise)}</span>
+        </div>
+        <div className="pro-metric-divider" />
+        <div className="pro-metric-item">
+          <span className="pro-metric-label">Add-on fee</span>
+          <span className="pro-metric-val">{money(event.addonPricePaise)}</span>
+        </div>
       </div>
-      <h3>{event.title}</h3>
-      <p>{event.summary}</p>
-      <div className="card-bottom">
-        <span>
-          Included value <b>{money(event.baseValuePaise)}</b>
-        </span>
-        <span>
-          Add-on <b>{money(event.addonPricePaise)}</b>
-        </span>
-      </div>
-      <div className="card-foot">
-        <span className="card-cap">{capacity}</span>
-        <span className={`card-status-pill ${event.registrationOpen ? 'is-open' : 'is-closed'}`}>
-          {event.registrationOpen ? 'Registration open' : 'Registration closed'}
+
+      <div className="pro-card-footer">
+        <span className="pro-capacity-text">{capacity}</span>
+        <span className={`pro-status-pill ${event.registrationOpen ? 'is-open' : 'is-closed'}`}>
+          {event.registrationOpen ? 'Registration open' : 'Closed'}
         </span>
       </div>
     </Link>
+  );
+}
+
+
+function HeroParallax({ edition, days }) {
+  const containerRef = useRef(null);
+  const bgRef = useRef(null);
+  const copyRef = useRef(null);
+  const artRef = useRef(null);
+  const chipTopRef = useRef(null);
+  const chipBottomRef = useRef(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+
+    const onMouseMove = (e) => {
+      const rect = container.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width - 0.5;
+      const y = (e.clientY - rect.top) / rect.height - 0.5;
+
+      if (artRef.current) {
+        gsap.to(artRef.current, {
+          rotateY: x * 16,
+          rotateX: -y * 16,
+          transformPerspective: 1200,
+          ease: 'power1.out',
+          duration: 0.35,
+        });
+      }
+
+      if (chipTopRef.current) {
+        gsap.to(chipTopRef.current, {
+          x: x * 35,
+          y: y * 35,
+          ease: 'power1.out',
+          duration: 0.45,
+        });
+      }
+
+      if (chipBottomRef.current) {
+        gsap.to(chipBottomRef.current, {
+          x: -x * 30,
+          y: -y * 30,
+          ease: 'power1.out',
+          duration: 0.45,
+        });
+      }
+    };
+
+    const onMouseLeave = () => {
+      if (artRef.current) {
+        gsap.to(artRef.current, {
+          rotateX: 0,
+          rotateY: 0,
+          ease: 'power2.out',
+          duration: 0.7,
+        });
+      }
+      if (chipTopRef.current) gsap.to(chipTopRef.current, { x: 0, y: 0, duration: 0.7 });
+      if (chipBottomRef.current) gsap.to(chipBottomRef.current, { x: 0, y: 0, duration: 0.7 });
+    };
+
+    container.addEventListener('mousemove', onMouseMove);
+    container.addEventListener('mouseleave', onMouseLeave);
+
+    return () => {
+      container.removeEventListener('mousemove', onMouseMove);
+      container.removeEventListener('mouseleave', onMouseLeave);
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+
+    const ctx = gsap.context(() => {
+      if (bgRef.current) {
+        gsap.to(bgRef.current, {
+          yPercent: 20,
+          scale: 1.1,
+          ease: 'none',
+          scrollTrigger: {
+            trigger: container,
+            start: 'top top',
+            end: 'bottom top',
+            scrub: 1.2,
+          },
+        });
+      }
+
+      if (artRef.current) {
+        gsap.to(artRef.current, {
+          yPercent: -20,
+          ease: 'none',
+          scrollTrigger: {
+            trigger: container,
+            start: 'top top',
+            end: 'bottom top',
+            scrub: true,
+          },
+        });
+      }
+
+      if (copyRef.current) {
+        gsap.to(copyRef.current, {
+          yPercent: -15,
+          opacity: 0.35,
+          ease: 'power1.in',
+          scrollTrigger: {
+            trigger: container,
+            start: 'top top',
+            end: '85% top',
+            scrub: true,
+          },
+        });
+      }
+    }, container);
+
+    return () => ctx.revert();
+  }, []);
+
+  return (
+    <section className="hero" ref={containerRef}>
+      <div className="hero-bg-plane" ref={bgRef} aria-hidden="true" />
+      <div className="hero-copy" ref={copyRef}>
+        <div className="hero-brand-lockup">
+          <h1 className="hero-logo-wrapper">
+            <img src={LOGO} alt={`${edition.name} logo`} className="hero-main-logo" />
+          </h1>
+        </div>
+        <Eyebrow>{edition.organizer || 'ISTE Student Chapter'} · {edition.host || 'NSSCE Palakkad'}</Eyebrow>
+        <h2>
+          {edition.tagline?.toLowerCase().includes('argued in public') ? (
+            <>
+              Two days of engineering,
+              <br />
+              <em>argued in public.</em>
+            </>
+          ) : (
+            edition.tagline || edition.name
+          )}
+        </h2>
+        <p className="hero-description">
+          A single convention pass for all {days} days. Full floor access to every keynote,
+          challenge, and workshop with zero gated tracks.
+        </p>
+        <div className="hero-actions">
+          <Button to="/events" icon={ArrowRight}>
+            Explore events
+          </Button>
+          <Button to="/pass" variant="ghost" icon={ArrowUpRight}>
+            Understand the pass
+          </Button>
+        </div>
+        <div className="hero-note">
+          <span className={`hero-status-tag ${edition.registrationOpen ? 'is-open' : 'is-closed'}`}>
+            {edition.registrationOpen ? 'Registration open' : 'Registration closed'}
+          </span>
+          <Link to="/portal" className="hero-portal-link">
+            Participant portal <ArrowUpRight size={13} strokeWidth={1.5} />
+          </Link>
+        </div>
+      </div>
+
+      <div className="hero-art" aria-hidden="true">
+        <div className="hero-art-stage" ref={artRef}>
+          <div className="orbit orbit-one" />
+          <div className="orbit orbit-two" />
+          <div className="orbit orbit-three" />
+          <img src={GLOBE} alt="" />
+
+          <div className="hero-floating-chip hero-chip-top" ref={chipTopRef}>
+            <span>ISTE State Convention</span>
+          </div>
+
+          <div className="hero-floating-chip hero-chip-bottom" ref={chipBottomRef}>
+            <span>48h Hackathon & Sprint</span>
+          </div>
+
+          <div className="art-label">
+            <span>{dateRange(edition.startsAt, edition.endsAt)}</span>
+            <b>
+              {edition.venue || 'NSSCE Palakkad'}
+              <br />
+              {edition.city || 'Main Campus'}
+            </b>
+          </div>
+        </div>
+      </div>
+
+      <div className="hero-foot">
+        <span>
+          <MapPin size={15} strokeWidth={1.5} /> {edition.host}
+        </span>
+        <span>
+          <CalendarDays size={15} strokeWidth={1.5} />{' '}
+          {dateRange(edition.startsAt, edition.endsAt)}
+        </span>
+        <span>
+          <Users size={15} strokeWidth={1.5} /> {edition.city}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+
+function PassHighlightSection({ policy }) {
+  const tiltRef = useCardTilt({ maxTilt: 3, scale: 1.01 });
+  const lunchDays = policy?.lunchIncludedDays?.length || 2;
+  const includedCount = policy?.includedEventCount || 3;
+  const valueCap = money(policy?.includedValueCapPaise || 45000);
+
+  return (
+    <section className="pro-pass-section">
+      <div className="pro-pass-card" ref={tiltRef}>
+        <div className="pro-pass-glow" aria-hidden="true" />
+
+        <div className="pro-pass-left">
+          <div className="pro-pass-badge">
+            <Ticket size={14} strokeWidth={2} />
+            <span>All-access convention pass</span>
+          </div>
+
+          <h2 className="pro-pass-headline">Your entire convention. One simple pass.</h2>
+
+          <p className="pro-pass-sub">
+            No fragmented track passes or gated entry fees. A single registration gives you full floor access across both convention days.
+          </p>
+
+          <div className="pro-pass-benefits">
+            <div className="pro-benefit-row">
+              <span className="pro-check-icon">
+                <Check size={14} strokeWidth={2.5} />
+              </span>
+              <span>
+                <b>Lunch included</b> on both convention days ({lunchDays} days)
+              </span>
+            </div>
+            <div className="pro-benefit-row">
+              <span className="pro-check-icon">
+                <Check size={14} strokeWidth={2.5} />
+              </span>
+              <span>
+                <b>Pick up to {includedCount} included events</b> within {valueCap} base value
+              </span>
+            </div>
+            <div className="pro-benefit-row">
+              <span className="pro-check-icon">
+                <Check size={14} strokeWidth={2.5} />
+              </span>
+              <span>
+                <b>Zero gated tracks</b> — unrestricted access to all keynotes and challenges
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="pro-pass-right">
+          <div className="pro-pricing-box">
+            <span className="pro-price-caption">Full Convention Access</span>
+            <div className="pro-price-amount">
+              <span className="pro-price-currency">₹</span>
+              <span className="pro-price-number">
+                {Math.round((policy?.passPricePaise || 35000) / 100)}
+              </span>
+              <span className="pro-price-tenure">/ pass</span>
+            </div>
+            <p className="pro-price-note">Covers all keynotes, lunch, workshops & badge</p>
+
+            <Link to="/pass" className="pro-pass-cta-btn">
+              <span>Get your pass</span>
+              <ArrowRight size={16} strokeWidth={2} />
+            </Link>
+
+            <span className="pro-instant-tag">Instant access via Student Portal</span>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -163,76 +499,7 @@ export function Home() {
 
   return (
     <>
-      <section className="hero">
-        <div className="hero-copy">
-          <div className="hero-brand-lockup">
-            <h1 className="hero-logo-wrapper">
-              <img src={LOGO} alt={`${edition.name} logo`} className="hero-main-logo" />
-            </h1>
-          </div>
-          <Eyebrow>
-            ISTE Student Chapter · NSSCE Palakkad
-          </Eyebrow>
-          <h2>
-            {edition.tagline?.toLowerCase().includes('argued in public') ? (
-              <>
-                Two days of engineering,
-                <br />
-                <em>argued in public.</em>
-              </>
-            ) : (
-              edition.tagline || edition.name
-            )}
-          </h2>
-          <p className="hero-description">
-            A single convention pass for all {days} days. Full floor access to every keynote,
-            challenge, and workshop with zero gated tracks.
-          </p>
-          <div className="hero-actions">
-            <Button to="/events" icon={ArrowRight}>
-              Explore events
-            </Button>
-            <Button to="/pass" variant="ghost" icon={ArrowUpRight}>
-              Understand the pass
-            </Button>
-          </div>
-          <div className="hero-note">
-            <span className={`hero-status-tag ${edition.registrationOpen ? 'is-open' : 'is-closed'}`}>
-              {edition.registrationOpen ? 'Registration open' : 'Registration closed'}
-            </span>
-            <Link to="/portal" className="hero-portal-link">
-              Participant portal <ArrowUpRight size={13} strokeWidth={1.5} />
-            </Link>
-          </div>
-        </div>
-        <div className="hero-art" aria-hidden="true">
-          <div className="orbit orbit-one" />
-          <div className="orbit orbit-two" />
-          <div className="orbit orbit-three" />
-          <img src={GLOBE} alt="" />
-          <div className="art-label">
-            <span>{dateRange(edition.startsAt, edition.endsAt)}</span>
-            <b>
-              SEE BEYOND
-              <br />
-              THE OBVIOUS
-            </b>
-          </div>
-          <span className="art-cross">✳</span>
-        </div>
-        <div className="hero-foot">
-          <span>
-            <MapPin size={15} strokeWidth={1.5} /> {edition.host}
-          </span>
-          <span>
-            <CalendarDays size={15} strokeWidth={1.5} />{' '}
-            {dateRange(edition.startsAt, edition.endsAt)}
-          </span>
-          <span>
-            <Users size={15} strokeWidth={1.5} /> {edition.city}
-          </span>
-        </div>
-      </section>
+      <HeroParallax edition={edition} days={days} />
 
       <section className="intro section">
         <div>
@@ -255,23 +522,7 @@ export function Home() {
         </div>
       </section>
 
-      <section className="pass-strip">
-        <div className="pass-orbit">
-          <span>{money(policy?.passPricePaise)}</span>
-        </div>
-        <div>
-          <h2>Your convention starts with one pass.</h2>
-          <p>
-            The pass includes lunch on {policy?.lunchIncludedDays?.length || 0} days and lets you
-            pick {policy?.includedSelectionMode === 'exact' ? 'exactly' : 'up to'}{' '}
-            {policy?.includedEventCount} included events within {money(policy?.includedValueCapPaise)} of
-            published base value.
-          </p>
-        </div>
-        <Button to="/pass" variant="light" icon={ArrowRight}>
-          See how it works
-        </Button>
-      </section>
+      <PassHighlightSection policy={policy} />
 
       <section className="section event-section">
         <SectionHead

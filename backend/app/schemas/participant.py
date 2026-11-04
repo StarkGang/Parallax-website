@@ -19,6 +19,10 @@ class SelectedEvent(CamelModel):
     accent: str | None = None
     selected: bool = False
     status: str = "open"
+    capacity: int | None = None
+    seats_taken: int = 0
+    seats_left: int | None = None
+    selectable: bool = True
 
 
 class SelectionState(CamelModel):

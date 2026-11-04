@@ -1,0 +1,1346 @@
+/***********************************************************
+ * PERSON OF INTEREST (POI) WEB UI - PARALLAX DESIGN SYSTEM
+ * Inspired by Samaritan & The Machine Intelligence Architectures
+ ***********************************************************/
+
+:root {
+  --poi-font-hud: 'Barlow Semi Condensed', sans-serif;
+  --poi-font-mono: 'Inconsolata', monospace;
+  
+  --poi-red: rgba(255, 0, 50, 0.95);
+  --poi-red-glow: none;
+  --poi-red-subtle: rgba(255, 0, 50, 0.15);
+  
+  --poi-yellow: rgba(247, 202, 3, 0.95);
+  --poi-yellow-glow: none;
+  --poi-yellow-subtle: rgba(247, 202, 3, 0.15);
+  
+  --poi-cyan: rgba(20, 180, 255, 0.95);
+  --poi-cyan-glow: none;
+  --poi-cyan-subtle: rgba(20, 180, 255, 0.15);
+
+  --poi-white: #ffffff;
+  --poi-dark: rgba(10, 12, 16, 0.92);
+  --poi-black: #080a0e;
+  --poi-border: rgba(255, 255, 255, 0.2);
+  --poi-border-strong: rgba(255, 255, 255, 0.7);
+}
+
+/* Base Body & Reset */
+.poi-body {
+  margin: 0;
+  padding: 0;
+  background-color: #08090d;
+  color: #f1f5f9;
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Subtle CRT Scanline Overlay */
+.poi-scanlines {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.02),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.02)
+  );
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.65;
+}
+
+/* Top Telemetry Surveillance Bar */
+.poi-hud-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: rgba(6, 8, 12, 0.94);
+  border-bottom: 2px solid var(--poi-red);
+  
+  backdrop-filter: blur(10px);
+  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.poi-hud-left,
+.poi-hud-center,
+.poi-hud-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.poi-rec-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--poi-red);
+  font-weight: 700;
+}
+
+.poi-rec-dot {
+  width: 9px;
+  height: 9px;
+  background: #ff0033;
+  border-radius: 50%;
+  
+  animation: poi-pulse 1s infinite alternate;
+}
+
+.poi-hud-tag {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 2px;
+  color: #cbd5e1;
+}
+
+.poi-hud-threat {
+  color: var(--poi-red);
+  border-color: var(--poi-red);
+  
+}
+
+/* Samaritan Animated Banner */
+.poi-banner-samaritan {
+  position: relative;
+  margin: 32px auto;
+  padding: 70px 24px;
+  background: rgba(4, 5, 8, 0.96);
+  border: 2px solid var(--poi-red);
+  
+  cursor: pointer;
+  text-align: center;
+  border-radius: 4px;
+  max-width: 1100px;
+  overflow: hidden;
+}
+
+.poi-banner-samaritan::before,
+.poi-banner-samaritan::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffffff;
+}
+
+.poi-banner-samaritan::before {
+  top: -2px;
+  left: -2px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.poi-banner-samaritan::after {
+  bottom: -2px;
+  right: -2px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.poi-banner-text {
+  font-family: var(--poi-font-hud);
+  font-size: clamp(26px, 5vw, 54px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #ffffff;
+  text-decoration: underline;
+  text-underline-offset: 12px;
+  text-decoration-color: var(--poi-red);
+  
+  margin-bottom: 24px;
+}
+
+.poi-banner-icon {
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+}
+
+.poi-banner-sub {
+  margin-top: 18px;
+  font-family: var(--poi-font-mono);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  color: var(--poi-red);
+  
+}
+
+/* POI Surveillance Target Bounding Box (Event Card) */
+.poi-target-card {
+  position: relative;
+  background: rgba(10, 13, 18, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0;
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-style: preserve-3d;
+  min-height: 320px;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* POI Corner Reticles */
+.poi-target-card::before,
+.poi-target-card::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--poi-cyan);
+  transition: all 0.25s ease;
+  pointer-events: none;
+}
+
+.poi-target-card::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.poi-target-card::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.poi-target-card:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(14, 18, 26, 0.96);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  transform: translateY(-4px);
+}
+
+.poi-target-card:hover::before,
+.poi-target-card:hover::after {
+  width: 20px;
+  height: 20px;
+  border-color: #ffffff;
+}
+
+.poi-target-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.poi-target-cam {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--poi-yellow);
+  font-weight: 700;
+}
+
+.poi-threat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  background: rgba(255, 0, 50, 0.18);
+  border: 1px solid var(--poi-red);
+  color: #ff3355;
+  
+}
+
+.poi-threat-badge.asset {
+  background: rgba(247, 202, 3, 0.18);
+  border-color: var(--poi-yellow);
+  color: #ffd000;
+  
+}
+
+.poi-threat-badge.analog {
+  background: rgba(20, 180, 255, 0.18);
+  border-color: var(--poi-cyan);
+  color: #38bdf8;
+  
+}
+
+.poi-target-title {
+  font-family: var(--poi-font-hud);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin: 6px 0 8px;
+  color: #ffffff;
+}
+
+.poi-target-summary {
+  font-family: var(--poi-font-hud);
+  font-size: 13.5px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin-bottom: 16px;
+  text-transform: none;
+}
+
+/* POI Surveillance Telemetry Rows */
+.poi-data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-family: var(--poi-font-mono);
+  font-size: 12px;
+}
+
+.poi-data-label {
+  color: #94a3b8;
+  letter-spacing: 0.08em;
+}
+
+.poi-data-value {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.poi-target-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.16);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+}
+
+/* POI Section Framing & Cross Divider */
+.poi-section-divider {
+  border: 0;
+  height: 2px;
+  background: var(--poi-red);
+  
+  margin: 60px 0 30px;
+}
+
+.poi-section-title {
+  text-align: center;
+  font-family: var(--poi-font-hud);
+  font-size: clamp(32px, 4.5vw, 52px);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: var(--poi-red);
+  
+  margin: 0 0 10px;
+}
+
+.poi-section-subtitle {
+  text-align: center;
+  font-family: var(--poi-font-mono);
+  font-size: 14px;
+  color: #94a3b8;
+  letter-spacing: 0.2em;
+  margin-bottom: 40px;
+}
+
+/* POI Button Styling */
+.poi-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 24px;
+  background: #000000;
+  border: 2px solid var(--poi-red);
+  color: #ffffff;
+  font-family: var(--poi-font-hud);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  
+}
+
+.poi-btn:hover {
+  background: var(--poi-red);
+  color: #ffffff;
+  
+  transform: translateY(-2px);
+}
+
+.poi-btn-amber {
+  border-color: var(--poi-yellow);
+  
+}
+
+.poi-btn-amber:hover {
+  background: var(--poi-yellow);
+  color: #000000;
+  
+}
+
+/* Animations */
+@keyframes poi-pulse {
+  0% {
+    opacity: 0.35;
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes poi-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+  70% { opacity: 0.95; }
+  85% { opacity: 0.75; }
+}
+
+
+/* ============================================================
+   POI PASS CLEARANCE DOSSIER (UPGRADED PASS STRIP)
+   ============================================================ */
+.poi-pass-strip-wrap {
+  position: relative;
+  z-index: 10;
+  max-width: 1240px;
+  margin: 48px auto;
+  padding: 0 20px;
+}
+
+.poi-pass-card {
+  position: relative;
+  background: rgba(8, 10, 15, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-left: 3px solid var(--poi-cyan);
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.7);
+  padding: 24px 28px;
+  transform-style: preserve-3d;
+  transition: border-color 0.25s ease;
+}
+
+.poi-pass-card::before,
+.poi-pass-card::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--poi-cyan);
+  pointer-events: none;
+}
+
+.poi-pass-card::before {
+  top: -2px;
+  left: -2px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.poi-pass-card::after {
+  bottom: -2px;
+  right: -2px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.poi-pass-card:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.poi-pass-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
+.poi-pass-ident {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--poi-cyan);
+  font-weight: 700;
+}
+
+.poi-pass-code {
+  color: #94a3b8;
+}
+
+.poi-pass-body {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 32px;
+}
+
+.poi-pass-price-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 18px 24px;
+  text-align: center;
+  min-width: 150px;
+}
+
+.poi-pass-price-label {
+  font-family: var(--poi-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.poi-pass-price-val {
+  font-family: var(--poi-font-hud);
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  line-height: 1;
+  
+}
+
+.poi-pass-price-sub {
+  font-family: var(--poi-font-mono);
+  font-size: 10px;
+  color: var(--poi-yellow);
+  letter-spacing: 0.1em;
+  margin-top: 6px;
+}
+
+.poi-pass-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.poi-pass-title {
+  font-family: var(--poi-font-hud);
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  margin: 0;
+  color: #ffffff;
+}
+
+.poi-pass-desc {
+  font-family: var(--poi-font-hud);
+  font-size: 13.5px;
+  color: #cbd5e1;
+  line-height: 1.6;
+  margin: 0;
+  text-transform: none;
+  max-width: 580px;
+}
+
+.poi-pass-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.poi-pass-feature-chip {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 6px 12px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.poi-chip-kicker {
+  font-family: var(--poi-font-mono);
+  font-size: 9px;
+  color: var(--poi-cyan);
+  letter-spacing: 0.14em;
+}
+
+.poi-pass-feature-chip b {
+  color: #ffffff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.poi-pass-action {
+  display: flex;
+  align-items: center;
+}
+
+.poi-pass-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #000000;
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  padding: 14px 24px;
+  font-family: var(--poi-font-hud);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.poi-pass-btn:hover {
+  background: #ffffff;
+  color: #000000;
+  
+  transform: translateY(-2px);
+}
+
+@media (max-width: 900px) {
+  .poi-pass-body {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .poi-pass-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ============================================================
+   SAMARITAN ZERO.DEV BOOT LOADER ANIMATION
+   ============================================================ */
+.samaritan-boot-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: stretch;
+  background: #08090d;
+  color: #f1f5f9;
+  overflow: hidden;
+  transition: opacity 0.4s ease;
+  user-select: none;
+}
+
+.samaritan-boot-bg {
+  display: none;
+}
+
+.samaritan-boot-screen.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.samaritan-pane {
+  height: 100%;
+  position: relative;
+  z-index: 2;
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  box-sizing: border-box;
+  background: rgba(8, 10, 16, 0.95);
+  backdrop-filter: blur(12px);
+}
+
+.samaritan-pane-left {
+  border-right: 2px solid rgba(255, 255, 255, 0.12);
+}
+
+.samaritan-pane-right {
+  border-left: 2px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 24px;
+}
+
+.samaritan-overlay-cap {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 50px;
+  background: #ff0033;
+  pointer-events: none;
+}
+
+.samaritan-overlay-cap.left-cap {
+  right: -2px;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.samaritan-overlay-cap.right-cap {
+  left: -2px;
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.samaritan-pane-center {
+  flex: 1;
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.samaritan-boot-log {
+  padding: 24px 16px;
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.samaritan-log-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.samaritan-bracket {
+  color: #ff0033;
+  font-weight: 800;
+}
+
+.samaritan-log-num {
+  color: #64748b;
+}
+
+.samaritan-log-text {
+  color: #cbd5e1;
+  margin-left: 4px;
+}
+
+.samaritan-loader-box {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.samaritan-brand-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.samaritan-brand-logo {
+  height: 54px;
+  width: auto;
+  object-fit: contain;
+  margin-bottom: 10px;
+}
+
+.samaritan-brand-sub {
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.samaritan-badge-row {
+  margin-bottom: 14px;
+}
+
+.samaritan-invert-badge {
+  background: #ffffff;
+  color: #08090d;
+  padding: 4px 12px;
+  font-family: var(--poi-font-mono);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  display: inline-block;
+  text-transform: uppercase;
+  border-radius: 2px;
+}
+
+.samaritan-invert-badge.large {
+  font-size: 20px;
+  padding: 8px 20px;
+  letter-spacing: 0.18em;
+}
+
+.samaritan-cursor {
+  display: inline-block;
+  width: 8px;
+  text-align: left;
+}
+
+.samaritan-resource-name {
+  font-family: var(--poi-font-mono);
+  font-size: 13.5px;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  margin-bottom: 16px;
+  text-align: center;
+  font-weight: 600;
+  min-height: 20px;
+  
+}
+
+.samaritan-bar-wrap {
+  width: 100%;
+  max-width: 360px;
+  height: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 2px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+}
+
+.samaritan-bar-fill {
+  height: 100%;
+  background: #ff0033;
+  border-radius: 2px;
+  transition: width 0.04s linear;
+}
+
+.samaritan-pct-label {
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 10px;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+}
+
+.samaritan-connected-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.samaritan-command-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.samaritan-message-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.samaritan-command-logo {
+  height: clamp(52px, 9vw, 84px);
+  width: auto;
+  max-width: min(85vw, 440px);
+  object-fit: contain;
+  margin: 0 auto;
+  display: block;
+}
+
+.samaritan-command-title {
+  font-family: var(--poi-font-hud), Arial, sans-serif;
+  font-size: clamp(48px, 9vw, 84px);
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.samaritan-command-hr {
+  width: 48px;
+  border: none;
+  height: 2px;
+  background: #ff0033;
+  margin: 14px auto 16px;
+}
+
+.samaritan-marker {
+  margin: 2px 0 12px;
+}
+
+.samaritan-triangle {
+  color: #ff0033;
+  font-size: 18px;
+  display: inline-block;
+  line-height: 1;
+}
+
+.samaritan-command-sub {
+  font-family: var(--poi-font-mono);
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  color: #ffffff;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  
+}
+
+.samaritan-command-kicker {
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.samaritan-right-decor {
+  text-align: right;
+}
+
+.samaritan-sys-tag {
+  font-family: var(--poi-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  color: #ff0033;
+  font-weight: 700;
+  
+}
+
+.samaritan-sys-sub {
+  font-family: var(--poi-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  margin-top: 3px;
+}
+
+@media (max-width: 768px) {
+  .samaritan-pane-left,
+  .samaritan-pane-right {
+    display: none;
+  }
+}
+
+/* ============================================================
+   CLEAN & PROFESSIONAL EVENT CARDS AND PASS HIGHLIGHT
+   ============================================================ */
+
+/* --- EVENT CARD --- */
+.pro-event-card {
+  position: relative;
+  background: #0d1017;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+  min-height: 290px;
+}
+
+.pro-event-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 16px 32px -10px rgba(0, 0, 0, 0.7);
+}
+
+.pro-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.pro-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pro-cat-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 9px;
+  border-radius: 6px;
+  letter-spacing: 0.04em;
+}
+
+.pro-cat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #38bdf8;
+  flex-shrink: 0;
+}
+
+.pro-cat-dot.dot-cyan { background: #38bdf8; }
+.pro-cat-dot.dot-amber, .pro-cat-dot.dot-yellow { background: #fbbf24; }
+.pro-cat-dot.dot-orange { background: #fb923c; }
+.pro-cat-dot.dot-violet, .pro-cat-dot.dot-purple { background: #a855f7; }
+.pro-cat-dot.dot-rose, .pro-cat-dot.dot-red { background: #fb7185; }
+.pro-cat-dot.dot-lime, .pro-cat-dot.dot-green { background: #a3e635; }
+.pro-cat-dot.dot-emerald { background: #34d399; }
+.pro-cat-dot.dot-ice, .pro-cat-dot.dot-blue { background: #7dd3fc; }
+
+.pro-format-tag {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: var(--poi-font-mono);
+}
+
+.pro-card-arrow {
+  color: #64748b;
+  display: grid;
+  place-items: center;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.pro-event-card:hover .pro-card-arrow {
+  color: #ffffff;
+  transform: translate(2px, -2px);
+}
+
+.pro-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pro-card-icon-box {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  place-items: center;
+  color: #f8fafc;
+}
+
+.pro-event-icon-img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.pro-card-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.015em;
+  margin: 0;
+  line-height: 1.25;
+  text-transform: none;
+}
+
+.pro-card-desc {
+  font-size: 13px;
+  color: #94a3b8;
+  line-height: 1.55;
+  margin: 0 0 16px;
+  text-transform: none;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pro-card-metrics {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.pro-metric-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pro-metric-label {
+  font-size: 10.5px;
+  color: #64748b;
+  font-family: var(--poi-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pro-metric-val {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f1f5f9;
+  font-family: var(--poi-font-mono);
+}
+
+.pro-metric-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pro-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+}
+
+.pro-capacity-text {
+  color: #64748b;
+  font-family: var(--poi-font-mono);
+}
+
+.pro-status-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.pro-status-pill.is-open {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.pro-status-pill.is-closed {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+
+/* --- PASS HIGHLIGHT SECTION --- */
+.pro-pass-section {
+  max-width: 1240px;
+  margin: 48px auto 60px;
+  padding: 0 20px;
+  position: relative;
+  z-index: 10;
+}
+
+.pro-pass-card {
+  position: relative;
+  background: #0e1118;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 40px 48px;
+  box-shadow: 0 24px 60px -15px rgba(0, 0, 0, 0.8);
+  
+  display: grid;
+  grid-template-columns: 1.35fr 0.85fr;
+  gap: 48px;
+  align-items: center;
+  overflow: hidden;
+  transform-style: preserve-3d;
+  transition: border-color 0.25s ease;
+}
+
+.pro-pass-card:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.pro-pass-glow { display: none; }
+
+.pro-pass-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 5px 12px;
+  border-radius: 999px;
+  letter-spacing: 0.08em;
+  margin-bottom: 16px;
+}
+
+.pro-pass-headline {
+  font-size: clamp(24px, 3.2vw, 34px);
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin: 0 0 12px;
+  text-transform: none;
+}
+
+.pro-pass-sub {
+  font-size: 14px;
+  color: #94a3b8;
+  line-height: 1.6;
+  margin: 0 0 24px;
+  text-transform: none;
+  max-width: 520px;
+}
+
+.pro-pass-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pro-benefit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  color: #cbd5e1;
+  text-transform: none;
+}
+
+.pro-check-icon {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+  display: grid;
+  place-items: center;
+}
+
+.pro-pricing-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 32px 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pro-price-caption {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+  font-family: var(--poi-font-mono);
+}
+
+.pro-price-amount {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.pro-price-currency {
+  font-size: 26px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.pro-price-number {
+  font-size: 56px;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.pro-price-tenure {
+  font-size: 14px;
+  color: #94a3b8;
+  margin-left: 4px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.pro-price-note {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 20px;
+  text-transform: none;
+}
+
+.pro-pass-cta-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #ffffff;
+  color: #090c12;
+  padding: 13px 24px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  
+  box-sizing: border-box;
+}
+
+.pro-pass-cta-btn:hover {
+  background: #f1f5f9;
+  transform: translateY(-2px);
+  
+}
+
+.pro-instant-tag {
+  font-size: 11px;
+  color: #64748b;
+  font-family: var(--poi-font-mono);
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .pro-pass-card {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 28px 24px;
+  }
+}

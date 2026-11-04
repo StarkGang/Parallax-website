@@ -35,6 +35,13 @@ QR_PALETTES: dict[str, dict[str, str]] = {
         "border": "#fbbf24",
         "accent": "#fbbf24",
     },
+    "orange": {
+        "fg1": "#fb923c",
+        "fg2": "#f97316",
+        "bg": "#140804",
+        "border": "#fb923c",
+        "accent": "#fb923c",
+    },
     "lime": {
         "fg1": "#a3e635",
         "fg2": "#4ade80",
@@ -160,7 +167,9 @@ async def issue_for_pass(db: AsyncSession, user_pass: ConventionPass) -> Ticket:
     return await _stamp_token(db, t)
 
 
-async def issue_for_registration(db: AsyncSession, reg: Registration) -> Ticket:
+async def issue_for_registration(db: AsyncSession, reg: Registration) -> Ticket | None:
+    if reg.status not in ("confirmed", "reserved"):
+        return None
     ext = await _existing_for_reg(db, reg.user_id, reg.id)
     if ext:
         return ext
@@ -176,6 +185,42 @@ async def issue_for_registration(db: AsyncSession, reg: Registration) -> Ticket:
     db.add(t)
     await db.flush()
     return await _stamp_token(db, t)
+
+
+async def revoke_for_registration(db: AsyncSession, registration_id: uuid.UUID) -> int:
+    rows = list(
+        (
+            await db.execute(
+                select(Ticket).where(
+                    Ticket.registration_id == registration_id,
+                    Ticket.status.in_(["active", "valid"]),
+                )
+            )
+        ).scalars()
+    )
+    for t in rows:
+        t.status = "revoked"
+        t.revoked_at = datetime.now(UTC)
+    await db.flush()
+    return len(rows)
+
+
+async def revoke_for_pass(db: AsyncSession, pass_id: uuid.UUID) -> int:
+    rows = list(
+        (
+            await db.execute(
+                select(Ticket).where(
+                    Ticket.pass_id == pass_id,
+                    Ticket.status.in_(["active", "valid"]),
+                )
+            )
+        ).scalars()
+    )
+    for t in rows:
+        t.status = "revoked"
+        t.revoked_at = datetime.now(UTC)
+    await db.flush()
+    return len(rows)
 
 
 def qr_svg(token: str, accent: str = "cyan") -> str:
@@ -239,6 +284,9 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
     kind = "pass" if ticket.pass_id else "registration"
     title = "Convention Entry Pass"
     reg_num = "PASS"
+    starts_at = None
+    ends_at = None
+    venue_room = None
     if ticket.registration_id:
         reg = await db.get(Registration, ticket.registration_id)
         if reg:
@@ -246,6 +294,9 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
             event = await db.get(Event, reg.event_id)
             if event:
                 title = event.title
+                starts_at = event.starts_at.isoformat() if event.starts_at else None
+                ends_at = event.ends_at.isoformat() if event.ends_at else None
+                venue_room = event.venue_room
 
     return {
         "id": str(ticket.id),
@@ -255,6 +306,9 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
         "kind": kind,
         "title": title,
         "registrationNumber": reg_num,
+        "startsAt": starts_at,
+        "endsAt": ends_at,
+        "venueRoom": venue_room,
         "attendedDays": [],
     }
 
@@ -300,6 +354,8 @@ __all__ = [
     "token_is_valid",
     "issue_for_pass",
     "issue_for_registration",
+    "revoke_for_registration",
+    "revoke_for_pass",
     "qr_svg",
     "ticket_payload",
     "resolve",

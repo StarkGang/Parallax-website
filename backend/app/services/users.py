@@ -12,7 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role, STAFF_ROLES
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
-from app.models.commerce import ConventionPass
+from app.models.commerce import ConventionPass, Registration
 from app.models.edition import ConventionEdition, EligibilityVerification
 from app.models.user import (
     EditionMembership,
@@ -314,6 +314,32 @@ async def list_users(
     include_pii: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
     stmt = select(User)
+    if edition_id is not None:
+        # An edition's staff may only browse people who actually touch that edition.
+        stmt = stmt.where(
+            or_(
+                User.id.in_(
+                    select(EditionMembership.user_id).where(
+                        EditionMembership.edition_id == edition_id
+                    )
+                ),
+                User.id.in_(
+                    select(ConventionPass.user_id).where(
+                        ConventionPass.edition_id == edition_id
+                    )
+                ),
+                User.id.in_(
+                    select(Registration.user_id).where(
+                        Registration.edition_id == edition_id
+                    )
+                ),
+                User.id.in_(
+                    select(EligibilityVerification.user_id).where(
+                        EligibilityVerification.edition_id == edition_id
+                    )
+                ),
+            )
+        )
     if q:
         needle = f"%{q.strip().lower()}%"
         stmt = stmt.where(
