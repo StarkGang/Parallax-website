@@ -1,164 +1,232 @@
-# PARALLAX — ISTE State Student Convention
+# PARALLAX Convention Web App
 
-A presentation-ready, static React prototype for the proposed PARALLAX two-day ISTE state student convention hosted by NSS College of Engineering, Palakkad, Kerala, India. It is designed for faculty and organizing committee review and static hosting on GitHub Pages.
+PARALLAX is a convention information and operations web application for an ISTE state student convention hosted by NSS College of Engineering, Palakkad. The repository contains a React single page frontend, a FastAPI backend, a relational data model, local development seed data, supplied brand artwork, and product and deployment documentation.
 
-> **Prototype boundary:** This is a frontend demo. It does not authenticate participants, verify student status, take payments, save registrations to a server, send email, or persist management edits. Never treat visible demo records as real registrations.
+The browser app is a client of the backend. The backend is the source of truth for editions, policy, events, participant accounts, passes, registrations, tickets, staff permissions, and operational records. It validates important actions on the server and persists them in the database.
 
-## Convention rules and decision status
+## GitHub Pages
 
-The planning brief supplies these baseline requirements: a two-day convention; host NSS College of Engineering, Palakkad; dates unconfirmed; and a mandatory ₹500 convention pass for every participant. The pass includes lunch on both days. The included event allowance and event fees are separate from the pass.
+The frontend deploys from `.github/workflows/deploy.yml` when changes are pushed to `main` (or from **Actions → Deploy to GitHub Pages → Run workflow**). In the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**. The workflow builds `frontend` and deploys it; client routes use URL hashes so page refreshes work on GitHub Pages project sites.
 
-This prototype demonstrates an allowance of **up to 3 eligible events**. The sum of their published `baseValue` figures must not exceed an illustrative **₹450 cap**. The planning discussion mentions ₹400 or ₹450; ₹450 here is explicitly not final. Whether selection must be exactly 3 or may be up to 3 is also awaiting approval. Extra events can be selected at their `addonPrice` only after the mandatory pass. The pass amount is never added to the included event value sum. Team members each need their own valid pass before team confirmation unless an edition administrator later configures another policy.
+GitHub Pages hosts static files only. To load convention data or use sign-in, registration, payments, and staff tools, deploy the FastAPI backend separately and add a repository Actions variable named `VITE_API_BASE` with the backend API base URL (for example, `https://api.example.com/api/v1`). Configure that backend's CORS and allowed frontend origin for the GitHub Pages URL. Without a backend, the static site shell loads but API-driven features are unavailable. The workflow derives the project-site asset path from the repository name; set the `VITE_BASE_PATH` Actions variable only if you need to override it (for example, `/` for a custom domain).
 
-| Status | Details |
-|---|---|
-| Planning baseline | Convention name, host, two-day duration, mandatory ₹500 pass, lunch both days |
-| Provisional demo values | Tagline, 3-event count, up-to selection, ₹450 cap, fictional events and event prices |
-| Awaiting confirmation | Dates, official email, final cap and count/mode, schedule, venue rooms, event rules, eligibility, capacity, cancellation/refund policy, social accounts, travel/accommodation guidance, brand approvals |
+> Local development uses seeded demo records and a mock payment path. Do not enter real participant, identity document, or payment information into an unreviewed development environment.
 
-The displayed participant volume of 500–1,000 is a planning estimate, not a confirmed capacity.
+## What the web app does
 
-## Technology
+### Public convention site
 
-- **React** builds reusable public and portal interfaces.
-- **Vite** provides a small development server and static production build.
-- **React Router `HashRouter`** supports deep navigation on GitHub Pages without server rewrite rules.
-- **Plain CSS design system** keeps styling cohesive without an extra CSS framework dependency.
-- **Lucide React** supplies accessible interface icons.
-- **Static data and mock service adapters** create an API boundary for future migration without network calls.
+The public pages present convention information and read the current edition from the API:
 
-## Setup and commands
+- **Home (`/`)** introduces the edition, highlights selected events, and links visitors to convention information and sign-in.
+- **About (`/about`)** explains the convention and its organizers and host.
+- **Events (`/events`)** displays the event catalogue. The API supports search, category, individual/team format, featured-only filtering, and pagination. Event cards show category, summary, individual or team format, included value, separate add-on price, availability, and registration state.
+- **Event detail (`/events/:eventSlug`)** shows an event's description, rules, schedule, venue, team size or individual format, fees, and registration information.
+- **Pass (`/pass`)** explains the convention pass, included event allowance, cap, add-on charges, and policy currently configured for the edition.
+- **Schedule (`/schedule`)** displays schedule days and items returned by the API.
+- **Venue (`/venue`)**, **FAQ (`/faq`)**, and **Contact (`/contact`)** provide visitor planning information.
+- The global header links to the public pages and adapts to a mobile menu. A footer and not-found page are shared around public-facing routes.
 
-Prerequisites: Node.js 22 LTS (or a compatible current Node release) and npm. From the repository root:
+### Participant portal
 
-```sh
-npm install
-npm run dev
-npm run build
-npm run preview
-npm test
-```
+After sign-in, `/portal` provides an overview and links to participant tools. The portal pages are:
 
-`npm run dev` prints the local URL. `npm run build` writes the static site to `dist/`. `npm run preview` serves that build locally. Tests use Node's built-in test runner; add tests as pricing policy is finalized.
+- **Pass (`/portal/pass`)** shows pass status and price, starts a pass order, and supports the configured payment flow.
+- **Select events (`/portal/select-events`)** lets a participant choose included events within the edition's selection count and base-value cap. The server validates the selection and policy; the browser is not authoritative for prices or eligibility.
+- **Registrations (`/portal/registrations`)** lists a participant's registrations and exposes cancellation when allowed by policy and registration state.
+- **Tickets (`/portal/tickets`)** displays issued tickets and their QR codes for entry.
+- **Teams (`/portal/teams`)** supports creating or joining a team, managing an invite code, and leaving a team, subject to event size and membership rules.
+- **Verification (`/portal/verification`)** displays student verification status and supports the configured email or document submission workflow.
+- **Profile (`/portal/profile`)** displays and edits the participant's profile details supported by the API.
 
-## Main routes
+The portal also shows pass, profile, and verification status, and provides sign-out. Staff accounts can switch between participant and staff views.
 
-| Route | Page |
-|---|---|
-| `/` | Home, convention summary, pass model, featured events |
-| `/about` | Convention and host context |
-| `/events`, `/events/:slug` | Searchable/filterable event catalog and details |
-| `/pass` | Mandatory pass and included/add-on pricing explanation |
-| `/schedule`, `/venue`, `/faq`, `/contact` | Public planning information |
-| `/portal` | Demo participant dashboard |
-| `/portal/select-events` | Local interactive included/add-on selection calculation |
-| `/portal/registrations`, `/portal/profile` | Demo registration and profile views |
-| `/manage` | Coordinator dashboard and event configuration concept |
+### Staff console
 
-Routes are hash URLs (for example `/#/events`) by design; direct nested-route refreshes therefore do not require GitHub Pages rewrite support.
+Staff-only routes under `/manage` provide operational views. Access is guarded in the frontend and authorized again by backend roles and permissions. The console includes:
 
-## Repository map
+- **Overview:** edition and operational summary.
+- **Events:** create and update events and categories, manage their descriptions, format, schedule, capacity, status, fees, and event icons.
+- **Policy:** view and update edition policy, inspect policy validation, and control registration settings.
+- **Registrations:** search and review participant registrations.
+- **Users:** review users, account status, memberships, and staff access actions.
+- **Verifications:** inspect student verification submissions and make decisions.
+- **Payments:** review payment orders and refunds; the backend supports refunds when payment integration and permissions permit them.
+- **Check-in:** look up or scan ticket information and record attendee entry.
+- **Announcements:** publish, edit, and remove public convention announcements.
+- **Attendance:** review check-in and attendance data.
+- **Audit log:** inspect recorded administrative and operational changes.
+- **Settings:** review or edit edition-level settings permitted to the signed-in staff role.
+
+Staff roles are permission-scoped (for example super administrator, edition administrator, finance administrator, verifier, event coordinator, and check-in staff). The set of available actions depends on the role granted by the backend.
+
+### Backend capabilities
+
+The backend in `backend/app/` provides:
+
+- Public edition configuration, current edition, policy, categories, searchable event catalogue, event details, schedule, announcements, public icons, and signed document access.
+- Development login and optional Google OAuth, server-side sessions, CSRF protection, optional multi-factor authentication, session listing and revocation, and role-based access checks.
+- Participant profiles, pass orders, included-event selections, add-on registrations, teams, student verification, payment status, tickets, and QR generation.
+- Administrative event and policy editing, category and icon management, user and membership administration, verification decisions, payment/refund review, announcements, check-in, attendance, audit records, and settings.
+- SQLite for local development, with PostgreSQL/Supabase support configured for staging or production. Startup creates database tables and seeds demo data in development when enabled.
+- Optional integrations for Razorpay payments, Google sign-in, Supabase or S3 storage, email, and error monitoring. These require explicit environment configuration; empty example values do not enable them.
+
+## Repository guide
 
 ```text
 .
-├── .github/workflows/deploy.yml  # build and GitHub Pages deployment
-├── docs/                         # product, rules, architecture, configuration, deployment
-├── images/                       # supplied originals; preserve these
-├── index.html                    # document shell and metadata
-├── public/                       # reserved for project-owned public files
-├── src/
-│   ├── config/convention.config.js # edition settings and provisional-policy comments
-│   ├── data/events.js              # fictional sample event records
-│   ├── data/navigation.js          # shared route labels
-│   ├── services/mockServices.js    # local service boundary
-│   ├── utils/                      # pricing and event eligibility pure helpers
-│   ├── main.jsx                    # page components and HashRouter
-│   └── style.css                   # responsive design system
-├── vite.config.js                 # Vite base-path configuration
-└── package.json                   # commands and dependencies
+├── frontend/                 React + Vite application
+│   ├── src/
+│   │   ├── main.jsx           React entry point and provider composition
+│   │   ├── App.jsx            shared shell, route table, access gates, not-found page
+│   │   ├── components/ui.jsx  reusable buttons, fields, panels and async states
+│   │   ├── pages/             public, portal, staff and login screens
+│   │   ├── style.css          base styles, visual tokens, breakpoints
+│   │   └── theme.css          additional treatments and page styles
+│   ├── images/                frontend source copies of supplied assets
+│   ├── index.html             browser document shell and metadata
+│   ├── package.json           frontend commands and dependencies
+│   └── vite.config.js         dev proxy, build base, selected asset copying
+├── backend/
+│   ├── app/api/v1/            public, auth, profile, participant, admin, webhook APIs
+│   ├── app/services/          business rules for events, passes, teams, payments, etc.
+│   ├── app/models/            SQLAlchemy database models
+│   ├── app/schemas/           Pydantic API input/output contracts
+│   ├── app/core/              settings, security, permissions, errors and middleware
+│   ├── app/integrations/      storage and email adapters
+│   ├── app/seed.py            idempotent local demo edition and accounts
+│   └── tests/                 backend test suite
+├── docs/                     product, business rules, architecture and deployment notes
+├── images/                   original supplied artwork and logos
+├── BACKEND.md                backend setup and API/operations guide
+├── DEPLOY.md                 deployment notes
+├── CONTRIBUTING.md           contribution conventions
+├── Dockerfile, render.yaml   deployment configuration
+└── vercel.json               root hosting configuration
 ```
 
-See [Frontend architecture](docs/FRONTEND_ARCHITECTURE.md) and [Configuration guide](docs/CONFIGURATION_GUIDE.md) for fuller maps.
+## Run the application locally
 
-## Create another edition
+Run backend and frontend in separate terminals from the repository root. Python 3.12 is recommended. Node.js and npm are needed for the frontend.
 
-Edit `src/config/convention.config.js` for edition name, tagline, organizer, host, dates, day count, city, email placeholder, social links, registration status, currency, pass, lunch, allowance count, cap, selection mode and demo flag. Components read these settings. Selection mode supports `up_to` and `exact`; the clearly labeled demo default is `up_to`. Update `src/data/events.js` with stable IDs/slugs, category, format, `baseValue`, `addonPrice`, team size, eligibility, capacity, state, rules, schedule and featured flag. Keep fictional content labeled and obtain approval before replacing provisional values with official policy.
+### 1. Start the backend
 
-### Pricing semantics
+In terminal 1, create the environment and install the backend package. These instructions use PowerShell on Windows:
 
-- `passPrice`: mandatory independent convention pass, currently ₹500.
-- `baseValue`: event's published value used only for included-event cap validation.
-- `addonPrice`: separate fee to register for that event after a pass.
-- `includedEventValueCap`: maximum sum of selected included-event `baseValue` values.
-- `includedEventCount` and `selectionMode`: allowance policy.
-
-Example: event base values ₹100 + ₹150 + ₹200 = ₹450, meeting the illustrative cap. With `up_to: 3`, fewer selections are also allowed. Add-on fees of ₹150 and ₹200 create ₹350 of add-ons; the participant still needs the separate ₹500 pass. The demo total is ₹850, before any other charges. A ₹200 event base value does not imply its add-on costs ₹200.
-
-The helper functions in `src/utils/pricing.js` calculate selected base totals, count/cap validity, add-on totals and INR display. `src/utils/eventEligibility.js` determines whether a sample event is eligible under the configured cap.
-
-### Annotated event record
-
-```js
-{
-  id: 'circuit-lab',                 // stable identifier
-  slug: 'circuit-lab',               // route segment
-  title: 'Circuit Lab',
-  category: 'Engineering',
-  format: 'individual',              // individual | team
-  baseValue: 100,                    // included-cap calculation only
-  addonPrice: 150,                   // separately payable after pass
-  teamMin: 1, teamMax: 1,
-  eligibility: 'Student status requires future verification.',
-  capacity: 'To be announced',
-  registrationState: 'Planning preview',
-  rules: ['Illustrative rule pending approval.'],
-  schedule: 'Day and time to be announced',
-  venue: 'Venue to be announced',
-  featured: true
-}
+```powershell
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Archive an event by removing it from the active `events` array after confirming it is no longer referenced; feature it by setting `featured: true`. Do not recycle stable IDs. Production should preserve historical registrations and use an explicit active state.
+On macOS/Linux, use the platform's Python 3.12 executable and venv path:
 
-## Brand assets and visual system
+```sh
+cd backend
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
-The root `images/` folder contains supplied originals. Do not rename, overwrite, delete, recolor or distort official logo files. The Parallax logo is used at intrinsic proportions in the navigation; the NSSCE logo appears on About; ISTE appears in the footer. The hero uses the supplied decorative globe SVG. The Vite build copies only these four used files into `dist/images/`; all other supplied assets remain inventoried source references. Event illustrations, supplied background art and raw stock are inventoried for committee review; no remote image is required for the core pages. The configured tagline is prototype copy. Do not treat the abstract site treatment as a newly approved logo.
+For local development, the backend generates a development secret if `SERVER_SECRET_KEY` is unset, uses SQLite at `backend/var/parallax.db` by default, creates tables, and seeds demo data on first startup. No `.env` file is required for the default local setup. To customize the environment, copy `backend/.env.example` to `backend/.env` and review every value before use. Keep secrets out of version control.
 
-See [`images/README.md`](images/README.md) for safe additions and [`docs/IMAGE_ASSET_INVENTORY.md`](docs/IMAGE_ASSET_INVENTORY.md) for every supplied path, dimensions and current usage map. The inventory distinguishes files currently used from candidates requiring human review.
+Wait for the `Application startup complete` message. Useful URLs:
 
-Colors and responsive rules are CSS custom properties and media queries in `src/style.css`. Fonts use Manrope and DM Mono with system fallbacks; Google Fonts is optional and is not required for app function. Replace remote font imports with approved local font files if the production deployment needs to avoid external font requests.
+- API health: <http://127.0.0.1:8000/health/live>
+- API readiness and database check: <http://127.0.0.1:8000/health/ready>
+- Interactive API docs in development: <http://127.0.0.1:8000/api/docs>
 
-## GitHub Pages deployment
+The default development demo account emails are `participant@parallax.local` and `owner@parallax.local` (staff). They do not use passwords in the local development login flow. Development login is disabled outside development/test and can be controlled by `DEV_AUTH_ENABLED` and `ALLOW_DIRECT_LOGIN`. Google OAuth requires valid client credentials.
 
-The workflow in `.github/workflows/deploy.yml` builds on pushes to `main` and manual dispatch. For a repository project site it supplies `VITE_BASE_PATH=/<repository-name>/`, without hard-coding an owner or repository. Set repository variable `VITE_BASE_PATH` to `/` for a user/organization site or custom domain. `vite.config.js` defaults to `./` for local builds.
+### 2. Start the frontend
 
-1. Push this repository to GitHub, with the deployment workflow on `main`.
-2. In **Settings → Pages**, select **GitHub Actions** as the build and deployment source.
-3. Ensure Actions are permitted for the repository and that the workflow's Pages permissions are not restricted by organization policy.
-4. Run the workflow or push to `main`; wait for the deploy job to complete.
-5. Open the URL shown by the deployment job, normally `https://USERNAME.github.io/REPOSITORY/`.
+In terminal 2, from the repository root:
 
-The site has not been deployed by this prototype task. See [deployment guide](docs/GITHUB_PAGES_DEPLOYMENT.md). A blank screen usually means the base path is wrong: check the generated asset URLs and set `VITE_BASE_PATH` to the project prefix with both slashes. Routes use `/#/...` to avoid nested-route refresh errors. For a custom domain configure it in Pages and set the base to `/`; add DNS only after the repository owner confirms the domain.
+```sh
+cd frontend
+npm install
+npm run dev
+```
 
-## Services and future migration
+Vite normally serves the frontend at <http://localhost:5173>. Its development proxy forwards `/api` and `/health` to `http://127.0.0.1:8000`; set `VITE_API_PROXY` if the backend is on another address. The frontend and backend origin settings must agree for development session and CSRF checks. The browser app expects the backend's current edition to load before it renders the routes.
 
-UI-facing service-shaped adapters live in `src/services/mockServices.js`: events, participant profile, registrations, pricing, payment and management. They currently return local demo data; no arbitrary URL is fetched. Future Express REST implementations can replace these adapters. Production is expected to use React/Vite, Node/Express, Supabase Auth for Google OAuth, PostgreSQL, server-created payment orders and verified webhooks, role-based permissions, and database-enforced capacity/pricing/pass/duplicate rules. Never place payment secrets, service-role keys or OAuth client secrets in frontend source or Vite variables. See [migration plan](docs/FUTURE_FULL_STACK_MIGRATION.md).
+### Current frontend checkout limitation
 
-## Review, accessibility and limitations
+The React source imports modules from `frontend/src/lib/` including `auth.jsx`, `site.jsx`, `theme.jsx`, `api.js`, and `format.js`, but `frontend/src/lib/` is missing from this checkout. As a result, Vite reports errors such as `Failed to resolve import "./lib/auth.jsx" from "src/main.jsx"`, and the frontend cannot compile until those source modules are restored. The backend can be run and its API inspected independently. The frontend directory's available scripts are:
 
-For committee review, walk through Home → Pass → Events → Portal → Select events; try adding a choice beyond the configured count and a choice beyond the cap; inspect team pass language; then review About, Schedule, Venue and FAQ for provisional placeholders. The selector is local React state and resets on navigation/reload. The profile is read-only mock content. Buttons for future server actions show a demo notice; no successful payment or verification is represented.
+```sh
+npm run dev          # Vite development server
+npm run build        # production files in frontend/dist/
+npm run preview      # preview the last production build
+npm run format       # format frontend files using Prettier
+npm run format:check # check formatting
+npm test             # Node test runner; no frontend test files are included
+```
 
-The UI uses landmarks, a skip link, labels, keyboard-operable links and controls, visible focus, reduced-motion rules, responsive layouts and semantic disclosure elements. Review contrast and keyboard behavior with assistive technology before production. Demo data is not suitable for real personal or financial information. Production requires server-side validation, authentication, authorization, privacy/security review, accessible verification, confirmed policies and proper audit controls.
+## How requests and pages work
 
-## Contributing
+1. `frontend/index.html` provides the root HTML document and loads `src/main.jsx`.
+2. `main.jsx` mounts React, React Router's `BrowserRouter`, and providers for theme, edition/site data, and authentication. It imports both global stylesheets.
+3. `App.jsx` chooses the page for the current route, loads shared navigation and footer, and applies participant/staff route gates.
+4. `pages/Public.jsx`, `Portal.jsx`, `Admin.jsx`, and `Login.jsx` render the visitor, participant, staff, and login interfaces. `components/ui.jsx` supplies shared interface elements.
+5. Page components call shared functions from the absent `src/lib/` modules. The names/usages indicate API clients, auth/site/theme providers, and date/currency formatting helpers; their implementation is unavailable in this checkout.
+6. The backend mounts its routers below `/api/v1`. Public reads are grouped under `/public`; authentication, current-user, participant, admin, and webhook endpoints are separated by responsibility.
+7. In local development Vite proxies API calls to FastAPI. In production the frontend and API are intended to be served from the configured deployment origin.
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md). Suggested branches: `feat/event-selector`, `fix/pages-base-path`, `docs/policy-review`; use concise commits such as `feat: add event filters`. Keep policy configuration centralized, preserve supplied artwork, and update docs when behavior changes.
+`App.jsx` also mounts a shared theme customizer across routes. Its implementation is imported from the missing `src/lib/theme.jsx`, so its exact controls and behavior cannot be confirmed from this checkout.
 
-## Glossary
+The route table includes public routes `/`, `/about`, `/events`, `/events/:eventSlug`, `/pass`, `/schedule`, `/venue`, `/faq`, `/contact`; `/login`; participant routes `/portal`, `/portal/pass`, `/portal/select-events`, `/portal/registrations`, `/portal/tickets`, `/portal/teams`, `/portal/verification`, `/portal/profile`; and staff routes `/manage`, `/manage/events`, `/manage/policy`, `/manage/registrations`, `/manage/users`, `/manage/verifications`, `/manage/payments`, `/manage/check-in`, `/manage/announcements`, `/manage/attendance`, `/manage/audit`, `/manage/settings`.
 
-- **Convention pass:** mandatory ₹500 admission pass per participant, including both lunches.
-- **Base value:** published event value used to validate the included-event cap.
-- **Addon price:** separate event fee after a convention pass.
-- **Included-event cap:** maximum permitted sum of selected base values.
-- **Team registration:** one team event entry whose members each need a pass under the proposed rule.
-- **Verified student:** a participant whose student eligibility has been checked by a future real verification process; the prototype verifies nobody.
+## Editing the frontend
+
+Make interface changes in `frontend/`:
+
+| Change | Files to start with |
+|---|---|
+| Public page content or event catalogue presentation | `frontend/src/pages/Public.jsx` |
+| Participant workflow screens | `frontend/src/pages/Portal.jsx` |
+| Staff console screens | `frontend/src/pages/Admin.jsx` |
+| Sign-in screen | `frontend/src/pages/Login.jsx` |
+| URLs, shared header/footer, route guards, page shell | `frontend/src/App.jsx` |
+| Shared buttons, panels, form fields, empty/loading/error UI | `frontend/src/components/ui.jsx` |
+| Global colors, typography, spacing, responsive rules | `frontend/src/style.css`, `frontend/src/theme.css` |
+| HTML title, metadata, root document | `frontend/index.html` |
+| API proxy, base path, selected static asset build copying | `frontend/vite.config.js` |
+| Event, policy, account, payment, or registration rules | `backend/app/` services, schemas, and API routes |
+
+Use React Router `Link`/`NavLink` for internal navigation, semantic buttons and form labels for controls, and existing CSS classes/tokens for consistent styling. Preserve keyboard focus, responsive layouts, and accessible names when editing interactive pages. Keep data access behind the shared API layer when its missing files are restored. Never put secrets in frontend code or `VITE_` environment variables because Vite embeds those values in the browser bundle.
+
+The standard edit loop is: start the backend and frontend, edit the page/component and corresponding CSS, inspect desktop and narrow mobile layouts, then run `npm run build` from `frontend/` once the missing `src/lib/` modules are restored. Changes to server-side rules should be implemented and validated in the backend; UI checks alone cannot enforce authorization, prices, capacity, or eligibility.
+
+## Edition data and policy
+
+The seeded edition slug is `parallax-2026`. Local seed data includes categories such as Computing, Engineering, Robotics, Electronics, and Design, plus individual and team events. The seed's current policy sets a ₹350 pass, a lunch entitlement for both days, up to three included events subject to an inclusive ₹450 base-value cap, a 15-minute hold window, and a selection deadline. Values live in database edition/policy/event records and can differ from defaults after staff changes; the API is authoritative. Amounts in API/database logic are integer paise.
+
+An included event's base value is used for the included-event cap. Its add-on price is a separate fee and does not count as the base value. A convention pass is required independently of event selection. Team registration has team size and membership rules. The backend validates event eligibility, selection count and cap, registration state, available capacity, pass requirements, team membership, and staff permissions.
+
+For planning context and policy definitions, see [business rules](docs/BUSINESS_RULES.md) and [open decisions](docs/DECISIONS_AND_OPEN_QUESTIONS.md). Do not hard-code a displayed price or policy in a page when it should come from the current edition API.
+
+## Payments, verification, and local demo behavior
+
+Payments are disabled in the default local configuration (`PAYMENTS_ENABLED=false`). The API reports when an order uses the mock path, and provides a development mock payment action to exercise local pass/registration flows. This does not contact a payment provider or transfer money. Real Razorpay processing requires configured credentials and webhook setup; never use production credentials for local development.
+
+Verification can be configured for institution email or document review. Email delivery and remote storage integrations are optional and depend on backend settings. The local demo may use local storage and development-only login. Do not treat a seeded account, verification status, payment, or ticket as evidence of real-world eligibility or successful payment.
+
+## Deployment and assets
+
+`frontend/vite.config.js` uses `VITE_BASE_PATH` for the static asset base, proxies local API requests, and copies a selected set of supplied brand files into the build. `frontend/vercel.json`, root `vercel.json`, `render.yaml`, and `Dockerfile` provide deployment configuration. Deployment is not automatic from local development. Read [DEPLOY.md](DEPLOY.md) and the relevant hosting guide before publishing or changing base URLs, origins, cookies, storage, or secrets.
+
+Original visual assets are under root `images/`; frontend source copies are under `frontend/images/`. Preserve official logos and supplied artwork. See [asset inventory](docs/IMAGE_ASSET_INVENTORY.md) and [frontend image notes](frontend/images/README.md) for current mappings.
+
+## Documentation index
+
+- [Backend setup, endpoints, data, and security](BACKEND.md)
+- [Product overview](docs/PRODUCT_OVERVIEW.md)
+- [Frontend architecture notes](docs/FRONTEND_ARCHITECTURE.md)
+- [Business rules](docs/BUSINESS_RULES.md)
+- [Open decisions](docs/DECISIONS_AND_OPEN_QUESTIONS.md)
+- [Configuration guide](docs/CONFIGURATION_GUIDE.md)
+- [Image inventory](docs/IMAGE_ASSET_INVENTORY.md)
+- [Deployment](DEPLOY.md)
+- [Contributing](CONTRIBUTING.md)
