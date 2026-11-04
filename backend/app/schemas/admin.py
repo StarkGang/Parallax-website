@@ -105,6 +105,7 @@ class EventUpsert(CamelModel):
     registration_closes_at: datetime | None = None
     requires_approval: bool = False
     icon_id: uuid.UUID | None = None
+    banner_url: str | None = None
     accent: str = Field(default="cyan", pattern="^(cyan|amber|orange|violet|lime|rose|ice)$")
     is_featured: bool = False
     sort_order: int = 0
@@ -130,6 +131,7 @@ class EventAdminView(CamelModel):
     starts_at: datetime
     ends_at: datetime
     venue_room: str | None = None
+    banner_url: str | None = None
     price_history: list[dict] = []
     coordinator_names: list[str] = []
     created_at: datetime

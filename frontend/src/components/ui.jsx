@@ -10,14 +10,20 @@ export function Eyebrow({ children, className = '' }) {
   );
 }
 
+const PARALLAX_DEPTH_BG = `${import.meta.env.BASE_URL}images/parallax-depth-bg.webp`;
+
 export function PageTitle({ kicker, title, desc, aside }) {
   return (
-    <section className="page-title">
-      <div className="page-title-inner">
-        <div>
-          <Eyebrow>{kicker}</Eyebrow>
+    <section className="page-title tf-parallax-section">
+      <div className="page-title-bg" aria-hidden="true">
+        <img src={PARALLAX_DEPTH_BG} alt="" className="page-title-bg-img" />
+        <div className="page-title-vignette" />
+      </div>
+      <div className="page-title-inner tf-parallax-fg">
+        <div className="page-title-text">
+          {kicker ? <Eyebrow>{kicker}</Eyebrow> : null}
           <h1>{title}</h1>
-          {desc ? <p>{desc}</p> : null}
+          {desc ? <p className="page-title-desc">{desc}</p> : null}
         </div>
         {aside ? <div className="page-title-aside">{aside}</div> : null}
       </div>

@@ -123,6 +123,7 @@ class EventCategory(Base, UUIDPrimaryKey, Timestamps):
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     icon_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("icons.id", ondelete="SET NULL"))
+    banner_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     accent: Mapped[str] = mapped_column(String(24), default="cyan", nullable=False)
 
     __table_args__ = (UniqueConstraint("edition_id", "slug", name="uq_category_slug"),)
@@ -163,6 +164,7 @@ class Event(Base, UUIDPrimaryKey, Timestamps):
     registration_closes_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     icon_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("icons.id", ondelete="SET NULL"))
+    banner_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     accent: Mapped[str] = mapped_column(String(24), default="cyan", nullable=False)
     is_featured: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)

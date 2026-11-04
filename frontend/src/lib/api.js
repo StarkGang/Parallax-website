@@ -232,6 +232,8 @@ export const adminApi = {
   icons: (editionId) => api(`${adminBase(editionId)}/icons`),
   uploadIcon: (editionId, form) =>
     api(`${adminBase(editionId)}/icons`, { method: 'POST', form }),
+  uploadBanner: (editionId, form) =>
+    api(`${adminBase(editionId)}/banner-upload`, { method: 'POST', form }),
   archiveIcon: (editionId, iconId) =>
     api(`${adminBase(editionId)}/icons/${iconId}`, { method: 'DELETE' }),
   users: (editionId, params = {}) => api(`${adminBase(editionId)}/users${query(params)}`),

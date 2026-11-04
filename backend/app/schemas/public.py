@@ -68,6 +68,7 @@ class EventListItem(CamelModel):
     ends_at: datetime
     venue_room: str | None = None
     icon_id: uuid.UUID | None = None
+    banner_url: str | None = None
     accent: str | None = None
     base_value_paise: int
     included_eligible: bool

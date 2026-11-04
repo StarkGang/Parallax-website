@@ -109,7 +109,7 @@ export function PortalLayout() {
       <PageTitle
         kicker="Attendee Portal"
         title="Your Convention Passes & Bookings"
-        desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition.name}.`}
+        desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition?.name || 'Parallax 2026'}.`}
         aside={
           <div className="title-badges">
             {isStaff ? (

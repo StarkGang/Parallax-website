@@ -432,6 +432,7 @@ function formFromEvent(item) {
       addonChargeBasis: 'per_participant',
       teamFeeBasis: 'per_participant',
       iconId: null,
+      bannerUrl: '',
     };
   }
   return {
@@ -463,6 +464,7 @@ function formFromEvent(item) {
     addonChargeBasis: item.addonChargeBasis || 'per_participant',
     teamFeeBasis: item.teamFeeBasis || 'per_participant',
     iconId: item.iconId || null,
+    bannerUrl: item.bannerUrl || '',
   };
 }
 
@@ -513,6 +515,32 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
     }
   };
 
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+
+  const handleBannerUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingBanner(true);
+    setMessage(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await adminApi.uploadBanner(editionId, fd);
+      const url = res.data?.url || res.url;
+      if (url) {
+        set('bannerUrl', url);
+        setMessage({ tone: 'success', text: `Uploaded banner to Supabase storage: ${file.name}` });
+      } else {
+        throw new Error('No storage URL returned');
+      }
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message || 'Failed to upload banner to storage.' });
+    } finally {
+      setUploadingBanner(false);
+      e.target.value = '';
+    }
+  };
+
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
   const submit = async (event) => {
@@ -545,6 +573,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
         registrationClosesAt: fromLocalInput(form.registrationClosesAt) || fromLocalInput(form.startsAt),
         requiresApproval: form.requiresApproval,
         iconId: form.iconId || null,
+        bannerUrl: form.bannerUrl?.trim() || null,
         accent: form.accent,
         isFeatured: form.isFeatured,
         sortOrder: Number(form.sortOrder) || 0,
@@ -584,10 +613,47 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           <select value={form.categoryId} onChange={(event) => set('categoryId', event.target.value)} required>
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
-                {category.name}
+                {category?.name || 'Category'}
               </option>
             ))}
           </select>
+        </Field>
+        <Field label="Event Banner (Supabase Storage or Custom URL)" hint="Upload image or paste image link (16:9 recommended)">
+          <div className="banner-input-wrap">
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <input
+                type="url"
+                placeholder="https://... or click Upload Banner"
+                value={form.bannerUrl || ''}
+                onChange={(e) => set('bannerUrl', e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <label className="btn-upload-file" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '0 14px', height: '40px', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '6px', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <Upload size={14} />
+                <span>{uploadingBanner ? 'Uploading...' : 'Upload Banner'}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/avif"
+                  onChange={handleBannerUpload}
+                  disabled={uploadingBanner}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+            {form.bannerUrl ? (
+              <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', maxHeight: '120px' }}>
+                <img src={form.bannerUrl} alt="Banner preview" style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }} onError={(e) => { e.target.style.display = 'none'; }} />
+                <button
+                  type="button"
+                  className="btn-clear-icon"
+                  style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(0,0,0,0.75)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                  onClick={() => set('bannerUrl', '')}
+                >
+                  Remove banner
+                </button>
+              </div>
+            ) : null}
+          </div>
         </Field>
         <Field label="Format">
           <select value={form.format} onChange={(event) => set('format', event.target.value)}>
@@ -874,7 +940,7 @@ function CategoryManager({ editionId, categories, onChanged }) {
       <div className="category-list">
         {categories.map((category) => (
           <div className="category-row" key={category.id}>
-            <span>{category.name}</span>
+            <span>{category?.name || 'Untitled'}</span>
             <code>{category.slug}</code>
             <button
               className="table-action"
@@ -989,8 +1055,19 @@ export function AdminEvents() {
         {rows.map((row) => (
           <tr key={row.id}>
             <td>
-              <b>{row.title}</b>
-              <div className="table-sub">{row.slug}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {row.bannerUrl ? (
+                  <img
+                    src={row.bannerUrl}
+                    alt=""
+                    style={{ width: '44px', height: '28px', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}
+                  />
+                ) : null}
+                <div>
+                  <b>{row.title}</b>
+                  <div className="table-sub">{row.slug}</div>
+                </div>
+              </div>
             </td>
             <td>{row.categoryName}</td>
             <td>{row.format === 'team' ? `Team ${row.teamMinSize}-${row.teamMaxSize}` : 'Individual'}</td>

@@ -313,7 +313,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
             edition_id=edition.id,
             version=1,
             is_current=True,
-            pass_price_paise=35000,
+            pass_price_paise=50000,
             included_event_count=3,
             lunch_included_days=["day1", "day2"],
             included_selection_mode="up_to",
@@ -439,7 +439,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
 
     existing_owner = (
         await db.execute(select(User).where(User.email_normalized == admin_email))
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if existing_owner is None:
         admin_user = User(
@@ -463,7 +463,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
                 EditionMembership.edition_id == edition.id,
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if existing_mem is None:
         db.add(

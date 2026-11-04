@@ -1305,7 +1305,7 @@ h3 {
   height: 6px;
   border-radius: 50%;
   background: var(--cyan);
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4);
 }
 
 .ticket-grid {
@@ -2988,7 +2988,7 @@ h3 {
   border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 24px;
   padding: 28px 24px 20px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(56, 189, 248, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px rgba(0, 0, 0, 0.7);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -3580,20 +3580,18 @@ h3 {
 .theme-launcher-trigger {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: rgba(12, 16, 26, 0.88);
-  border: 1px solid var(--line-strong);
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(10, 14, 24, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   color: #f8fafc;
-  font: 600 12px var(--sans);
   cursor: pointer;
-  box-shadow:
-    0 16px 36px -10px rgba(0, 0, 0, 0.8),
-    ;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  transition: all 0.25s var(--ease);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .theme-launcher-trigger:hover {
@@ -3605,7 +3603,7 @@ h3 {
 }
 
 .theme-trigger-label {
-  letter-spacing: 0.02em;
+  display: none;
 }
 
 .theme-trigger-indicator {

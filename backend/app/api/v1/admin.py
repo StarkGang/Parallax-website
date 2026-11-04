@@ -10,6 +10,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, require_permission
+from app.integrations.storage import get_storage
+from app.core.errors import AppError
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import permissions_for
 from app.db.session import get_db
@@ -375,6 +377,28 @@ async def icons(
 ) -> dict:
     icons_list = await icon_service.listed(db, edition_id)
     return {"data": icons_list}
+
+
+@router.post("/banner-upload")
+async def upload_banner(
+    edition_id: uuid.UUID,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(require_permission("events.write")),
+) -> dict:
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise AppError("Banner image must be 10 MB or smaller.", code="FILE_TOO_LARGE", status_code=413)
+
+    ext = (file.filename or "").split(".")[-1].lower() if "." in (file.filename or "") else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp", "avif"):
+        ext = "jpg"
+    content_type = file.content_type or f"image/{ext}"
+
+    key = f"banners/{edition_id}/{uuid.uuid4().hex}.{ext}"
+    storage = get_storage()
+    clean_key = await storage.put(key, data, content_type)
+    url = storage.public_url(clean_key)
+    return {"data": {"url": url, "key": clean_key}}
 
 
 @router.post("/icons")

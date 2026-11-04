@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Palette, Check, Sparkles, X } from 'lucide-react';
+import { Palette, Check, X } from 'lucide-react';
 
 export const THEME_ACCENTS = [
   { id: 'cyan', name: 'Cyber Cyan', hex: '#38bdf8', secondary: '#818cf8', desc: 'Default Parallax' },
@@ -65,7 +65,7 @@ export function ThemeCustomizer() {
         <div className="theme-customizer-popover rise" role="dialog" aria-label="Customize theme accent">
           <div className="theme-popover-head">
             <div className="theme-popover-title">
-              <Sparkles size={14} className="accent-icon" />
+              <Palette size={14} className="accent-icon" />
               <span>Theme Customizer</span>
             </div>
             <button

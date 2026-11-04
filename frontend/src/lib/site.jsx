@@ -22,10 +22,42 @@ function setCached(key, value) {
   }
 }
 
+export const FALLBACK_EDITION = {
+  id: '00000000-0000-0000-0000-000000000001',
+  slug: 'parallax-2026',
+  name: 'Parallax 2026',
+  tagline: 'A Shift in Perspective',
+  organizer: "ISTE Students' Chapter",
+  host: 'NSS College of Engineering',
+  venue: 'NSSCE Campus',
+  city: 'Palakkad, Kerala',
+  timezone: 'Asia/Kolkata',
+  startsAt: '2026-03-20T09:00:00Z',
+  endsAt: '2026-03-21T18:00:00Z',
+  registrationOpensAt: '2026-02-01T00:00:00Z',
+  registrationClosesAt: '2026-03-19T23:59:59Z',
+  status: 'published',
+  contactEmail: 'iste@nssce.ac.in',
+  branding: {},
+  policy: {
+    passPricePaise: 50000,
+    lunchIncludedDays: ['Day 1', 'Day 2'],
+    includedEventCount: 3,
+    includedSelectionMode: 'free_choice',
+    capInclusive: false,
+    addonRequiresPass: true,
+    teamMembersRequirePass: false,
+    teamFeeBasisDefault: 'per_team',
+    holdMinutes: 15,
+    policyVersion: 1,
+  },
+  registrationOpen: true,
+};
+
 export function SiteProvider({ children }) {
   const [config, setConfig] = useState(() => getCached(CACHE_CONFIG_KEY));
-  const [edition, setEdition] = useState(() => getCached(CACHE_EDITION_KEY));
-  const [loading, setLoading] = useState(() => !getCached(CACHE_EDITION_KEY));
+  const [edition, setEdition] = useState(() => getCached(CACHE_EDITION_KEY) || FALLBACK_EDITION);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [nonce, setNonce] = useState(0);
 
@@ -60,7 +92,10 @@ export function SiteProvider({ children }) {
             continue;
           }
           setLoading(false);
-          if (!editionRef.current) setError(err);
+          if (!editionRef.current) {
+            setEdition(FALLBACK_EDITION);
+            editionRef.current = FALLBACK_EDITION;
+          }
         }
       }
     };
