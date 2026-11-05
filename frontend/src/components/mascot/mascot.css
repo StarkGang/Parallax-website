@@ -1,0 +1,389 @@
+/* ------------------------------------------------------------------ layer -- */
+
+.mascot-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  pointer-events: none;
+}
+
+.mascot-layer.is-off {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.mascot-anchor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  pointer-events: none;
+  transition: none;
+}
+
+.mascot-anchor.is-ready {
+  transition-property: transform;
+  /* Near-linear through the middle keeps the walk at a steady pace; only the
+     first and last frames ease, which is where the steps start and stop. */
+  transition-timing-function: cubic-bezier(0.33, 0.04, 0.2, 1);
+}
+
+.mascot-float {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  animation: mascot-float 6s ease-in-out infinite;
+}
+
+@keyframes mascot-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* --------------------------------------------------------------- renderer -- */
+
+.mascot-canvas {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform-origin: 50% 80%;
+  transition: opacity 0.5s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  filter: drop-shadow(0 0 22px rgba(56, 189, 248, 0.16));
+}
+
+.mascot-canvas.is-ready {
+  opacity: 1;
+}
+
+.mascot-float.is-hovered .mascot-canvas {
+  transform: scale(1.015);
+}
+
+.mascot-webgl {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+.mascot-ground {
+  position: absolute;
+  left: 21%;
+  right: 21%;
+  bottom: 2.2%;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(56, 189, 248, 0.38) 0%,
+    rgba(56, 189, 248, 0.12) 42%,
+    rgba(56, 189, 248, 0) 72%
+  );
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+.mascot-ground::after {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 7px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(56, 189, 248, 0.65),
+    transparent
+  );
+}
+
+/* ------------------------------------------------------------------- input -- */
+
+.mascot-hit {
+  position: absolute;
+  left: 34%;
+  width: 32%;
+  top: 3%;
+  height: 25%;
+  min-width: 54px;
+  min-height: 62px;
+  z-index: 4;
+  border-radius: 46% 46% 34% 34%;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.mascot-hide {
+  position: absolute;
+  top: 2%;
+  right: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(8, 12, 20, 0.72);
+  color: #cbd5e1;
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0.62;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.mascot-anchor:hover .mascot-hide,
+.mascot-hide:hover,
+.mascot-hide:focus-visible {
+  opacity: 1;
+  color: #f8fafc;
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+.mascot-hide:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+
+/* ------------------------------------------------------------------ speech -- */
+
+.mascot-bubble {
+  --bx: -50%;
+  --by: 8px;
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  width: max-content;
+  max-width: min(268px, calc(100vw - 40px));
+  padding: 10px 13px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background: linear-gradient(160deg, rgba(10, 16, 27, 0.95), rgba(8, 12, 20, 0.92));
+  box-shadow:
+    0 18px 40px -16px rgba(0, 0, 0, 0.9),
+    0 0 26px -8px rgba(56, 189, 248, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: #eaf6ff;
+  transform: translate(var(--bx), var(--by));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease,
+    visibility 0s linear 0.22s;
+}
+
+.mascot-bubble.align-left {
+  --bx: 0%;
+  left: 4%;
+}
+
+.mascot-bubble.align-right {
+  --bx: 0%;
+  left: auto;
+  right: 4%;
+}
+
+.mascot-bubble.is-below {
+  bottom: auto;
+  top: calc(100% + 6px);
+  --by: -8px;
+}
+
+.mascot-bubble.is-visible {
+  --by: 0px;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+
+.mascot-bubble::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #0a101b;
+  transform: rotate(45deg);
+}
+
+.mascot-bubble.is-above::after {
+  left: 50%;
+  bottom: -5px;
+  margin-left: -4px;
+  border-right: 1px solid rgba(56, 189, 248, 0.4);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.mascot-bubble.is-below::after {
+  left: 50%;
+  top: -5px;
+  margin-left: -4px;
+  border-left: 1px solid rgba(56, 189, 248, 0.4);
+  border-top: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.mascot-bubble.align-left::after {
+  left: 30px;
+  margin-left: 0;
+}
+
+.mascot-bubble.align-right::after {
+  left: auto;
+  right: 30px;
+  margin-left: 0;
+}
+
+.mascot-bubble-kicker {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  opacity: 0.85;
+}
+
+.mascot-bubble-text {
+  display: block;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: #eaf6ff;
+}
+
+/* -------------------------------------------------------------------- ring -- */
+
+.mascot-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 74;
+  border: 1px solid rgba(148, 214, 255, 0.42);
+  border-radius: 14px;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(3, 7, 14, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    0 22px 54px -34px rgba(14, 165, 233, 0.45);
+  transition: opacity 0.3s ease;
+}
+
+/* ------------------------------------------------------------- show control -- */
+
+.mascot-show {
+  position: fixed;
+  left: 22px;
+  bottom: 22px;
+  z-index: 9998;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(10, 15, 25, 0.86);
+  color: #dff6ff;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow:
+    0 12px 28px -18px rgba(0, 0, 0, 0.9),
+    0 0 20px -8px rgba(56, 189, 248, 0.4);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.mascot-show:hover {
+  border-color: var(--cyan);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.mascot-show:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+
+/* ------------------------------------------------------------------ mobile -- */
+
+@media (max-width: 760px) {
+  .mascot-bubble {
+    max-width: min(210px, calc(100vw - 36px));
+    padding: 9px 11px 10px;
+    border-radius: 12px;
+  }
+
+  .mascot-bubble-text {
+    font-size: 12px;
+  }
+
+  .mascot-hide {
+    opacity: 0.78;
+  }
+
+  .mascot-show {
+    left: 14px;
+    bottom: 14px;
+    padding: 8px 11px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 420px) {
+  .mascot-bubble {
+    max-width: min(196px, calc(100vw - 32px));
+  }
+}
+
+/* --------------------------------------------------------- reduced motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-float {
+    animation: none;
+  }
+
+  .mascot-anchor,
+  .mascot-anchor.is-ready {
+    transition: none !important;
+  }
+
+  .mascot-canvas {
+    transition: none;
+    transform: none !important;
+  }
+
+  .mascot-bubble {
+    transition: opacity 0.15s linear, visibility 0s;
+    transform: none !important;
+  }
+
+  .mascot-bubble.is-visible {
+    transition: opacity 0.15s linear;
+  }
+
+  .mascot-show:hover {
+    transform: none;
+  }
+}

@@ -7,6 +7,7 @@ import { ThemeCustomizer } from './lib/theme.jsx';
 import { AppErrorBoundary, Button, ErrorBox, Loading } from './components/ui.jsx';
 import { initSmoothScroll, gsap } from './lib/motion.js';
 import { SamaritanBootLoader } from './components/SamaritanBootLoader.jsx';
+import MascotProvider from './components/mascot/MascotProvider.jsx';
 import {
   About,
   ContactPage,
@@ -281,6 +282,7 @@ export default function App() {
 
       {!chromeHidden ? <Footer edition={site.edition} /> : null}
       <ThemeCustomizer />
+      <MascotProvider />
     </>
   );
 }

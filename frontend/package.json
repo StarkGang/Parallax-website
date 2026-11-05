@@ -19,9 +19,11 @@
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
+    "three": "^0.187.0",
     "vite": "latest"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.5.1",
     "prettier": "^3.9.10"
   }
 }
