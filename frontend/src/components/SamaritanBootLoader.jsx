@@ -220,7 +220,7 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
             </div>
 
             <div className="samaritan-command-sub">
-              WHAT ARE YOUR COMMANDS ?
+              DESIGNED BY FRINGE LABS 
             </div>
 
             <div className="samaritan-command-kicker">

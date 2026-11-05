@@ -1,0 +1,117 @@
+/* ==========================================================================
+   HUD SHELL — 12-slice scalable container
+   Geometry comes from (design reference): top row 565, bottom 741,
+   corners 191 (top) / 262 (bottom), centre crest 771 / 629, side rails 200.
+   Everything scales with --s, which HudFrame.jsx derives from the box width.
+   ========================================================================== */
+
+.hud {
+  --s: 0.4;
+  position: relative;
+  isolation: isolate;
+  display: block;
+  min-height: calc(1306px * var(--s));
+  /* neutralise any legacy card chrome on the host element */
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  overflow: visible;
+}
+
+/* host selectors in style.css carry !important chrome — out-specify them */
+.hud.hud.hud {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.hud-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  grid-template-rows:
+    calc(565px * var(--s))
+    minmax(0, 1fr)
+    calc(741px * var(--s));
+  pointer-events: none;
+}
+
+.hud-row {
+  display: grid;
+  min-height: 0;
+}
+
+.hud-row > span {
+  display: block;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.hud-top {
+  grid-template-columns:
+    calc(191px * var(--s))
+    minmax(0, 1fr)
+    calc(771px * var(--s))
+    minmax(0, 1fr)
+    calc(191px * var(--s));
+}
+
+.hud-mid {
+  grid-template-columns:
+    calc(200px * var(--s))
+    minmax(0, 1fr)
+    calc(200px * var(--s));
+}
+
+.hud-bot {
+  grid-template-columns:
+    calc(262px * var(--s))
+    minmax(0, 1fr)
+    calc(629px * var(--s))
+    minmax(0, 1fr)
+    calc(262px * var(--s));
+}
+
+.hud-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding:
+    calc(150px * var(--s))
+    calc(180px * var(--s))
+    calc(230px * var(--s));
+  min-height: inherit;
+}
+
+/* schedule day cards are denser: keep the chrome but give rows more room */
+.hud.apple-schedule-card .hud-body {
+  padding:
+    calc(118px * var(--s))
+    calc(118px * var(--s))
+    calc(186px * var(--s));
+}
+
+/* ---- slices ----------------------------------------------------------- */
+
+.p-tl { background-image: url("../assets/hud/tl.png"); }
+.p-ts1 { background-image: url("../assets/hud/ts1.png"); }
+.p-tc { background-image: url("../assets/hud/tc.png"); }
+.p-ts2 { background-image: url("../assets/hud/ts2.png"); }
+.p-tr { background-image: url("../assets/hud/tr.png"); }
+.p-ml { background-image: url("../assets/hud/ml.png"); }
+.p-mr { background-image: url("../assets/hud/mr.png"); }
+.p-bl { background-image: url("../assets/hud/bl.png"); }
+.p-bs1 { background-image: url("../assets/hud/bs1.png"); }
+.p-bc { background-image: url("../assets/hud/bc.png"); }
+.p-bs2 { background-image: url("../assets/hud/bs2.png"); }
+.p-br { background-image: url("../assets/hud/br.png"); }

@@ -22,7 +22,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
-  Ticket,
   Users,
   Zap,
 } from "lucide-react";
@@ -54,7 +53,11 @@ import {
   useDebounced,
 } from "../components/ui.jsx";
 import HolographicTicket from "../components/HolographicTicket.jsx";
+import HudFrame from "../components/HudFrame.jsx";
+import ScheduleBoard from "./ScheduleBoard.jsx";
 import "./EventCard.css";
+import "./HomePreview.css";
+import "./TeamFrame.css";
 import HeroOdyssey from "../components/HeroOdyssey.jsx";
 
 const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
@@ -69,6 +72,14 @@ const PARALLAX_BG_PEDESTAL = `${import.meta.env.BASE_URL}images/parallax-bg-pede
 const PARALLAX_DEPTH_BG = `${import.meta.env.BASE_URL}images/parallax-depth-bg.webp`;
 const PARALLAX_VECTOR = `${import.meta.env.BASE_URL}images/parallax-vector.svg`;
 const PARALLAX_LOGO_ASSET = `${import.meta.env.BASE_URL}images/parallax-logo.png`;
+
+// Techfest-style frame shells used by the homepage preview cards and the
+// framed event catalogue. Both PNGs are transparent cut-outs.
+const MAIN_FRAME = `${import.meta.env.BASE_URL}images/main_frame.png`;
+const EVENT_FRAME = `${import.meta.env.BASE_URL}images/event_frame.png`;
+const SCHEDULE_ART = `${import.meta.env.BASE_URL}images/schedule_img.webp`;
+const EVENTS_ART = `${import.meta.env.BASE_URL}images/event.webp`;
+const ABOUT_ART = `${import.meta.env.BASE_URL}images/about.webp`;
 
 function CategoryIcon({ category, size = 30 }) {
   const cat = (category || "").toLowerCase();
@@ -136,83 +147,211 @@ function getEventAccent(event) {
   return "cyan";
 }
 
+const IST_ZONE = "Asia/Kolkata";
+
+// Convention days are grouped in the edition's timezone so an event that
+// starts after midnight UTC still belongs to its local convention day.
+const dayKeyOf = (iso) => {
+  if (!iso) return "tba";
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone: IST_ZONE,
+    }).format(new Date(iso));
+  } catch {
+    return "tba";
+  }
+};
+
+const dayLabelOf = (iso) => {
+  if (!iso) return "Date to be announced";
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "2-digit",
+      month: "long",
+      timeZone: IST_ZONE,
+    })
+      .format(new Date(iso))
+      .toUpperCase();
+  } catch {
+    return "Date to be announced";
+  }
+};
+
+/** Groups a chronological event list into convention-day runs. */
+function groupEventsByDay(events) {
+  const groups = [];
+  events.forEach((event) => {
+    const key = dayKeyOf(event.startsAt);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) {
+      last.events.push(event);
+      return;
+    }
+    groups.push({ key, label: dayLabelOf(event.startsAt), events: [event] });
+  });
+  return groups;
+}
+
+// Poster backdrops rotate through the supplied corridors so a catalogue page
+// does not repeat one image twelve times. Event banners always win.
+function posterBackdrop(event) {
+  const cat = `${event.categorySlug || ""} ${event.categoryName || ""}`.toLowerCase();
+  if (cat.includes("comput") || cat.includes("code")) return PARALLAX_BG_CORE;
+  if (cat.includes("electr")) return PARALLAX_BG_VAULT;
+  if (cat.includes("robot") || cat.includes("engin")) return PARALLAX_BG_PEDESTAL;
+  if (cat.includes("design")) return PARALLAX_BG_VAULT;
+  return PARALLAX_DEPTH_BG;
+}
+
 export function EventCard({ event, index = 0 }) {
   const isTeam = event.format === "team";
+  const accent = getEventAccent(event);
   const formatLabel = isTeam
-    ? `Team (${event.teamMinSize || 2}–${event.teamMaxSize || 4})`
+    ? `Team ${event.teamMinSize || 2}–${event.teamMaxSize || 4}`
     : "Individual";
+  const title = event.title || "Untitled event";
+  const detailPath = `/events/${event.slug}`;
+  const feeLabel =
+    event.addonPricePaise > 0
+      ? `Add-on ${money(event.addonPricePaise)}`
+      : "Included with pass";
 
   return (
-    <div
-      className="xcard-slot rise"
-      style={{ animationDelay: `${index * 35}ms` }}
+    <article
+      className={`exc${event.registrationOpen ? "" : " is-closed"}`}
+      data-accent={accent}
+      data-reveal=""
     >
-      <Link to={`/events/${event.slug}`} className="xcard">
-        <div className="xcard-media">
-          {event.bannerUrl ? (
+      <div className="exc-poster">
+        {event.bannerUrl ? (
+          <img
+            src={event.bannerUrl}
+            alt=""
+            className="exc-poster-img"
+            loading="lazy"
+            decoding="async"
+            width={480}
+            height={320}
+          />
+        ) : (
+          <div className="exc-poster-fallback">
             <img
-              src={event.bannerUrl}
-              alt={event.title}
-              className="xcard-img"
+              src={posterBackdrop(event)}
+              alt=""
+              className="exc-poster-bg"
               loading="lazy"
-              width={480}
-              height={176}
+              decoding="async"
             />
-          ) : (
-            <div className="xcard-fallback">
-              <img src={PARALLAX_BG_CORE} alt="" className="xcard-fallback-bg" />
+            <div className="exc-poster-tint" />
+            <div className="exc-poster-glyph">
               <EventIcon
                 iconId={event.iconId}
                 category={event.categorySlug || event.categoryName}
-                size={36}
+                size={48}
               />
             </div>
-          )}
-        </div>
-
-        <div className="xcard-body">
-          <div className="xcard-status-row">
-            <span className="xcard-updated">
-              {event.dateLabel || (event.startsAt ? date(event.startsAt) : "TBA")}
-            </span>
-            <span className="xcard-sep">•</span>
-            <span
-              className={`xcard-status ${event.registrationOpen ? "is-open" : "is-closed"}`}
-            >
-              <span className="xcard-status-dot" />
-              {event.registrationOpen ? "Open" : "Closed"}
-            </span>
           </div>
+        )}
+      </div>
 
-          <h3 className="xcard-title">{event.title}</h3>
+      <img
+        className="exc-frame"
+        src={EVENT_FRAME}
+        alt=""
+        aria-hidden="true"
+        draggable="false"
+        decoding="async"
+      />
 
-          <div className="xcard-reveal" aria-hidden="false">
-            <div className="xcard-reveal-inner">
-              <p className="xcard-desc">{event.summary}</p>
-              <div className="xcard-tags">
-                <span className="xcard-tag">
-                  <span className={`apple-cat-dot dot-${getEventAccent(event)}`} />
-                  {event.categoryName}
-                </span>
-                <span className="xcard-tag">{formatLabel}</span>
-              </div>
-            </div>
-          </div>
+      <div className="exc-panel">
+        <p className="exc-eyebrow">
+          <span className="exc-dot" aria-hidden="true" />
+          <span>{event.categoryName || "Event"}</span>
+          <span className="exc-sep" aria-hidden="true">
+            /
+          </span>
+          <span>{formatLabel}</span>
+        </p>
+        <h3
+          className={`exc-title${title.length > 20 ? " is-long" : ""}`}
+        >
+          {title}
+        </h3>
+      </div>
 
-          <div className="xcard-footer">
-            <span className="xcard-venue">
-              <MapPin size={12} strokeWidth={1.8} />
-              {event.venueRoom || "Main Stage"}
-            </span>
-            <span className="xcard-price">
-              {event.addonPricePaise > 0
-                ? `Add-on ${money(event.addonPricePaise)}`
-                : "Included with pass"}
-            </span>
-          </div>
-        </div>
-      </Link>
-    </div>
+      <div className="exc-actions">
+        <Link
+          className="exc-action"
+          to={detailPath}
+          aria-label={`Explore ${title}`}
+        >
+          <span>Explore</span>
+          <ArrowUpRight size={11} strokeWidth={2.2} aria-hidden="true" />
+        </Link>
+        {event.registrationOpen ? (
+          <Link
+            className="exc-action is-primary"
+            to="/portal/select-events"
+            aria-label={`Register for ${title}`}
+          >
+            <span>Register</span>
+            <ArrowRight size={11} strokeWidth={2.4} aria-hidden="true" />
+          </Link>
+        ) : (
+          <span className="exc-action is-disabled" aria-disabled="true">
+            <span>Closed</span>
+          </span>
+        )}
+      </div>
+
+      <p className="exc-plaque">
+        <b>{feeLabel}</b>
+        <span aria-hidden="true">·</span>
+        {event.registrationOpen ? (
+          <span className="exc-open">Open</span>
+        ) : (
+          <span className="exc-closed">Registration closed</span>
+        )}
+      </p>
+    </article>
+  );
+}
+
+function PreviewCard({ kicker, title, copy, meta, cta, to, image, eager = false }) {
+  return (
+    <Link className="px-card" to={to} data-reveal="">
+      <div className="px-card-media">
+        <img
+          src={image}
+          alt=""
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
+        />
+      </div>
+      <div className="px-card-scrim" aria-hidden="true" />
+      <img
+        className="px-card-frame"
+        src={MAIN_FRAME}
+        alt=""
+        aria-hidden="true"
+        draggable="false"
+        decoding="async"
+      />
+      <div className="px-card-body">
+        <span className="px-card-kicker">{kicker}</span>
+        <h3 className="px-card-title">{title}</h3>
+        <p className="px-card-copy">{copy}</p>
+        {meta ? <span className="px-card-meta">{meta}</span> : null}
+        <span className="px-card-cta">
+          <span>{cta}</span>
+          <ArrowUpRight size={13} strokeWidth={2.2} aria-hidden="true" />
+        </span>
+      </div>
+    </Link>
   );
 }
 
@@ -463,23 +602,17 @@ export function Home() {
   const heroStackRef = useRef(null);
   const odysseyRef = useRef(null);
   const slug = edition?.slug;
-  const featured = useAsync(
-    () => publicApi.events(slug, { featured: true, pageSize: 6 }),
-    [slug],
-    { enabled: Boolean(slug) },
-  );
-  const fallbackEvents = useAsync(
-    () => publicApi.events(slug, { pageSize: 6 }),
-    [slug],
-    {
-      enabled: Boolean(
-        slug &&
-        featured.data !== null &&
-        Array.isArray(featured.data?.data) &&
-        featured.data.data.length === 0,
-      ),
-    },
-  );
+  // The homepage previews the convention rather than listing the whole
+  // catalogue: totals and the timeline come from the same public API.
+  const catalogue = useAsync(() => publicApi.events(slug, { pageSize: 1 }), [slug], {
+    enabled: Boolean(slug),
+  });
+  const categories = useAsync(() => publicApi.categories(slug), [slug], {
+    enabled: Boolean(slug),
+  });
+  const schedule = useAsync(() => publicApi.schedule(slug), [slug], {
+    enabled: Boolean(slug),
+  });
   const news = useAsync(
     () => publicApi.announcements(slug, { pageSize: 2 }),
     [slug],
@@ -489,11 +622,13 @@ export function Home() {
   );
 
   if (!edition) return null;
-  const events =
-    featured.data?.data && featured.data.data.length > 0
-      ? featured.data.data
-      : fallbackEvents.data?.data || [];
   const announcements = news.data?.data || [];
+  const eventTotal = catalogue.data?.meta?.total ?? null;
+  const categoryTotal = categories.data?.data?.length ?? null;
+  const scheduleDays = Array.isArray(schedule.data?.data) ? schedule.data.data : [];
+  const sessionTotal = scheduleDays.length
+    ? scheduleDays.reduce((sum, day) => sum + (day.items?.length || 0), 0)
+    : null;
   const days = Math.max(
     1,
     Math.round(
@@ -553,84 +688,62 @@ export function Home() {
           />
         </div>
       </div>
-
-
-      {/* The Programme & Featured Challenges Showcase with 2.5D Layer Parallax */}
+      {/* Three framed entry points into the convention. The full catalogue
+          lives on /events so the homepage stays a preview. */}
       <section
-        className="section lusion-programme-section tf-parallax-section"
-        id="programme"
+        className="px-preview"
+        id="discover"
+        aria-labelledby="px-preview-title"
       >
-        <style>{`
-          @media (max-width: 767px) {
-            #programme .lusion-section-head,
-            #programme .lusion-head-left,
-            #programme .lusion-section-title,
-            #programme .lusion-section-desc {
-              text-align: center;
-            }
-            #programme .lusion-head-actions {
-              justify-content: center;
-            }
-          }
-        `}</style>
-
-
-        {/* Layer 0: Continuous Cyber Corridor Environment */}
-        <div
-          className="tf-parallax-bg"
-          data-parallax-speed="0.22"
-          aria-hidden="true"
-        >
-          <img src={PARALLAX_DEPTH_BG} alt="" className="tf-bg-img" />
-          <div className="tf-vignette-overlay" />
-        </div>
-
-
-        {/* Layer 1: Interactive Foreground Content */}
-        <div className="tf-parallax-fg">
-          <div className="lusion-section-head">
-            <div className="lusion-head-left">
-              <h1 className="lusion-section-title">
-                Discover all programs
-              </h1>
-              <p className="lusion-section-desc">
-                A single convention pass for {days} days.
-              </p>
+        <div className="px-preview-inner">
+          <header className="px-preview-head">
+            <div>
+              <Eyebrow>Inside the convention</Eyebrow>
+              <h2 id="px-preview-title">
+                Three ways <em>to look closer.</em>
+              </h2>
             </div>
-            <div className="lusion-head-actions">
-              <Link to="/events" className="lusion-btn lusion-btn-primary">
-                <span>Explore All Challenges</span>
-                <span className="lusion-btn-icon">
-                  <ArrowRight size={15} strokeWidth={2.2} />
-                </span>
-              </Link>
-              <Link to="/pass" className="lusion-btn lusion-btn-ghost">
-                <span>All-Access Pass</span>
-                <span className="lusion-btn-icon">
-                  <ArrowUpRight size={15} strokeWidth={2.2} />
-                </span>
-              </Link>
-            </div>
-          </div>
+            <p>
+              The edition, the {days}-day programme and the competition
+              catalogue — one pass, one shift in perspective.
+            </p>
+          </header>
 
-          {(featured.loading && !events.length) ||
-          (fallbackEvents.loading && !events.length) ? (
-            <Loading label="Loading the programme" rows={2} />
-          ) : featured.error && fallbackEvents.error ? (
-            <ErrorBox error={featured.error} onRetry={featured.reload} />
-          ) : events.length ? (
-            <div className="lusion-event-grid">
-              {events.map((event, index) => (
-                <EventCard key={event.id} event={event} index={index} />
-              ))}
-              // midhun add a see all card with + thumbnail and data at the end
-            </div>
-          ) : (
-            <Empty
-              title="The programme is being published"
-              desc="Featured events will appear here."
+          <div className="px-grid">
+            <PreviewCard
+              kicker="01 / The Edition"
+              title="About Parallax"
+              copy={`${edition.organizer || "ISTE"} brings ${edition.name} to ${edition.host || "campus"}: two days of engineering argued in public.`}
+              meta={edition.city || null}
+              cta="Learn More"
+              to="/about"
+              image={ABOUT_ART}
             />
-          )}
+            <PreviewCard
+              kicker="02 / The Programme"
+              title="Schedule"
+              copy={`Every briefing, round and workshop across ${days} days — published live from the convention catalogue.`}
+              meta={`${dateRange(edition.startsAt, edition.endsAt)}${
+                sessionTotal ? ` · ${sessionTotal} sessions` : ""
+              }`}
+              cta="View Schedule"
+              to="/schedule"
+              image={SCHEDULE_ART}
+            />
+            <PreviewCard
+              kicker="03 / The Competitions"
+              title="More Events"
+              copy={`${
+                eventTotal ? `${eventTotal} competitions` : "The competition programme"
+              } across ${
+                categoryTotal ? `${categoryTotal} tracks` : "every track"
+              }: hackathons, hardware builds, design sprints and paper sessions.`}
+              meta={`${eventTotal ?? "—"} events · ${categoryTotal ?? "—"} tracks`}
+              cta="Explore Events"
+              to="/events"
+              image={EVENTS_ART}
+            />
+          </div>
         </div>
       </section>
 
@@ -769,7 +882,7 @@ export function About() {
         desc={`${edition?.name || "Parallax 2026"} is a ${edition?.organizer || "ISTE"} convention hosted at ${edition?.host || "NSSCE"}. The programme is published from a single live catalogue.`}
       />
       <section className="section prose-grid">
-        <article className="about-main-card">
+        <HudFrame as="article" className="about-main-card">
           <Eyebrow>The Idea</Eyebrow>
           <h2>Curiosity brings us together.</h2>
           <p>
@@ -802,8 +915,8 @@ export function About() {
               <b>{dateRange(edition?.startsAt, edition?.endsAt)}</b>
             </div>
           </div>
-        </article>
-        <article className="host-card">
+        </HudFrame>
+        <HudFrame as="article" className="host-card">
           <img src={NSSCE} alt={`${edition?.host || "NSSCE"} emblem`} />
           <Eyebrow>Host Institution</Eyebrow>
           <h3>{edition?.host || "NSS College of Engineering"}</h3>
@@ -813,7 +926,7 @@ export function About() {
             Convention pass: {money(policy?.passPricePaise)} per participant,
             including lunch on {policy?.lunchIncludedDays?.length || 0} days.
           </p>
-        </article>
+        </HudFrame>
       </section>
     </>
   );
@@ -837,7 +950,8 @@ export function EventsPage() {
         category,
         format,
         page,
-        pageSize: 9,
+        pageSize: 12,
+        sort: "date",
       }),
     [slug, debounced, category, format, page],
     { enabled: Boolean(slug) },
@@ -848,11 +962,12 @@ export function EventsPage() {
   }, [debounced, category, format]);
 
   const events = list.data?.data || [];
-  const meta = list.data?.meta || { total: 0, page: 1, pageSize: 9 };
+  const meta = list.data?.meta || { total: 0, page: 1, pageSize: 12 };
   const lastPage = Math.max(
     1,
-    Math.ceil((meta.total || 0) / (meta.pageSize || 9)),
+    Math.ceil((meta.total || 0) / (meta.pageSize || 12)),
   );
+  const dayGroups = groupEventsByDay(events);
 
   return (
     <>
@@ -867,7 +982,8 @@ export function EventsPage() {
         }
         desc="Search the live catalogue. Fees, formats, capacity and registration state come straight from the convention database."
       />
-      <section className="section directory">
+      <div className="exc-shell">
+      <section className="section directory exc-catalogue">
         <div className="filters">
           <label className="search">
             <Search size={18} strokeWidth={1.5} />
@@ -907,13 +1023,19 @@ export function EventsPage() {
           </label>
         </div>
         <div className="results-note">
-          {meta.total} {meta.total === 1 ? "event" : "events"}
-          <span>·</span>
-          {edition?.registrationOpen
-            ? "registration open"
-            : "registration closed"}
-          <span>·</span>
-          page {meta.page} of {lastPage}
+          <span className="results-summary">
+            {meta.total} {meta.total === 1 ? "event" : "events"}
+            <span>·</span>
+            {edition?.registrationOpen
+              ? "registration open"
+              : "registration closed"}
+            <span>·</span>
+            page {meta.page} of {lastPage}
+          </span>
+          <span className="results-sort">
+            <Clock3 size={12} strokeWidth={1.8} aria-hidden="true" />
+            Programme order
+          </span>
         </div>
         {list.loading ? (
           <Loading label="Loading the catalogue" rows={2} />
@@ -921,11 +1043,31 @@ export function EventsPage() {
           <ErrorBox error={list.error} onRetry={list.reload} />
         ) : events.length ? (
           <>
-            <div className="event-grid lusion-event-grid">
-              {events.map((event, index) => (
-                <EventCard key={event.id} event={event} index={index} />
-              ))}
-            </div>
+            {dayGroups.map((group, groupIndex) => (
+              <section
+                className="exc-day"
+                key={group.key}
+                aria-labelledby={`exc-day-${group.key}`}
+              >
+                <header className="exc-day-head">
+                  <span className="exc-day-index">
+                    Day {String(groupIndex + 1).padStart(2, "0")}
+                  </span>
+                  <h2 className="exc-day-title" id={`exc-day-${group.key}`}>
+                    {group.label}
+                  </h2>
+                  <span className="exc-day-count">
+                    {group.events.length}{" "}
+                    {group.events.length === 1 ? "event" : "events"}
+                  </span>
+                </header>
+                <div className="exc-grid">
+                  {group.events.map((event, index) => (
+                    <EventCard key={event.id} event={event} index={index} />
+                  ))}
+                </div>
+              </section>
+            ))}
             {lastPage > 1 ? (
               <div className="pager">
                 <Button
@@ -973,6 +1115,7 @@ export function EventsPage() {
           institutional email or a reviewed document.
         </p>
       </section>
+      </div>
     </>
   );
 }
@@ -1219,7 +1362,7 @@ export function PassPage() {
 
       <section className="section apple-pass-page-section">
         <div className="apple-pass-page-grid">
-          <article className="apple-pass-pricing-box apple-pass-page-card">
+          <HudFrame as="article" className="apple-pass-pricing-box apple-pass-page-card">
             <span className="apple-price-caption">ALL-ACCESS PASS</span>
             <div className="apple-price-amount">
               <span className="apple-price-currency">₹</span>
@@ -1276,9 +1419,9 @@ export function PassPage() {
               {policy?.gstNote || "Fees in Indian rupees."} Paid securely in the
               portal.
             </small>
-          </article>
+          </HudFrame>
 
-          <article className="apple-pass-copy-card">
+          <HudFrame as="article" className="apple-pass-copy-card">
             <span className="apple-pass-kicker">PRICING ARCHITECTURE</span>
             <h2>
               Pass first.
@@ -1333,7 +1476,7 @@ export function PassPage() {
                 {policy?.holdMinutes || 15} minutes.
               </p>
             </div>
-          </article>
+          </HudFrame>
         </div>
       </section>
     </>
@@ -1396,102 +1539,7 @@ export function SchedulePage() {
             desc="Sessions will appear here once released."
           />
         ) : null}
-        <div className="apple-schedule-grid">
-          {days.map((day, index) => {
-            const count = day.items?.length || 0;
-            const firstTime = day.items?.[0] ? time(day.items[0].startsAt) : "";
-            const lastTime = day.items?.[count - 1]
-              ? time(day.items[count - 1].endsAt)
-              : "";
-            const d = new Date(day.date);
-            const wkd = isNaN(d.getTime())
-              ? `DAY 0${index + 1}`
-              : d
-                  .toLocaleDateString("en-US", { weekday: "short" })
-                  .toUpperCase();
-            const dateStr = isNaN(d.getTime())
-              ? day.label
-              : d.toLocaleDateString("en-US", {
-                  weekday: "long",
-                  month: "long",
-                  day: "numeric",
-                });
-
-            return (
-              <article
-                className="apple-schedule-card rise"
-                key={day.date}
-                style={{ animationDelay: `${index * 80}ms` }}
-              >
-                <div className="apple-schedule-head">
-                  <div className="apple-schedule-kicker-row">
-                    <span className="apple-schedule-kicker">
-                      {wkd} · DAY 0{index + 1}
-                    </span>
-                    <span className="apple-schedule-count">
-                      {count} {count === 1 ? "session" : "sessions"}
-                      {firstTime ? ` · ${firstTime} – ${lastTime}` : ""}
-                    </span>
-                  </div>
-                  <h2 className="apple-schedule-heading">{dateStr}</h2>
-                </div>
-
-                {count === 0 ? (
-                  <p className="apple-schedule-empty">
-                    Sessions to be announced.
-                  </p>
-                ) : (
-                  <ol className="apple-schedule-rows">
-                    {(day.items || []).map((item, i) => (
-                      <li key={item.id} className="apple-schedule-item">
-                        <Link
-                          to={`/events/${item.slug}`}
-                          className="apple-schedule-row-link"
-                        >
-                          <time
-                            className="apple-schedule-time"
-                            dateTime={item.startsAt}
-                          >
-                            <span
-                              className="apple-schedule-dot"
-                              aria-hidden="true"
-                            />
-                            <span>
-                              {formatTimeSlot(item.startsAt, item.endsAt)}
-                            </span>
-                          </time>
-                          <div className="apple-schedule-content">
-                            <b className="apple-schedule-title">{item.title}</b>
-                            <span className="apple-schedule-room">
-                              <MapPin
-                                size={11}
-                                strokeWidth={1.8}
-                                style={{ opacity: 0.6 }}
-                              />
-                              <span>{item.room || "Room TBA"}</span>
-                            </span>
-                          </div>
-                          <div className="apple-schedule-meta">
-                            {item.category ? (
-                              <span className="apple-schedule-tag">
-                                {item.category}
-                              </span>
-                            ) : null}
-                            <ArrowRight
-                              size={13}
-                              strokeWidth={1.8}
-                              className="apple-schedule-arrow"
-                            />
-                          </div>
-                        </Link>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </article>
-            );
-          })}
-        </div>
+        <ScheduleBoard days={days} />
       </section>
     </>
   );
@@ -1514,7 +1562,7 @@ export function VenuePage() {
         desc={`${edition?.venue || "Campus"}, hosted by ${edition?.host || "NSSCE"}.`}
       />
       <section className="section venue-grid">
-        <article className="venue-map-card">
+        <HudFrame as="article" className="venue-map-card">
           <div className="map-toolbar">
             <div className="map-status">
               <MapPin size={14} strokeWidth={1.8} />
@@ -1545,8 +1593,8 @@ export function VenuePage() {
             <MapPin size={16} strokeWidth={1.5} />
             <span>NSS Nagar, Akathethara, Palakkad, Kerala 678008</span>
           </div>
-        </article>
-        <article className="venue-copy">
+        </HudFrame>
+        <HudFrame as="article" className="venue-copy">
           <Eyebrow>Host Campus</Eyebrow>
           <h2>{edition?.host || "NSS College of Engineering"}</h2>
           <p>{edition?.city || "Palakkad, Kerala"}</p>
@@ -1588,7 +1636,7 @@ export function VenuePage() {
               Get directions
             </Button>
           </div>
-        </article>
+        </HudFrame>
       </section>
     </>
   );
@@ -1717,8 +1765,33 @@ const TEAM_GROUPS = [
     ],
   },
   {
+    title: 'Web-Dev Team',
+    description: 'The brains behind this dynamic and advanced full-stack web app.',
+    members: [
+      {
+        name: 'Midhun K M',
+        role: 'Frontend & Backend',
+        image: 'Midhunkm.jpg',
+        featured: true,
+        link: 'https://midhunkm.pages.dev/',
+      },
+      {
+        name: 'Arjun Liji',
+        role: 'Frontend',
+        image: 'frontend.jpg',
+        featured: true,
+      },
+      {
+        name: 'Kaladharan Lal',
+        role: 'System Design',
+        image: 'chairperson.jpg',
+        featured: true,
+      },
+    ],
+  },  {
     title: 'Core Organising Team',
-    description: 'The coordinators responsible for bringing every aspect of the convention together.',
+    description:
+      'The coordinators responsible for bringing every aspect of the convention together.',
     members: [
       {
         name: 'Athira Haridas K V',
@@ -1762,32 +1835,72 @@ const TEAM_GROUPS = [
       },
     ],
   },
-  {
-    title: 'Web-Dev Team',
-    description: 'The brains behind this dynamic and advanced full-stack web app.',
-    members: [
-      {
-        name: 'Mithun',
-        role: 'Backend',
-        image: 'backend.jpg',
-      },
-      {
-        name: 'Arjun',
-        role: 'Frontend',
-        image: 'frontend.jpg',
-      },
-      {
-        name: 'Kaladharan Lal',
-        role: 'System Design',
-        image: 'chairperson.jpg',
-      },
-    ],
-  },
+
 ];
 
 function TeamMemberCard({ member }) {
   const imageUrl =
     `${import.meta.env.BASE_URL}images/team/${member.image}`;
+
+  if (member.featured) {
+    const CardTag = member.link ? 'a' : 'article';
+    const cardProps = member.link
+      ? {
+          href: member.link,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          title: `${member.name} — personal site`,
+        }
+      : {};
+
+    return (
+      <CardTag
+        className={`team-member-card is-featured${member.link ? ' is-linked' : ''}`}
+        {...cardProps}
+      >
+        <div className="tm-frame">
+          <div
+            className="tm-frame-media"
+            data-initials={member.name
+              .split(' ')
+              .filter(Boolean)
+              .slice(0, 2)
+              .map((part) => part[0])
+              .join('')}
+          >
+            <img
+              src={imageUrl}
+              alt={member.name}
+              loading="lazy"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          </div>
+
+          <div className="tm-frame-scrim" />
+
+          <img
+            className="tm-frame-art"
+            src={MAIN_FRAME}
+            alt=""
+            aria-hidden="true"
+          />
+
+          <div className="tm-frame-body">
+            <span className="tm-frame-kicker">Web Team</span>
+            <h3>{member.name}</h3>
+            <span>{member.role}</span>
+            {member.link ? (
+              <span className="tm-frame-link">
+                Visit site <ArrowUpRight size={11} strokeWidth={2} />
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </CardTag>
+    );
+  }
 
   return (
     <article className="team-member-card">
@@ -1842,10 +1955,14 @@ export function TeamPage() {
               </div>
             </div>
 
-            <div className="team-grid">
+            <div
+              className={`team-grid${
+                group.title === 'Web-Dev Team' ? ' is-webdev' : ''
+              }`}
+            >
               {group.members.map((member) => (
                 <TeamMemberCard
-                  key={member.role}
+                  key={member.name}
                   member={member}
                 />
               ))}
@@ -2157,16 +2274,6 @@ export function Footer() {
             {label}
           </Link>
         ))}
-      </div>
-      <div className="footer-bottom">
-        <span>
-          © {new Date().getFullYear()} {edition?.name || "Parallax 2026"} ·{" "}
-          {edition?.organizer || "ISTE"}
-        </span>
-        <span>{dateRange(edition?.startsAt, edition?.endsAt)}</span>
-        <span className="social">
-          <Ticket size={16} strokeWidth={1.4} /> Live convention platform
-        </span>
       </div>
     </footer>
   );

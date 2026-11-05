@@ -141,12 +141,15 @@ async def events(
     format: str | None = Query(default=None, pattern="^(individual|team)$"),
     q: Annotated[str | None, Query(max_length=100)] = None,
     featured: bool | None = None,
+    sort: Annotated[str | None, Query(pattern="^(date|programme)$")] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, alias="pageSize")] = 24,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     response.headers.update(CACHE_EDGE)
-    cache_key = f"public:events:{slug}:{category}:{format}:{q}:{featured}:{page}:{page_size}"
+    cache_key = (
+        f"public:events:{slug}:{category}:{format}:{q}:{featured}:{sort}:{page}:{page_size}"
+    )
     cached_val = cache_get(cache_key)
     if cached_val is not None:
         return cached_val
@@ -158,6 +161,7 @@ async def events(
         format=format,
         q=q,
         featured=featured,
+        sort=sort,
         page=page,
         page_size=page_size,
     )

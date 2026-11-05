@@ -116,6 +116,7 @@ async def list_public_events(
     format: str | None = None,
     q: str | None = None,
     featured: bool | None = None,
+    sort: str | None = None,
     page: int = 1,
     page_size: int = 24,
 ) -> tuple[list[EventListItem], int]:
@@ -153,10 +154,17 @@ async def list_public_events(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
+    # "date" gives a programme-chronological catalogue; the default keeps the
+    # organiser-defined running order.
+    if sort == "date":
+        ordering = (Event.starts_at, Event.sort_order, Event.title)
+    else:
+        ordering = (Event.sort_order, Event.starts_at)
+
     events = list(
         (
             await db.execute(
-                stmt.order_by(Event.sort_order, Event.starts_at)
+                stmt.order_by(*ordering)
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
