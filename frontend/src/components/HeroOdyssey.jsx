@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ArrowRight } from "lucide-react";
-import { Link } from "react-router-dom";
+import { ArrowDown, ArrowRight } from "lucide-react";
 import "./HeroOdyssey.css";
 
 const VERTEX_SRC = `
@@ -188,9 +187,9 @@ function Lightning({
 }
 
 export default function HeroOdyssey({
-  title = "Hero Odyssey",
-  subtitle = "Lighting Up The Future",
-  description = "Explore a convention built for bold ideas, practical engineering, and new perspectives.",
+  ttl = "ISTE 25th State",
+  sub = "Student Convention",
+  desc = "Explore a convention built for bold ideas, practical engineering, and new perspectives.",
   beamSize = 1.7,
   beamOffset = 0.6,
 }) {
@@ -204,13 +203,13 @@ export default function HeroOdyssey({
             <ArrowRight size={16} aria-hidden="true" />
           </div> */}
           <h1 id="home-hero-title" className="ho-title ho-item" style={{ "--ho-i": 1 }}>
-            {title}
+            {ttl}
           </h1>
           <h2 className="ho-subtitle ho-item" style={{ "--ho-i": 2 }}>
-            {subtitle}
+            {sub}
           </h2>
           <p className="ho-desc ho-item" style={{ "--ho-i": 3 }}>
-            {description}
+            {desc}
           </p>
                     {/* Event facts */}
           <div
@@ -238,17 +237,22 @@ export default function HeroOdyssey({
             </span>
             <span className="ho-facts-separator" aria-hidden="true" style={{ display: "none" }}>  •  </span>
             <span className="tf-parallax-fg" style={{ background: "transparent", border: "none", boxShadow: "none", opacity: 0.5, display: "block", whiteSpace: "nowrap" }}>
-              20th & 21st March
+              8 & 9 January 2027
             </span>
             <span className="ho-facts-separator" aria-hidden="true" style={{ display: "none" }}>  •  </span>
             <span className="tf-parallax-fg" style={{ background: "transparent", border: "none", boxShadow: "none", opacity: 0.5, display: "block", whiteSpace: "nowrap" }}>
               NSS College Of Engineering, Palakkad
             </span>
           </div>
-          <Link to="/events" className="ho-cta ho-item" style={{ "--ho-i": 4 }}>
-            Discover the programme
-            <ArrowRight size={16} aria-hidden="true" />
-          </Link>
+          <button
+            type="button"
+            className="ho-cta ho-item"
+            style={{ "--ho-i": 4 }}
+            onClick={() => window.scrollTo({ top: 150, behavior: "smooth" })}
+          >
+            Dive in
+            <ArrowDown size={16} aria-hidden="true" />
+          </button>
         </div>
 
       </div>

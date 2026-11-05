@@ -17,6 +17,7 @@ import {
   Home,
   PassPage,
   SchedulePage,
+  TeamPage,
   VenuePage,
 } from './pages/Public.jsx';
 import {
@@ -55,6 +56,7 @@ const PUBLIC_NAV = [
   ['Venue', '/venue'],
   ['FAQ', '/faq'],
   ['Contact', '/contact'],
+  ['Meet the Team', '/team'],
 ];
 
 const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
@@ -227,6 +229,7 @@ export default function App() {
           <Route path="/venue" element={<VenuePage />} />
           <Route path="/faq" element={<FAQPage />} />
           <Route path="/contact" element={<ContactPage />} />
+          <Route path="/team" element={<TeamPage />} />
 
           <Route path="/login" element={<Login />} />
 
