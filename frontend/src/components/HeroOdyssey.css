@@ -1,0 +1,124 @@
+.ho-root {
+  position: relative;
+  width: 100%;
+  min-height: min(100vh, 60rem);
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+}
+
+.ho-root *,
+.ho-root *::before,
+.ho-root *::after {
+  box-sizing: border-box;
+}
+
+.ho-container {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  max-width: 80rem;
+  min-height: min(100vh, 60rem);
+  margin: 0 auto;
+  padding: 5rem 1rem;
+}
+
+.ho-features {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+}
+
+.ho-content {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 56rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.ho-item {
+  animation: ho-rise 0.5s ease-out backwards;
+  animation-delay: calc(0.2s + var(--ho-i, 0) * 0.3s);
+}
+
+@keyframes ho-rise {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ho-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ho-feature {
+  position: absolute;
+  z-index: 10;
+  transition: transform 0.3s;
+}
+
+.ho-feature:hover { transform: scale(1.1); }
+.ho-feature--react { left: 0; top: 10rem; }
+.ho-feature--tailwind { left: 25%; top: 6rem; }
+.ho-feature--motion { right: 25%; top: 6rem; }
+.ho-feature--shaders { right: 0; top: 10rem; }
+
+.ho-feature-row { display: flex; align-items: center; gap: 0.5rem; }
+.ho-dot-wrap { position: relative; }
+.ho-dot { width: 0.5rem; height: 0.5rem; background: #fff; border-radius: 9999px; }
+.ho-dot-glow { position: absolute; inset: -0.25rem; background: rgba(255,255,255,.2); border-radius: 9999px; filter: blur(4px); opacity: .7; }
+.ho-feature-text { position: relative; color: #fff; }
+.ho-feature-name { font-weight: 500; }
+.ho-feature-value { font-size: .875rem; line-height: 1.25rem; color: rgba(255,255,255,.7); }
+.ho-text-glow { position: absolute; inset: -.5rem; z-index: -1; background: rgba(255,255,255,.1); border-radius: .5rem; filter: blur(12px); opacity: .7; }
+
+.ho-pill,
+.ho-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  border: 0;
+  border-radius: 9999px;
+  color: inherit;
+  background: rgba(255,255,255,.08);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: background-color .2s, transform .2s;
+}
+
+.ho-pill { padding: .5rem 1rem; margin-bottom: 1.5rem; font-size: .875rem; }
+.ho-cta { padding: .75rem 2rem; margin-top: 2rem; text-decoration: none; }
+.ho-pill:hover, .ho-cta:hover { background: rgba(255,255,255,.18); transform: scale(1.05); }
+
+.ho-title { margin: 0 0 .5rem; font-size: 3rem; line-height: 1; font-weight: 300; }
+.ho-subtitle { margin: 0; padding-bottom: .75rem; font-size: 1.875rem; line-height: 2.25rem; font-weight: 300; background: linear-gradient(to right,#f3f4f6,#d1d5db); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ho-desc { max-width: 42rem; margin: 0 0 1rem; color: #9ca3af; }
+
+.ho-bg { position: absolute; inset: 0; z-index: 0; animation: ho-fade 1s backwards; }
+.ho-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.8); }
+.ho-glow { position: absolute; top: 55%; left: 50%; width: min(800px,120vw); height: min(800px,120vw); transform: translate(-50%,-50%); border-radius: 9999px; background: linear-gradient(to bottom,rgba(59,130,246,.2),rgba(147,51,234,.1)); filter: blur(64px); }
+.ho-beam { position: absolute; inset: 0; }
+.ho-canvas { display: block; width: 100%; height: 100%; }
+.ho-planet { position: absolute; z-index: 10; top: 55%; left: 50%; width: min(600px,95vw); height: min(600px,95vw); transform: translateX(-50%); border-radius: 9999px; background: radial-gradient(circle at 25% 90%,#1e386b 15%,#000000de 70%,#000000ed 100%); }
+
+@media (min-width: 640px) {
+  .ho-container { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .ho-feature--react { left: 2.5rem; }
+  .ho-feature--shaders { right: 2.5rem; }
+}
+
+@media (min-width: 768px) {
+  .ho-title { font-size: 4.5rem; }
+  .ho-subtitle { font-size: 3rem; line-height: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ho-item, .ho-bg { animation: none; }
+}

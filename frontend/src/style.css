@@ -34,6 +34,7 @@ body {
   background: var(--bg);
   color: #f1f5f9;
   overflow-x: hidden;
+  height: 100svh;
 }
 
 a {
@@ -2251,6 +2252,25 @@ html.lenis, html.lenis body {
   height: 420vh;
   background: #030712;
   margin-bottom: 0;
+}
+
+.home-hero-stack {
+  position: relative;
+}
+
+.home-odyssey-panel {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 5;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.home-odyssey-panel .ho-root {
+  pointer-events: auto;
 }
 
 .hero-sticky-stage {
