@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -27,7 +27,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { publicApi } from '../lib/api.js';
-import { useCardTilt, gsap, ScrollTrigger } from '../lib/motion.js';
+import { gsap, ScrollTrigger, useCardTilt } from '../lib/motion.js';
 
 import { useSite } from '../lib/site.jsx';
 import { date, dateRange, dayLabel, money, time, weekday } from '../lib/format.js';
@@ -53,11 +53,13 @@ import './EventCard.css';
 import './HomePreview.css';
 import './TeamFrame.css';
 import HeroOdyssey from '../components/HeroOdyssey.jsx';
+import PageScene from '../components/PageScene.jsx';
+import { MascotEasterEggBubble, useMascotEasterEgg } from '../components/MascotEasterEgg.jsx';
 
-const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
+const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
 const GLOBE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/modified assets/globe.svg`;
 const NSSCE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp`;
-const ISTE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/ISTE LOGO NO  BG PNG.png`;
+const ISTE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png`;
 
 // High-fidelity architectural parallax depth backplates & vector assets
 const PARALLAX_BG_VAULT = `${import.meta.env.BASE_URL}images/parallax-bg-vault.webp`;
@@ -65,7 +67,7 @@ const PARALLAX_BG_CORE = `${import.meta.env.BASE_URL}images/parallax-bg-core.web
 const PARALLAX_BG_PEDESTAL = `${import.meta.env.BASE_URL}images/parallax-bg-pedestal.webp`;
 const PARALLAX_DEPTH_BG = `${import.meta.env.BASE_URL}images/parallax-depth-bg.webp`;
 const PARALLAX_VECTOR = `${import.meta.env.BASE_URL}images/parallax-vector.svg`;
-const PARALLAX_LOGO_ASSET = `${import.meta.env.BASE_URL}images/parallax-logo.png`;
+const PARALLAX_LOGO_ASSET = `${import.meta.env.BASE_URL}images/parallax-logo.webp`;
 
 // Techfest-style frame shells used by the homepage preview cards and the
 // framed event catalogue. Both PNGs are transparent cut-outs.
@@ -74,6 +76,18 @@ const EVENT_FRAME = `${import.meta.env.BASE_URL}images/event_frame.png`;
 const SCHEDULE_ART = `${import.meta.env.BASE_URL}images/schedule_img.webp`;
 const EVENTS_ART = `${import.meta.env.BASE_URL}images/event.webp`;
 const ABOUT_ART = `${import.meta.env.BASE_URL}images/about.webp`;
+
+// Homepage scene: the animated rooftop backdrop and the character that stands
+// at the base of the three framed cards.
+const SCENE_BG = `${import.meta.env.BASE_URL}images/bg.gif`;
+const SCENE_MASCOT = `${import.meta.env.BASE_URL}images/mascot.gif`;
+
+// Inner page scenes: the events catalogue uses the arena with the event
+// character, the remaining pages share the valley backdrop and mascot.
+const ARENA_ART = `${import.meta.env.BASE_URL}images/arena.png`;
+const EVENT_SCENE_ART = `${import.meta.env.BASE_URL}images/event.png`;
+const BACKGROUND_ART = `${import.meta.env.BASE_URL}images/background.png`;
+const MASCOT_ART = `${import.meta.env.BASE_URL}images/mascot.png`;
 
 function CategoryIcon({ category, size = 30 }) {
   const cat = (category || '').toLowerCase();
@@ -196,6 +210,7 @@ function posterBackdrop(event) {
 }
 
 export function EventCard({ event, index = 0 }) {
+  const navigate = useNavigate();
   const isTeam = event.format === 'team';
   const accent = getEventAccent(event);
   const formatLabel = isTeam
@@ -207,11 +222,22 @@ export function EventCard({ event, index = 0 }) {
     event.addonPricePaise > 0 ? `Add-on ${money(event.addonPricePaise)}` : 'Included with pass';
   const mascotHover = `${title}: ${event.categoryName || 'competition'}, ${formatLabel.toLowerCase()}, ${feeLabel.toLowerCase()}.`;
 
+  // The whole card opens its detail page; the Explore and Register links keep
+  // their own targets. Modified clicks are left to the browser.
+  const handleCardClick = (clickEvent) => {
+    if (clickEvent.defaultPrevented) return;
+    if (clickEvent.button !== 0) return;
+    if (clickEvent.metaKey || clickEvent.ctrlKey || clickEvent.shiftKey || clickEvent.altKey) return;
+    if (clickEvent.target.closest('a, button')) return;
+    navigate(detailPath);
+  };
+
   return (
     <article
       className={`exc${event.registrationOpen ? '' : ' is-closed'}`}
       data-accent={accent}
       data-reveal=""
+      onClick={handleCardClick}
       data-mascot-target={`event-${event.slug}`}
       data-mascot-label={title}
       data-mascot-hover={mascotHover}
@@ -316,9 +342,44 @@ function PreviewCard({
   mascotTarget,
   mascotHover,
 }) {
+  const cardRef = useRef(null);
+
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return undefined;
+    let raf = null;
+
+    const onMove = (e) => {
+      const r = el.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width - 0.5;
+      const y = (e.clientY - r.top) / r.height - 0.5;
+      el.classList.add('is-tracking');
+      el.style.setProperty('--mx', `${(x + 0.5) * 100}%`);
+      el.style.setProperty('--my', `${(y + 0.5) * 100}%`);
+      el.style.setProperty('--tx', `${-y * 10}deg`);
+      el.style.setProperty('--ty', `${x * 10}deg`);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => el.classList.remove('is-tracking'));
+    };
+
+    const onLeave = () => {
+      el.classList.remove('is-tracking');
+      el.style.setProperty('--tx', '0deg');
+      el.style.setProperty('--ty', '0deg');
+    };
+
+    el.addEventListener('mousemove', onMove);
+    el.addEventListener('mouseleave', onLeave);
+    return () => {
+      el.removeEventListener('mousemove', onMove);
+      el.removeEventListener('mouseleave', onLeave);
+    };
+  }, []);
+
   return (
     <Link
       className="px-card"
+      ref={cardRef}
       to={to}
       data-reveal=""
       data-mascot-target={mascotTarget}
@@ -338,7 +399,7 @@ function PreviewCard({
         decoding="async"
       />
       <div className="px-card-body">
-        <span className="px-card-kicker">{kicker}</span>
+        {kicker ? <span className="px-card-kicker">{kicker}</span> : null}
         <h3 className="px-card-title">{title}</h3>
         <p className="px-card-copy">{copy}</p>
         {meta ? <span className="px-card-meta">{meta}</span> : null}
@@ -393,28 +454,59 @@ function HeroParallax({ edition, days }) {
     ctx.restore();
   };
 
-  // Preload image sequence for instantaneous 60fps scrub
+  // Preload image sequence progressively: eager first batch for instant 60fps scrub,
+  // then background idle batches to keep initial network waterfall pristine
   useEffect(() => {
     let active = true;
-    const loadedImages = [];
+    const loadedImages = new Array(TOTAL_HERO_FRAMES);
     const baseUrl = import.meta.env.BASE_URL;
-
     let loadedCount = 0;
-    for (let i = 1; i <= TOTAL_HERO_FRAMES; i++) {
+
+    const loadFrame = (index) => {
+      if (!active || loadedImages[index]) return;
       const img = new Image();
-      const num = String(i).padStart(3, '0');
+      const num = String(index + 1).padStart(3, '0');
       img.src = `${baseUrl}anim/sequence/frame_${num}.webp`;
       img.onload = () => {
+        if (!active) return;
         loadedCount++;
-        if (i === 1 && active) {
+        if (index === 0) {
           renderFrame(0);
         }
-        if (loadedCount >= Math.min(20, TOTAL_HERO_FRAMES) && active) {
+        if (loadedCount >= Math.min(20, TOTAL_HERO_FRAMES)) {
           setFramesLoaded(true);
         }
       };
-      loadedImages.push(img);
+      loadedImages[index] = img;
+    };
+
+    // Priority 1: First frame immediately
+    loadFrame(0);
+
+    // Priority 2: Next 24 frames for instant initial scroll responsiveness
+    for (let i = 1; i < Math.min(24, TOTAL_HERO_FRAMES); i++) {
+      loadFrame(i);
     }
+
+    // Priority 3: Remainder in idle batches of 12 to avoid network congestion
+    let nextBatchStart = 24;
+    const loadNextBatch = () => {
+      if (!active || nextBatchStart >= TOTAL_HERO_FRAMES) return;
+      const end = Math.min(nextBatchStart + 12, TOTAL_HERO_FRAMES);
+      for (let i = nextBatchStart; i < end; i++) {
+        loadFrame(i);
+      }
+      nextBatchStart = end;
+      if (nextBatchStart < TOTAL_HERO_FRAMES) {
+        if (typeof window.requestIdleCallback === 'function') {
+          window.requestIdleCallback(loadNextBatch, { timeout: 200 });
+        } else {
+          setTimeout(loadNextBatch, 80);
+        }
+      }
+    };
+
+    const idleTimer = setTimeout(loadNextBatch, 150);
     imagesRef.current = loadedImages;
 
     const onResize = () => {
@@ -424,6 +516,7 @@ function HeroParallax({ edition, days }) {
 
     return () => {
       active = false;
+      clearTimeout(idleTimer);
       window.removeEventListener('resize', onResize);
     };
   }, []);
@@ -577,13 +670,43 @@ function PassHighlightSection({ policy }) {
   const includedCount = policy?.includedEventCount || 3;
   const priceRupees = Math.round((policy?.passPricePaise || 35000) / 100);
   const valueCap = money(policy?.includedValueCapPaise || 45000);
+  const sceneRef = useRef(null);
+
+  // The pass sits inside a scene like the sections above it: artwork behind,
+  // the ticket in front, both scrubbing at different speeds.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return undefined;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
+
+    const ctx = gsap.context(() => {
+      const trigger = { trigger: scene, start: 'top bottom', end: 'bottom top', scrub: true };
+      gsap.fromTo(
+        '.pass-scene-bg',
+        { yPercent: -7 },
+        { yPercent: 7, ease: 'none', scrollTrigger: trigger },
+      );
+      gsap.fromTo(
+        '.pass-scene-card',
+        { yPercent: 5 },
+        { yPercent: -5, ease: 'none', scrollTrigger: trigger },
+      );
+    }, scene);
+
+    return () => ctx.revert();
+  }, []);
 
   return (
-    <>
-      <section className="apple-pass-section tf-parallax-section">
+    <section className="apple-pass-section pass-scene" ref={sceneRef}>
+      <div className="pass-scene-bg" aria-hidden="true">
+        <img src={PARALLAX_BG_VAULT} alt="" decoding="async" />
+      </div>
+      <div className="pass-scene-veil" aria-hidden="true" />
+      <div className="pass-scene-floor" aria-hidden="true" />
+      <div className="pass-scene-card">
         <HolographicTicket />
-      </section>
-    </>
+      </div>
+    </section>
   );
 }
 
@@ -600,9 +723,6 @@ export function Home() {
   const categories = useAsync(() => publicApi.categories(slug), [slug], {
     enabled: Boolean(slug),
   });
-  const schedule = useAsync(() => publicApi.schedule(slug), [slug], {
-    enabled: Boolean(slug),
-  });
   const news = useAsync(() => publicApi.announcements(slug, { pageSize: 2 }), [slug], {
     enabled: Boolean(slug),
   });
@@ -611,10 +731,6 @@ export function Home() {
   const announcements = news.data?.data || [];
   const eventTotal = catalogue.data?.meta?.total ?? null;
   const categoryTotal = categories.data?.data?.length ?? null;
-  const scheduleDays = Array.isArray(schedule.data?.data) ? schedule.data.data : [];
-  const sessionTotal = scheduleDays.length
-    ? scheduleDays.reduce((sum, day) => sum + (day.items?.length || 0), 0)
-    : null;
   const days = Math.max(
     1,
     Math.round(
@@ -622,6 +738,8 @@ export function Home() {
         86_400_000,
     ),
   );
+
+  const { message: eggMessage, onMascotTap } = useMascotEasterEgg();
 
   // Initialize hardware-accelerated parallax layer scrub down the page
   useParallaxScroll();
@@ -668,65 +786,70 @@ export function Home() {
         <div className="home-odyssey-panel" ref={odysseyRef}>
           <HeroOdyssey
             title={edition.name}
-            subtitle="Lighting Up The Future"
-            description={`One pass unlocks ${edition.name}. Explore the challenges, workshops, and ideas shaping the next perspective.`}
+            subtitle="ISTE state student convention"
+            description="One pass gets you into both days."
+            facts={[
+              `${days} days`,
+              dateRange(edition.startsAt, edition.endsAt),
+              placeLabel(edition.venue, edition.city),
+            ]}
           />
         </div>
       </div>
       {/* Three framed entry points into the convention. The full catalogue
           lives on /events so the homepage stays a preview. */}
       <section className="px-preview" id="discover" aria-labelledby="px-preview-title">
-        <div className="px-preview-inner">
+        <div className="px-stage-bg" aria-hidden="true">
+          <img src={SCENE_BG} alt="" decoding="async" />
+        </div>
+        <div className="px-stage-veil" aria-hidden="true" />
+        <img
+          className="px-stage-mascot"
+          src={SCENE_MASCOT}
+          alt=""
+          onClick={onMascotTap}
+          draggable="false"
+          decoding="async"
+        />
+        <MascotEasterEggBubble message={eggMessage} />
+
+        <div className="px-stage-inner">
           <header className="px-preview-head">
-            <div>
-              <Eyebrow>Inside the convention</Eyebrow>
-              <h2 id="px-preview-title">
-                Three ways <em>to look closer.</em>
-              </h2>
-            </div>
-            <p>
-              The edition, the {days}-day programme and the competition catalogue — one pass, one
-              shift in perspective.
-            </p>
+            <span className="px-preview-kicker">Parallax 2027</span>
+            <h2 id="px-preview-title">
+              Pick your <em>path.</em>
+            </h2>
           </header>
 
           <div className="px-grid">
             <PreviewCard
               mascotTarget="home-edition"
-              mascotHover="The edition: the theme, the host campus and the dates — and why Parallax exists."
+              mascotHover="Who runs Parallax, where it happens and what it covers."
               kicker="01 / The Edition"
               title="About Parallax"
-              copy={`${edition.organizer || 'ISTE'} brings ${edition.name} to ${edition.host || 'campus'}: two days of engineering argued in public.`}
-              meta={edition.city || null}
-              cta="Learn More"
+              copy={`${edition.name} is the ${edition.organizer || 'ISTE'} convention hosted at ${edition.host || 'NSSCE'}.`}
+              cta="Read more"
               to="/about"
               image={ABOUT_ART}
             />
             <PreviewCard
               mascotTarget="home-schedule"
-              mascotHover="The programme: both days, every briefing and round, published from the live catalogue."
+              mascotHover="Both days, every session, with times and rooms."
               kicker="02 / The Programme"
               title="Schedule"
-              copy={`Every briefing, round and workshop across ${days} days — published live from the convention catalogue.`}
-              meta={`${dateRange(edition.startsAt, edition.endsAt)}${
-                sessionTotal ? ` · ${sessionTotal} sessions` : ''
-              }`}
-              cta="View Schedule"
+              copy="Every session, round and room across both convention days."
+              cta="See the schedule"
               to="/schedule"
               image={SCHEDULE_ART}
             />
             <PreviewCard
               mascotTarget="home-events"
-              mascotHover="The competitions: hackathons, hardware builds, design sprints and papers, each with its fee basis."
+              mascotHover="Hackathons, hardware builds, design sprints and paper sessions."
               kicker="03 / The Competitions"
-              title="More Events"
-              copy={`${
-                eventTotal ? `${eventTotal} competitions` : 'The competition programme'
-              } across ${
-                categoryTotal ? `${categoryTotal} tracks` : 'every track'
-              }: hackathons, hardware builds, design sprints and paper sessions.`}
-              meta={`${eventTotal ?? '—'} events · ${categoryTotal ?? '—'} tracks`}
-              cta="Explore Events"
+              title="Events"
+              copy="Hackathons, hardware builds, design sprints and paper sessions."
+              meta={`${eventTotal ?? 0} events · ${categoryTotal ?? 0} categories`}
+              cta="See all events"
               to="/events"
               image={EVENTS_ART}
             />
@@ -736,82 +859,6 @@ export function Home() {
 
       {/* Chapter 02: All-Access Pass Architecture with Layer Parallax */}
       <PassHighlightSection policy={policy} />
-
-      {/* Chapter 03: Architectural Facts with Floor Grid Runway */}
-      <section className="facts section tf-parallax-section">
-        <div className="tf-parallax-bg" data-parallax-speed="0.28" aria-hidden="true">
-          <img src={PARALLAX_BG_PEDESTAL} alt="" className="tf-bg-img" />
-          <div className="tf-vignette-overlay" />
-        </div>
-        <div className="fact tf-parallax-fg">
-          <span>01 / FORMAT</span>
-          <b>
-            Individual
-            <br />& team events
-          </b>
-        </div>
-        <div className="fact tf-parallax-fg">
-          <span>02 / DURATION</span>
-          <b>
-            {days} days
-            <br />
-            together
-          </b>
-        </div>
-        <div className="fact tf-parallax-fg">
-          <span>03 / WHEN</span>
-          <b>
-            {date(edition.startsAt)}
-            <br />
-            {date(edition.endsAt)}
-          </b>
-        </div>
-        <div className="fact tf-parallax-fg">
-          <span>04 / WHERE</span>
-          <b>
-            {edition.venue}
-            <br />
-            {edition.city}
-          </b>
-        </div>
-      </section>
-
-      <section className="cta section tf-parallax-section">
-        <div className="tf-parallax-bg" data-parallax-speed="0.18" aria-hidden="true">
-          {/* <img src={PARALLAX_DEPTH_BG} alt="" className="tf-bg-img" /> */}
-          <div className="tf-vignette-overlay" />
-        </div>
-
-        <div className="tf-parallax-fg">
-          <div className="cta-emblem-center" aria-hidden="true">
-            <img src={LOGO} alt="" className="cta-emblem-img" />
-          </div>
-          <Eyebrow>Your Next Perspective</Eyebrow>
-          <h2>
-            Make room for
-            <br />
-            <em>the new perspectives.</em>
-          </h2>
-          <p>
-            One pass unlocks {edition?.name || 'Parallax 2026'}. Check the timetable, review the
-            challenges, and secure your badge.
-          </p>
-          <div className="cta-action-group">
-            <Link to="/pass" className="lusion-btn lusion-btn-primary">
-              <span>Get your pass</span>
-              <span className="lusion-btn-icon">
-                <ArrowRight size={15} strokeWidth={2.2} />
-              </span>
-            </Link>
-            <Link to="/events" className="lusion-btn lusion-btn-ghost">
-              <span>Explore events</span>
-              <span className="lusion-btn-icon">
-                <ArrowUpRight size={15} strokeWidth={2.2} />
-              </span>
-            </Link>
-          </div>
-        </div>
-      </section>
 
       {announcements.length ? (
         <section className="section news-section">
@@ -840,52 +887,66 @@ export function Home() {
   );
 }
 
+function placeLabel(...parts) {
+  const seen = new Set();
+  return parts
+    .filter(Boolean)
+    .join(', ')
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part) return false;
+      const key = part.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(', ');
+}
+
 export function About() {
   const { edition, policy } = useSite();
   return (
     <>
       <PageTitle
-        kicker="About the Edition"
+        kicker="About"
         title={
           <>
-            A different angle
+            About
             <br />
-            <em>changes everything.</em>
+            <em>{edition?.name || 'Parallax 2026'}.</em>
           </>
         }
-        desc={`${edition?.name || 'Parallax 2026'} is a ${edition?.organizer || 'ISTE'} convention hosted at ${edition?.host || 'NSSCE'}. The programme is published from a single live catalogue.`}
+        desc={`${edition?.organizer || 'ISTE'} brings the convention to ${placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering, Palakkad'}. Two days, one campus.`}
       />
       <section className="section prose-grid">
         <HudFrame as="article" className="about-main-card">
           <Eyebrow>The Idea</Eyebrow>
-          <h2>Curiosity brings us together.</h2>
+          <h2>Two days of student engineering.</h2>
           <p>
-            Named for the shift in perspective created by a change in viewpoint,{' '}
-            {edition?.name || 'Parallax 2026'} invites students to look at technology and
-            engineering from many angles. The convention is planned by the{' '}
-            {edition?.organizer || 'ISTE'} and hosted at {edition?.host || 'NSSCE'},{' '}
-            {edition?.city || 'Palakkad'}.
+            {edition?.name || 'Parallax 2026'} is run by the {edition?.organizer || 'ISTE'} chapter
+            at {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}. Individuals and teams
+            build, compete and present across both days.
           </p>
           <p>
-            Every event in the catalogue is a real record in the convention database: title,
-            category, format, schedule, capacity and fees all come from the same source the
+            Every event, time, room and fee on this site comes from the same catalogue the
             organisers edit.
           </p>
           <div className="about-facts">
             <div>
-              <span>ORGANISER</span>
+              <span>Organiser</span>
               <b>{edition?.organizer || 'ISTE'}</b>
             </div>
             <div>
-              <span>HOST</span>
+              <span>Host</span>
               <b>{edition?.host || 'NSSCE'}</b>
             </div>
             <div>
-              <span>VENUE</span>
+              <span>Venue</span>
               <b>{edition?.venue || 'Campus'}</b>
             </div>
             <div>
-              <span>DATES</span>
+              <span>Dates</span>
               <b>{dateRange(edition?.startsAt, edition?.endsAt)}</b>
             </div>
           </div>
@@ -897,7 +958,7 @@ export function About() {
           <p>{edition?.city || 'Palakkad, Kerala'}</p>
           <div className="host-rule" />
           <p>
-            Convention pass: {money(policy?.passPricePaise)} per participant, including lunch on{' '}
+            Pass: {money(policy?.passPricePaise)}, lunch included on{' '}
             {policy?.lunchIncludedDays?.length || 0} days.
           </p>
         </HudFrame>
@@ -941,18 +1002,20 @@ export function EventsPage() {
   const dayGroups = groupEventsByDay(events);
 
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={ARENA_ART} mascot={EVENT_SCENE_ART} wide>
       <PageTitle
-        kicker="Event Directory"
+        kicker="Events"
         title={
           <>
-            Choose your
+            All
             <br />
-            <em>next challenge.</em>
+            <em>events.</em>
           </>
         }
-        desc="Search the live catalogue. Fees, formats, capacity and registration state come straight from the convention database."
+        desc="Search by name, category or format."
       />
+      </PageScene>
       <div className="exc-shell">
         <section className="section directory exc-catalogue">
           <div className="filters">
@@ -1020,7 +1083,7 @@ export function EventsPage() {
                 >
                   <header className="exc-day-head">
                     <span className="exc-day-index">
-                      Day {String(groupIndex + 1).padStart(2, '0')}
+                      Day {groupIndex + 1}
                     </span>
                     <h2 className="exc-day-title" id={`exc-day-${group.key}`}>
                       {group.label}
@@ -1072,13 +1135,9 @@ export function EventsPage() {
               </Button>
             </Empty>
           )}
-          <p className="notice">
-            <ShieldCheck size={16} strokeWidth={1.5} /> Student eligibility is verified in the
-            participant portal, either by roster match, institutional email or a reviewed document.
-          </p>
         </section>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1281,23 +1340,25 @@ export function PassPage() {
   const valueCap = money(policy?.includedValueCapPaise || 45000);
 
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="Convention Pass"
+        kicker="Pass"
         title={
           <>
-            One pass. Two days.
+            One pass.
             <br />
-            <em>Your event choices.</em>
+            <em>Both days.</em>
           </>
         }
-        desc="A single registration unlocks full floor access across both days. The pass, included allowance and add-ons are transparently structured."
+        desc="Lunch included. Pick your events, add more if you want."
       />
+      </PageScene>
 
       <section className="section apple-pass-page-section">
         <div className="apple-pass-page-grid">
           <HudFrame as="article" className="apple-pass-pricing-box apple-pass-page-card">
-            <span className="apple-price-caption">ALL-ACCESS PASS</span>
+            <span className="apple-price-caption">All-access pass</span>
             <div className="apple-price-amount">
               <span className="apple-price-currency">₹</span>
               <span className="apple-price-number">{priceRupees}</span>
@@ -1348,7 +1409,7 @@ export function PassPage() {
           </HudFrame>
 
           <HudFrame as="article" className="apple-pass-copy-card">
-            <span className="apple-pass-kicker">PRICING ARCHITECTURE</span>
+            <span className="apple-pass-kicker">How it works</span>
             <h2>
               Pass first.
               <br />
@@ -1390,7 +1451,7 @@ export function PassPage() {
             </ol>
 
             <div className="apple-cap-well">
-              <span className="apple-cap-title">INCLUDED EVENT VALUE CAP</span>
+              <span className="apple-cap-title">Included event value</span>
               <b className="apple-cap-amount">
                 {valueCap} <small>live edition policy</small>
               </b>
@@ -1402,7 +1463,7 @@ export function PassPage() {
           </HudFrame>
         </div>
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1426,17 +1487,18 @@ export function SchedulePage() {
   const totalSessions = days.reduce((sum, d) => sum + (d.items?.length || 0), 0);
 
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="The Programme"
+        kicker="Schedule"
         title={
           <>
-            Two days of
+            The
             <br />
-            <em>new perspectives.</em>
+            <em>schedule.</em>
           </>
         }
-        desc="Every published session, ordered by its live start time and room assignment."
+        desc="Every session in order, with times and rooms."
         aside={
           totalSessions > 0 ? (
             <div className="schedule-stat-pill">
@@ -1446,6 +1508,7 @@ export function SchedulePage() {
           ) : null
         }
       />
+      </PageScene>
       <section className="section apple-schedule-section">
         {schedule.loading ? <Loading label="Loading schedule" rows={3} /> : null}
         {schedule.error ? <ErrorBox error={schedule.error} onRetry={schedule.reload} /> : null}
@@ -1457,7 +1520,7 @@ export function SchedulePage() {
         ) : null}
         <ScheduleBoard days={days} />
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1465,9 +1528,10 @@ export function VenuePage() {
   const { edition } = useSite();
   if (!edition) return <Loading label="Loading venue details" rows={2} />;
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="The Venue"
+        kicker="Venue"
         title={
           <>
             Meet us at
@@ -1475,8 +1539,9 @@ export function VenuePage() {
             <em>{edition?.city?.split(',')[0] || 'Palakkad'}.</em>
           </>
         }
-        desc={`${edition?.venue || 'Campus'}, hosted by ${edition?.host || 'NSSCE'}.`}
+        desc={`${placeLabel(edition?.venue, edition?.city) || 'NSSCE Campus, Palakkad'}.`}
       />
+      </PageScene>
       <section className="section venue-grid">
         <HudFrame as="article" className="venue-map-card">
           <div className="map-toolbar">
@@ -1551,7 +1616,7 @@ export function VenuePage() {
           </div>
         </HudFrame>
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1603,27 +1668,26 @@ export function FAQPage() {
   ];
 
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="Good to Know"
+        kicker="FAQ"
         title={
           <>
-            Questions, meet
+            Common
             <br />
-            <em>clear answers.</em>
+            <em>questions.</em>
           </>
         }
-        desc="Answers reflect the live edition policy, fees, and convention regulations."
+        desc="Passes, events, verification and refunds."
       />
+      </PageScene>
       <section className="section apple-faq-section">
         <div className="apple-faq-list">
-          {rows.map(([question, answer], index) => (
+          {rows.map(([question, answer]) => (
             <details className="apple-faq-card" key={question}>
               <summary className="apple-faq-summary">
-                <div className="apple-faq-q-left">
-                  <span className="apple-faq-num">{`0${index + 1}`.slice(-2)}</span>
-                  <span className="apple-faq-question">{question}</span>
-                </div>
+                <span className="apple-faq-question">{question}</span>
                 <span className="apple-faq-chevron" aria-hidden="true">
                   <ChevronDown size={18} strokeWidth={2} />
                 </span>
@@ -1635,14 +1699,14 @@ export function FAQPage() {
           ))}
         </div>
       </section>
-    </>
+    </div>
   );
 }
 
 const TEAM_GROUPS = [
   {
     title: 'Faculty Leadership',
-    description: 'The faculty members guiding and supporting the convention.',
+    description: 'Faculty guiding the convention.',
     members: [
       {
         name: 'Dr. Sudeep U',
@@ -1658,7 +1722,7 @@ const TEAM_GROUPS = [
   },
   {
     title: 'Student Leadership',
-    description: 'The student leadership driving Parallax forward.',
+    description: 'Student leads.',
     members: [
       {
         name: 'Kaladharan Lal',
@@ -1666,7 +1730,7 @@ const TEAM_GROUPS = [
         image: 'chairperson.jpg',
       },
       {
-        name: 'Student Name',
+        name: 'Sandra',
         role: 'Secretary',
         image: 'secretary.jpg',
       },
@@ -1674,7 +1738,7 @@ const TEAM_GROUPS = [
   },
   {
     title: 'Web-Dev Team',
-    description: 'The brains behind this dynamic and advanced full-stack web app.',
+    description: 'Built the site.',
     members: [
       {
         name: 'Midhun K M',
@@ -1684,10 +1748,11 @@ const TEAM_GROUPS = [
         link: 'https://midhunkm.pages.dev/',
       },
       {
-        name: 'Arjun Liji',
+        name: 'Arjun M L',
         role: 'Frontend',
         image: 'frontend.jpg',
         featured: true,
+        link: 'https://arjc.github.io/',
       },
       {
         name: 'Kaladharan Lal',
@@ -1699,8 +1764,7 @@ const TEAM_GROUPS = [
   },
   {
     title: 'Core Organising Team',
-    description:
-      'The coordinators responsible for bringing every aspect of the convention together.',
+    description: 'Events, design, publicity and finance.',
     members: [
       {
         name: 'Athira Haridas K V',
@@ -1730,7 +1794,7 @@ const TEAM_GROUPS = [
       {
         name: 'Anirudh R',
         role: 'Finance Coordinator',
-        image: 'finance-coordinator.jpg',
+        image: 'finance-coordinator.jpeg',
       },
       {
         name: 'Sandra H Menon',
@@ -1746,8 +1810,27 @@ const TEAM_GROUPS = [
   },
 ];
 
+const TEAM_HOVER_LINES = {
+  'Midhun K M':
+    'That one is Midhun K M. He built me, front to back. His other work is at midhunkm.pages.dev.',
+  'Arjun M L': 'Arjun M L did the frontend. Personal site: arjc.github.io.',
+};
+
+function teamSlug(name = '') {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 function TeamMemberCard({ member }) {
   const imageUrl = `${import.meta.env.BASE_URL}images/team/${member.image}`;
+  const mascotProps = {
+    'data-mascot-target': `team-${teamSlug(member.name)}`,
+    'data-mascot-label': member.name,
+    'data-mascot-hover':
+      TEAM_HOVER_LINES[member.name] || `${member.name}, ${member.role} on this year's crew.`,
+  };
 
   if (member.featured) {
     const CardTag = member.link ? 'a' : 'article';
@@ -1764,6 +1847,7 @@ function TeamMemberCard({ member }) {
       <CardTag
         className={`team-member-card is-featured${member.link ? ' is-linked' : ''}`}
         {...cardProps}
+        {...mascotProps}
       >
         <div className="tm-frame">
           <div
@@ -1805,7 +1889,7 @@ function TeamMemberCard({ member }) {
   }
 
   return (
-    <article className="team-member-card">
+    <article className="team-member-card" {...mascotProps}>
       <div className="team-member-image">
         <img
           src={imageUrl}
@@ -1827,25 +1911,25 @@ function TeamMemberCard({ member }) {
 
 export function TeamPage() {
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="The People Behind Parallax"
+        kicker="Team"
         title={
           <>
-            Behind every great event
+            Who runs
             <br />
-            <em>is a great team.</em>
+            <em>Parallax.</em>
           </>
         }
-        desc="Meet the people whose dedication, teamwork and vision brought Parallax to life."
+        desc="Faculty, student leads and the web team."
       />
+      </PageScene>
 
       <section className="team-page">
-        {TEAM_GROUPS.map((group, index) => (
+        {TEAM_GROUPS.map((group) => (
           <section className="team-group" key={group.title}>
             <div className="team-group-heading">
-              <span className="team-index">{String(index + 1).padStart(2, '0')}</span>
-
               <div>
                 <h2>{group.title}</h2>
                 <p>{group.description}</p>
@@ -1860,7 +1944,7 @@ export function TeamPage() {
           </section>
         ))}
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1893,27 +1977,29 @@ export function ContactPage() {
   };
 
   return (
-    <>
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
       <PageTitle
-        kicker="Official Inquiries"
+        kicker="Contact"
         title={
           <>
-            Let’s get
+            Talk to
             <br />
-            <em>in touch.</em>
+            <em>the team.</em>
           </>
         }
-        desc="Have questions about the convention, passes, challenge schedules, or campus logistics? Our organising team responds directly."
+        desc="Email us about passes, events or travel."
         aside={
           <div className="contact-status-card">
             <div className="contact-status-indicator">
               <span className="contact-status-pulse" />
-              <span>Desk Online</span>
+              <span>Desk online</span>
             </div>
             <span className="contact-status-hours">Typical response &lt; 4 hours</span>
           </div>
         }
       />
+      </PageScene>
 
       <section className="section contact-section">
         {/* Touchpoint Cards Grid */}
@@ -1924,11 +2010,10 @@ export function ContactPage() {
               <Mail size={22} strokeWidth={1.8} />
             </div>
             <div className="contact-channel-body">
-              <span className="contact-channel-tag">DIRECT INQUIRIES</span>
-              <h3 className="contact-channel-title">Official Convention Email</h3>
+              <span className="contact-channel-tag">Email</span>
+              <h3 className="contact-channel-title">Email the organisers</h3>
               <p className="contact-channel-desc">
-                For pass assistance, corporate partnerships, certificates, or general convention
-                inquiries.
+                Passes, team entries, certificates and press.
               </p>
               <a href={`mailto:${email}`} className="contact-channel-link">
                 <span>{email}</span>
@@ -1943,11 +2028,11 @@ export function ContactPage() {
               <Building2 size={22} strokeWidth={1.8} />
             </div>
             <div className="contact-channel-body">
-              <span className="contact-channel-tag">CAMPUS DESK</span>
-              <h3 className="contact-channel-title">Host Institution</h3>
+              <span className="contact-channel-tag">Campus</span>
+              <h3 className="contact-channel-title">Host campus</h3>
               <p className="contact-channel-desc">
-                {edition?.host || 'NSS College of Engineering'}, {edition?.city || 'Palakkad'}. Main
-                desk at the auditorium.
+                {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}.
+                Desk at the main auditorium.
               </p>
               <Link to="/venue" className="contact-channel-link">
                 <span>Campus Location &amp; Directions</span>
@@ -1962,11 +2047,10 @@ export function ContactPage() {
               <ShieldCheck size={22} strokeWidth={1.8} />
             </div>
             <div className="contact-channel-body">
-              <span className="contact-channel-tag">STUDENT PORTAL</span>
-              <h3 className="contact-channel-title">Self-Service Console</h3>
+              <span className="contact-channel-tag">Portal</span>
+              <h3 className="contact-channel-title">Student portal</h3>
               <p className="contact-channel-desc">
-                Review your registered sessions, team credentials, attendance QR tokens, and
-                verification status.
+                Your sessions, team, entry QR and verification status.
               </p>
               <Link to="/portal" className="contact-channel-link">
                 <span>Open Student Portal</span>
@@ -1980,11 +2064,10 @@ export function ContactPage() {
         <div className="contact-dispatch-wrap">
           <div className="contact-dispatch-header">
             <div className="contact-dispatch-head-left">
-              <span className="contact-dispatch-kicker">DIRECT TRANSMISSION</span>
-              <h2 className="contact-dispatch-title">Send a message to the organisers</h2>
+              <span className="contact-dispatch-kicker">Message</span>
+              <h2 className="contact-dispatch-title">Send a message</h2>
               <p className="contact-dispatch-desc">
-                Select your category and fill out the details below. We'll prepare your dispatch
-                with the organising committee.
+                Pick a category and write below. It goes to the organising inbox.
               </p>
             </div>
             <div className="contact-dispatch-head-right">
@@ -2025,7 +2108,7 @@ export function ContactPage() {
                   id="contact-name"
                   type="text"
                   className="contact-input"
-                  placeholder="e.g. Alex Kumar"
+                  placeholder="e.g. Analogue Interface"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
@@ -2042,7 +2125,7 @@ export function ContactPage() {
                   id="contact-email"
                   type="email"
                   className="contact-input"
-                  placeholder="e.g. alex@college.edu"
+                  placeholder="e.g. warner@college.ac.in"
                   value={senderEmail}
                   onChange={(e) => setSenderEmail(e.target.value)}
                   required
@@ -2069,7 +2152,7 @@ export function ContactPage() {
 
             <div className="contact-form-footer">
               <button type="submit" className="contact-submit-btn">
-                <span>Dispatch Email Inquiry</span>
+                <span>Send email</span>
                 <Send size={15} strokeWidth={2} />
               </button>
 
@@ -2093,11 +2176,8 @@ export function ContactPage() {
           <div className="contact-faq-banner-content">
             <HelpCircle size={22} strokeWidth={1.8} className="contact-faq-icon" />
             <div>
-              <h4>Looking for instant answers?</h4>
-              <p>
-                Common questions about pass validity, lunch inclusions, team member rules, and
-                cancellations are documented in the FAQ.
-              </p>
+              <h4>Most answers are already written</h4>
+              <p>Pass validity, lunch, team size and cancellations.</p>
             </div>
           </div>
           <Link to="/faq" className="contact-faq-btn">
@@ -2106,7 +2186,7 @@ export function ContactPage() {
           </Link>
         </div>
       </section>
-    </>
+    </div>
   );
 }
 
@@ -2120,18 +2200,15 @@ export function Footer() {
           className="footer-brand"
           aria-label={`${edition?.name || 'Parallax 2026'} home`}
         >
-          <img src={LOGO} alt={edition?.name || 'Parallax 2026'} className="footer-logo" />
+          <img src={ISTE} alt={edition?.organizer || 'ISTE'} className="footer-logo footer-iste-logo" />
         </Link>
-        <p>
-          A shift in perspective.
-          <br />A leap in innovation.
-        </p>
+        <p>Organised by ISTE</p>
         <div className="footer-host">
-          <img src={ISTE} alt={`${edition?.organizer || 'ISTE'} emblem`} />
+          <img src={NSSCE} alt="NSSCE emblem" />
           <span>
-            Hosted by {edition?.host || 'NSSCE'}
+            Hosted by {(edition?.host || 'NSS College of Engineering').split(',')[0]}
             <br />
-            {edition?.city || 'Palakkad'}
+            {edition?.city || 'Palakkad, Kerala'}
           </span>
         </div>
       </div>
@@ -2144,12 +2221,42 @@ export function Footer() {
           ['Venue', '/venue'],
           ['FAQ', '/faq'],
           ['Contact', '/contact'],
+          ['Meet the Team', '/team'],
           ['Portal', '/portal'],
         ].map(([label, to]) => (
           <Link key={to} to={to}>
             {label}
           </Link>
         ))}
+      </div>
+      <div className="footer-bottom">
+        <span className="footer-copy">
+          © 2026 All rights reserved.
+        </span>
+        <span className="footer-credits">
+          Developed by{' '}
+          <a
+            href="https://midhunkm.pages.dev/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-credit-link"
+          >
+            Midhun K M
+          </a>
+          {' with '}
+          <a
+            href="https://arjc.github.io/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-credit-link"
+          >
+            Arjun M L
+          </a>
+          {' & '}
+          <Link to="/team" className="footer-credit-link">
+            Kaladharan Lal
+          </Link>
+        </span>
       </div>
     </footer>
   );

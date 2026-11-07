@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const publishedAssets = [
-  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png',
+  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp',
+  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp',
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/Parallax Vector.svg',
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp',
-  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/ISTE LOGO NO  BG PNG.png',
+  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png',
   'Parallax Brochure Design Assets/Parallax Design Utilities/modified assets/globe.svg',
 ];
 
@@ -29,6 +30,24 @@ const copyBrandAssets = {
 export default defineConfig({
   plugins: [react(), copyBrandAssets],
   base: process.env.VITE_BASE_PATH || '/',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) return 'vendor-three';
+          if (id.includes('node_modules/gsap')) return 'vendor-gsap';
+          if (
+            id.includes('node_modules/react') ||
+            id.includes('node_modules/react-dom') ||
+            id.includes('node_modules/react-router-dom')
+          ) {
+            return 'vendor-react';
+          }
+        },
+      },
+    },
+    chunkSizeWarningLimit: 700,
+  },
   server: {
     port: 5173,
     proxy: {

@@ -1,31 +1,33 @@
-# Parallax mascot guide
+# Mascot Guide (Frontend Component)
 
-A single persistent 3D guide mounted in the app shell. It never remounts on
-route changes, never captures page-level pointer events, and unloads completely
-when hidden.
+This directory implements the persistent 3D mascot guide used by the frontend shell. It is a **presentation-layer feature**; operational rules (pricing, eligibility, permissions, registration state) remain backend-authoritative.
 
-## How it is put together
+## Runtime Behavior (Design Intent)
+
+- Mounted once in the app shell and intended to persist across route changes.
+- Avoids capturing page-level pointer events except its own small interaction surface (implementation-dependent).
+- Supports hide/show preferences and reduced-motion/low-power handling (see implementation).
+- Uses a Three.js canvas/model pipeline and DOM overlay/bubble for guidance.
+
+## Main Files
 
 | File | Responsibility |
-| --- | --- |
-| `MascotProvider.jsx` | Mount point, WebGL check, lazy chunk loading, hide/show control, error boundary |
-| `MascotOverlay.jsx` | Fixed layer, positioned anchor, bubble, hit area, highlight ring |
-| `MascotCanvas.jsx` | React lifecycle for the renderer, resize and prop wiring |
-| `MascotModel.js` | Three.js stage: loader, normalization, lights, camera, clips, disposal |
-| `MascotBrain.js` | Explicit state machine and scheduler |
-| `TargetRegistry.js` | Finds `[data-mascot-target]`, measures it, picks collision-free spots |
-| `SpeechBubble.jsx` | DOM bubble (`role="status"`, `aria-live="polite"`) |
-| `config/behaviors.js` | Route/target messages, priorities, cooldowns |
-| `useMascotSettings.js` | Persisted hide preference, reduced motion, low-power detection |
+|---|---|
+| `MascotProvider.jsx` | Mount/lifecycle, feature gating, lazy loading, error boundary (as implemented) |
+| `MascotOverlay.jsx` | Fixed overlay, anchor/bubble/highlight composition |
+| `MascotCanvas.jsx` | Renderer/canvas lifecycle and drawing cadence |
+| `MascotModel.js` | Three.js scene/model loading, normalization, lights/camera, clip handling, disposal |
+| `MascotBrain.js` | State/scheduling/behavior selection |
+| `TargetRegistry.js` | Resolves `[data-mascot-target]` elements and placement/collision logic |
+| `SpeechBubble.jsx` | Accessible bubble/live-region presentation |
+| `config/behaviors.js` | Route/target behavior configuration |
+| `useMascotSettings.js` | Persisted visibility/settings and motion/power preferences |
 
-There is **one** `<canvas>`, one renderer and one model. Movement is a CSS
-transform on the anchor; the renderer only draws when the model is loaded, when
-the facing changes, or while a rigged clip is playing (capped at ~30fps). It
-stops when the tab is hidden, the route is excluded, or the guide is hidden.
+> Verify exact behavior in code before documenting user-facing guarantees.
 
-## Adding behaviour
+## Extending Guidance
 
-No core changes are needed:
+Guidance can be attached via target attributes in UI markup and/or behavior config entries.
 
 ```jsx
 <section
@@ -37,96 +39,21 @@ No core changes are needed:
 >
 ```
 
-```js
-// config/behaviors.js
-{
-  id: 'pass',
-  match: /^\/pass$/,
-  behaviors: [
-    { target: 'pass-pricing', message: 'One pass covers both days.', cooldownMs: 90000, maxShows: 1 },
-  ],
-}
-```
+Behavior entries (example pattern) live in `config/behaviors.js`. Keep messages factual and aligned with API-driven policy data; do not hard-code pricing or eligibility claims.
 
-For catalogues, use `group: { prefix: 'event-' }`. Every element whose target id
-starts with the prefix is a candidate; no list of card ids has to be maintained.
+## Model Assets & Build Notes
 
-- Guidance only fires while the target is visible.
-- A collision check rejects spots that overlap the target, any visible
-  interactive element (links, buttons, fields) or page copy. On wide screens
-  the registry can use the outer margin beside the content. If a layout has no
-  free spot at all, guidance falls back to the ring and bubble at the resting
-  corner.
-- Guidance is suppressed on mobile and under reduced motion (ring + bubble at
-  rest only).
-- Cooldowns, per-target show limits and a global cooldown stop it nagging.
+- Preferred/fallback model paths and clip-name matching are implementation-defined (see `MascotModel.js` and `public/mascot/` assets).
+- Any rigging/export pipeline scripts referenced by this component should be treated as **tooling documentation**; verify script paths and inputs in the working copy before running.
+- For skinned GLB optimization, preserve skin/armature integrity (avoid transforms/flatten/join/instance operations that break deformation).
 
-## Model contract
+## Accessibility & Performance
 
-The loader prefers `public/mascot/mascot-rigged.glb`, then falls back to
-`public/mascot/mascot.glb`.
+- Canvas should remain decorative/non-interactive for assistive tech where appropriate; bubble text should use polite announcements if implemented.
+- Hide preference should be user-controlled and persisted.
+- Reduced motion should suppress roaming/animation-heavy behaviors.
+- Rendering should pause or throttle when hidden, offscreen, or when the tab is inactive (verify implementation).
 
-Clip names are matched loosely (case-insensitive substrings):
+## Maintenance
 
-| State | Accepted names |
-| --- | --- |
-| idle | `Idle`, `Breathing Idle`, `Stand` |
-| walk | `Walk`, `Walking` |
-| point | `Point`, `Pointing` |
-| wave | `Wave`, `Waving` |
-| jump | `Jump`, `Jumping` |
-
-Walk must be **in place** — the brain moves the mascot. Clips crossfade over
-0.3s. One-shots (Wave) clamp and return to the current state. If a clip is
-missing, that gesture is skipped; the model is never rotated or bent to fake it.
-
-The supplied files are two different meshes — the sculpture has 74,822 vertices
-with UVs and a full PBR material, the Mixamo skin has 87,667 vertices, no UV
-layer and no textures. Their UVs and vertex orders cannot be swapped; doing that
-samples unrelated atlas islands and the model looks random. So the rigged asset
-is the *sculpture* skinned to the Mixamo skeleton: `skin_sculpture.py` transfers
-the skin weights onto the sculpture by closest surface, parents it to the
-armature and exports one file with the sculpture's UVs, material and all five
-clips. Textures stay as authored (1024² webp).
-
-Root motion is normalized at load: Idle is baked with the skin (hips offset
-~0.011) while the four animation-only imports are ~100x larger and carry a
-forward walk drift. Every clip is rescaled and re-anchored to the Idle hips, so
-Walk, Point, Wave and Jump stay in frame with only the vertical bob and hop
-kept.
-
-The Mixamo handoff folder is `mascot-rig-source/`; see its README for the five
-exact FBX filenames and export settings.
-
-### Rebuilding the rigged asset
-
-Run from `frontend/`:
-
-```sh
-blender --background --factory-startup --python-exit-code 1 \
-  --python mascot-rig-source/skin_sculpture.py
-
-node mascot-rig-source/finalize_rig.mjs \
-  mascot-rig-source/mascot-merged.raw.glb \
-  mascot-rig-source/mascot-merged.oriented.glb
-
-npx gltf-transform optimize mascot-rig-source/mascot-merged.oriented.glb \
-  public/mascot/mascot-rigged.glb \
-  --compress meshopt --simplify false --palette false \
-  --flatten false --join false --instance false
-```
-
-No `--texture-size` / `--texture-compress` step: the authored 1024² maps ship
-untouched. For a skinned asset keep `--flatten`, `--join` and `--instance` off —
-flattening re-parents the mesh out of the armature and bakes a second root
-rotation, which collapses the character on screen. Verify in the browser that
-the mesh still deforms (a bind T-pose means the skin was lost).
-
-## Accessibility
-
-- The renderer canvas is `aria-hidden`; the small hit area is pointer-only.
-- Bubble copy is a polite live region.
-- Hide is a real button; the preference persists in `localStorage`
-  (`parallax.mascot.hidden`). Hiding unmounts the renderer and frees GPU memory.
-- Reduced motion disables roaming, floating and clip playback.
-- No audio is used, so there is no mute state.
+When mascot behavior or assets change, update this README and any related docs in `docs/FRONTEND_ARCHITECTURE.md`/`docs/features/public-and-portals.md` to keep documentation accurate.

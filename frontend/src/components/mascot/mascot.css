@@ -53,7 +53,6 @@
   opacity: 0;
   transform-origin: 50% 80%;
   transition: opacity 0.5s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  filter: drop-shadow(0 0 22px rgba(56, 189, 248, 0.16));
 }
 
 .mascot-canvas.is-ready {
@@ -69,38 +68,6 @@
   width: 100% !important;
   height: 100% !important;
   outline: none;
-}
-
-.mascot-ground {
-  position: absolute;
-  left: 21%;
-  right: 21%;
-  bottom: 2.2%;
-  height: 26px;
-  border-radius: 50%;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(56, 189, 248, 0.38) 0%,
-    rgba(56, 189, 248, 0.12) 42%,
-    rgba(56, 189, 248, 0) 72%
-  );
-  filter: blur(6px);
-  pointer-events: none;
-}
-
-.mascot-ground::after {
-  content: '';
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  bottom: 7px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(56, 189, 248, 0.65),
-    transparent
-  );
 }
 
 /* ------------------------------------------------------------------- input -- */
@@ -171,7 +138,6 @@
   background: linear-gradient(160deg, rgba(10, 16, 27, 0.95), rgba(8, 12, 20, 0.92));
   box-shadow:
     0 18px 40px -16px rgba(0, 0, 0, 0.9),
-    0 0 26px -8px rgba(56, 189, 248, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
   color: #eaf6ff;
   transform: translate(var(--bx), var(--by));
@@ -269,56 +235,69 @@
   color: #eaf6ff;
 }
 
-/* -------------------------------------------------------------------- ring -- */
+.mascot-bubble-link {
+  display: inline-block;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: #7dd3fc !important;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
-.mascot-ring {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 74;
-  border: 1px solid rgba(148, 214, 255, 0.42);
-  border-radius: 14px;
-  opacity: 0;
-  pointer-events: none;
-  box-shadow:
-    0 0 0 1px rgba(3, 7, 14, 0.45),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
-    0 22px 54px -34px rgba(14, 165, 233, 0.45);
-  transition: opacity 0.3s ease;
+.mascot-bubble-link:hover {
+  color: #ffffff !important;
 }
 
 /* ------------------------------------------------------------- show control -- */
 
 .mascot-show {
   position: fixed;
-  left: 22px;
-  bottom: 22px;
+  left: 20px;
+  bottom: 20px;
   z-index: 9998;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 9px 13px;
+  gap: 9px;
+  padding: 5px 15px 5px 5px;
   border-radius: 999px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  background: rgba(10, 15, 25, 0.86);
-  color: #dff6ff;
-  font-family: var(--sans);
-  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(9, 12, 19, 0.86);
+  color: rgba(240, 248, 255, 0.86);
+  font-family: var(--mono);
+  font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   cursor: pointer;
-  box-shadow:
-    0 12px 28px -18px rgba(0, 0, 0, 0.9),
-    0 0 20px -8px rgba(56, 189, 248, 0.4);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 18px 34px -22px rgba(0, 0, 0, 0.95);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
   transition: border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
 }
 
+.mascot-show-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #7dd3fc;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
 .mascot-show:hover {
-  border-color: var(--cyan);
+  border-color: rgba(56, 189, 248, 0.5);
   color: #ffffff;
   transform: translateY(-1px);
+}
+
+.mascot-show:hover .mascot-show-icon {
+  background: var(--cyan);
+  color: #06121c;
 }
 
 .mascot-show:focus-visible {
@@ -346,8 +325,15 @@
   .mascot-show {
     left: 14px;
     bottom: 14px;
-    padding: 8px 11px;
-    font-size: 11px;
+    gap: 8px;
+    padding: 4px 12px 4px 4px;
+    font-size: 9px;
+    letter-spacing: 0.16em;
+  }
+
+  .mascot-show-icon {
+    width: 24px;
+    height: 24px;
   }
 }
 

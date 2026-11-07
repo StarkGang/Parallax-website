@@ -1,0 +1,96 @@
+/* ==========================================================================
+   MASCOT EASTER EGG
+   A small speech card that appears after four taps on the mascot artwork.
+   ========================================================================== */
+
+.mascot-egg {
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 44px));
+  padding: 10px 14px 11px;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  border-radius: 14px;
+  background: rgba(8, 13, 21, 0.95);
+  box-shadow: 0 22px 46px -24px rgba(0, 0, 0, 0.95);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  text-align: center;
+  translate: -50% 0;
+  pointer-events: none;
+  animation: mascotEggIn 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mascot-egg::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: rgba(8, 13, 21, 0.95);
+  border-right: 1px solid rgba(56, 189, 248, 0.42);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.42);
+  transform: rotate(45deg);
+}
+
+.mascot-egg-kicker {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  opacity: 0.85;
+}
+
+.mascot-egg-text {
+  display: block;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #eaf6ff;
+}
+
+.mascot-egg-link {
+  color: #7dd3fc !important;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  pointer-events: auto;
+}
+
+.mascot-egg-link:hover {
+  color: #ffffff !important;
+}
+
+@keyframes mascotEggIn {
+  from {
+    opacity: 0;
+    translate: -50% 8px;
+  }
+  to {
+    opacity: 1;
+    translate: -50% 0;
+  }
+}
+
+/* Placement inside the homepage preview scene. */
+.px-preview .mascot-egg {
+  bottom: calc(var(--px-mascot-h) - 6px);
+}
+
+/* Placement inside the inner-page hero scenes. */
+.page-scene-mascot .mascot-egg {
+  bottom: calc(100% + 10px);
+  left: 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-egg {
+    animation: none;
+  }
+}

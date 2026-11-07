@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
+const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
 
 const PARALLAX_LOGS = [
   '[eth0] LINK_ESTABLISHED',
@@ -207,7 +207,6 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
           </div>
         )}
 
-        {/* Phase: Command Screen */}
         {(phase === 'command' || phase === 'unveiling') && (
           <div className="samaritan-command-box">
             <div className="samaritan-message-container">
@@ -220,7 +219,7 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
             </div>
 
             <div className="samaritan-command-sub">
-              DESIGNED BY FRINGE LABS 
+              DEVELOPED BY FRINGE LABS 
             </div>
 
             <div className="samaritan-command-kicker">

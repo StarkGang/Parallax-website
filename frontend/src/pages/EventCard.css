@@ -9,35 +9,7 @@
   isolation: isolate;
   overflow: hidden;
   border-top: 1px solid rgba(112, 176, 226, 0.12);
-  background:
-    radial-gradient(70% 42% at 50% -4%, rgba(34, 84, 128, 0.36) 0%, transparent 68%),
-    radial-gradient(42% 36% at 88% 14%, rgba(16, 92, 138, 0.16) 0%, transparent 70%),
-    radial-gradient(50% 40% at 6% 60%, rgba(18, 52, 92, 0.2) 0%, transparent 72%),
-    linear-gradient(180deg, #060a11 0%, #050910 46%, #04070d 100%);
-}
-
-.exc-shell::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background-image:
-    linear-gradient(rgba(110, 166, 214, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(110, 166, 214, 0.05) 1px, transparent 1px);
-  background-size: 84px 84px;
-  -webkit-mask-image: radial-gradient(75% 65% at 50% 24%, #000 0%, transparent 82%);
-  mask-image: radial-gradient(75% 65% at 50% 24%, #000 0%, transparent 82%);
-  pointer-events: none;
-}
-
-.exc-shell::after {
-  content: '';
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 220px;
-  z-index: -1;
-  background: linear-gradient(180deg, transparent 0%, rgba(4, 7, 13, 0.9) 100%);
-  pointer-events: none;
+  background: transparent;
 }
 
 .exc-grid {
@@ -70,6 +42,7 @@
 .exc {
   --exc-accent: #38bdf8;
   position: relative;
+  cursor: pointer;
   aspect-ratio: 1033 / 1522;
   container-type: inline-size;
   isolation: isolate;
@@ -141,13 +114,12 @@
 .exc-poster-tint {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(
-      58% 52% at 50% 55%,
-      color-mix(in srgb, var(--exc-accent) 32%, transparent) 0%,
-      transparent 74%
-    ),
-    linear-gradient(180deg, rgba(4, 9, 17, 0.35) 0%, rgba(4, 9, 17, 0.08) 46%, rgba(4, 9, 17, 0.62) 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(4, 9, 17, 0.35) 0%,
+    rgba(4, 9, 17, 0.08) 46%,
+    rgba(4, 9, 17, 0.62) 100%
+  );
   pointer-events: none;
 }
 
@@ -166,17 +138,6 @@
   object-fit: contain;
   color: color-mix(in srgb, var(--exc-accent) 78%, #ffffff);
   filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.7));
-}
-
-.exc-poster-glyph::before {
-  content: '';
-  position: absolute;
-  width: 46%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--exc-accent) 26%, transparent);
-  background: radial-gradient(circle, color-mix(in srgb, var(--exc-accent) 16%, transparent), transparent 70%);
-  pointer-events: none;
 }
 
 .exc:hover .exc-poster-img,
@@ -200,7 +161,7 @@
 }
 
 .exc:hover .exc-frame {
-  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 20px rgba(56, 189, 248, 0.18));
+  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.5));
 }
 
 /* ----------------------------------------------------------- title block -- */
@@ -239,7 +200,6 @@
   height: 0.55em;
   border-radius: 50%;
   background: var(--exc-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--exc-accent) 70%, transparent);
 }
 
 .exc-sep {
@@ -317,8 +277,7 @@
   background: rgba(13, 38, 58, 0.95);
   color: #ffffff;
   box-shadow:
-    0 0 0 1px rgba(120, 206, 255, 0.18),
-    0 0 18px rgba(56, 189, 248, 0.24);
+    0 0 0 1px rgba(120, 206, 255, 0.18);
   outline: none;
 }
 
@@ -334,7 +293,6 @@
   font-weight: 700;
   text-shadow: none;
   box-shadow:
-    0 4px 16px rgba(24, 145, 206, 0.35),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
@@ -368,32 +326,28 @@
 }
 
 .exc-day-index {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: #63cbff;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(200, 214, 228, 0.6);
   white-space: nowrap;
 }
 
 .exc-day-title {
   margin: 0;
   font-family: var(--sans);
-  font-size: clamp(13px, 1.25vw, 16px);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: clamp(15px, 1.35vw, 18px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: capitalize;
   color: #e9f6ff;
 }
 
 .exc-day-count {
   margin-left: auto;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(168, 198, 222, 0.75);
+  font-family: var(--sans);
+  font-size: 12px;
+  color: rgba(168, 198, 222, 0.6);
   white-space: nowrap;
 }
 
@@ -443,17 +397,17 @@
   height: 0.4em;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 6px currentColor;
 }
 
 .exc-plaque .exc-closed {
   color: #f9b4b4;
 }
 
-/* Closed registrations stay in the catalogue but recede: the poster blurs and
-   desaturates while the shell, title and fee remain legible. */
+/* Closed registrations stay in the catalogue but recede: the poster desaturates
+   and dims while the shell, title and fee remain legible. No blur is used, so a
+   card never looks out of focus while its registration is still open. */
 .exc.is-closed .exc-poster {
-  filter: grayscale(0.92) brightness(0.58) blur(1.4px);
+  filter: grayscale(0.92) brightness(0.62);
 }
 
 .exc.is-closed .exc-poster::after {
@@ -475,34 +429,6 @@
 
 .exc.is-closed:hover {
   transform: none;
-}
-
-/* ---------------------------------------------------------------- reveal -- */
-
-/* ---------------------------------------------------------------- reveal -- */
-
-@keyframes frame-rise {
-  from {
-    opacity: 0;
-    translate: 0 26px;
-  }
-
-  to {
-    opacity: 1;
-    translate: 0 0;
-  }
-}
-
-/* Scroll-driven so no observer can leave content hidden; browsers without
-   view timelines simply render the cards in place. */
-@supports (animation-timeline: view()) {
-  @media (prefers-reduced-motion: no-preference) {
-    [data-reveal] {
-      animation: frame-rise linear both;
-      animation-timeline: view();
-      animation-range: entry 3% cover 26%;
-    }
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,0 +1,484 @@
+/* ==========================================================================
+   NAVBAR — floating angled plate over the hero
+   Reference: logo (left) · shaped link bar (centre) · sign-in (right), no bar
+   background of its own, everything sitting directly on the page artwork.
+   ========================================================================== */
+
+.nav {
+  /* Palette + geometry tokens (site colours, no hardcoded accents) */
+  --nav-tint: 13 26 46; /* dominant dark-navy of the hero art (--bg family) */
+  --nav-fill-opacity: 0.6;
+  --nav-strip: #b8b8bc;
+  --nav-tag: #ffd24a;
+  --nav-accent: var(--cyan);
+  --nav-h: clamp(46px, 2.75vw, 54px);
+  --nav-pad-y: clamp(14px, 1.5vw, 22px);
+  --nav-tip: clamp(12px, 0.85vw, 17px);
+  --nav-wing: clamp(20px, 1.5vw, 28px);
+  --nav-edge: clamp(20px, 2.1vw, 40px);
+  --nav-font: clamp(11.5px, 0.95vw, 18px);
+
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 70 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(10px, 1vw, 18px);
+  width: 100% !important;
+  height: auto !important;
+  margin: 0 0 calc(-1 * (var(--nav-h) + var(--nav-pad-y) * 2)) !important;
+  padding: max(var(--nav-pad-y), env(safe-area-inset-top, 0px)) var(--nav-edge) var(--nav-pad-y) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  pointer-events: none;
+}
+
+/* Soft top-down shade behind the nav so white labels hold on bright art. */
+.nav::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: clamp(96px, 7.5vw, 140px);
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(4, 6, 11, 0.62) 0%,
+    rgba(4, 6, 11, 0.3) 45%,
+    rgba(4, 6, 11, 0) 100%
+  );
+}
+
+.nav > * {
+  pointer-events: auto;
+}
+
+/* ------------------------------------------------------------------- logo -- */
+
+.nav-logo {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.nav-logo img {
+  display: block;
+  width: clamp(72px, 4.75vw, 96px);
+  height: auto;
+  aspect-ratio: 2172 / 724;
+  object-fit: contain;
+  object-position: left center;
+}
+
+/* --------------------------------------------------------------- link bar -- */
+
+.nav-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  width: min(62vw, 1180px);
+  height: var(--nav-h);
+  margin: 0 auto;
+  pointer-events: auto;
+}
+
+/* a) tinted fill, flat, angled ends */
+.nav-fill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: rgb(var(--nav-tint) / var(--nav-fill-opacity));
+  clip-path: polygon(var(--nav-tip) 0, calc(100% - var(--nav-tip)) 0, 100% 100%, 0 100%);
+  transition: background-color 200ms ease;
+  pointer-events: none;
+}
+
+.nav.is-scrolled .nav-fill {
+  background: rgb(var(--nav-tint) / 0.86);
+}
+
+/* c) hairline wings extending past the top corners */
+.nav-wing {
+  position: absolute;
+  z-index: 1;
+  top: calc(var(--nav-h) * 0.25);
+  height: 1px;
+  width: calc(var(--nav-tip) + var(--nav-wing));
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+
+.nav-wing.is-left {
+  left: calc(-1 * var(--nav-wing));
+}
+
+.nav-wing.is-right {
+  right: calc(-1 * var(--nav-wing));
+}
+
+/* d) notched metal strip under the bar */
+.nav-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  height: clamp(18px, 1.15vw, 24px);
+  color: var(--nav-strip);
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.nav-strip svg {
+  display: block;
+  height: 100%;
+}
+
+.nav-strip-corner {
+  width: clamp(24px, 1.8vw, 34px);
+  flex: 0 0 auto;
+}
+
+.nav-strip-corner.is-right {
+  transform: scaleX(-1);
+}
+
+.nav-strip-mid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ links -- */
+
+.nav-links {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-links li {
+  display: flex;
+  align-items: center;
+}
+
+.nav-links a {
+  position: relative;
+  display: inline-block;
+  padding: 2px 0;
+  font-family: var(--display) !important;
+  font-size: var(--nav-font) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.12em !important;
+  line-height: 1.1;
+  text-transform: uppercase !important;
+  color: #ffffff !important;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 200ms ease;
+}
+
+.nav-links a:hover,
+.nav-links a[aria-current='page'] {
+  color: var(--nav-accent) !important;
+}
+
+.nav-links a[aria-current='page']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 2px;
+  background: var(--nav-accent);
+}
+
+.nav-links a:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 4px;
+}
+
+/* -------------------------------------------------------------- promo tag -- */
+
+.nav-tag {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--nav-h) / -2 + 0.62em);
+  translate: -50% 0;
+  font-family: var(--display);
+  font-size: clamp(8.5px, 0.55vw, 10.5px);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--nav-tag);
+  -webkit-text-stroke: 2.5px rgba(4, 6, 11, 0.92);
+  paint-order: stroke fill;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------ sign-in CTA -- */
+
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  flex-shrink: 0;
+  width: clamp(124px, 8.2vw, 156px);
+  height: var(--nav-h);
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 7px;
+  background: rgba(30, 35, 55, 0.85);
+  color: #ffffff !important;
+  font-family: var(--display) !important;
+  font-size: clamp(11px, 0.79vw, 15px) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+
+.nav-cta:hover {
+  background: rgba(41, 48, 73, 0.92);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.nav-cta:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 3px;
+}
+
+.nav-cta-pass {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- burger -- */
+
+.nav-burger {
+  display: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 7px;
+  background: rgba(30, 35, 55, 0.78);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background-color 200ms ease;
+}
+
+.nav-burger:hover {
+  background: rgba(41, 48, 73, 0.92);
+}
+
+.nav-burger:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 3px;
+}
+
+/* -------------------------------------------------------- mobile overlay -- */
+
+/* 40px tall invisible marker: once it leaves the viewport the nav is scrolled. */
+.nav-sentinel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 40px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nav-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  padding: max(16px, env(safe-area-inset-top, 16px)) clamp(16px, 5vw, 28px) max(32px, env(safe-area-inset-bottom, 24px));
+  background: rgba(4, 6, 11, 0.98);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.nav-overlay[hidden] {
+  display: none;
+}
+
+.nav-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-overlay-head .nav-logo img {
+  width: 88px;
+}
+
+.nav-overlay-close {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(30, 35, 55, 0.7);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.nav-overlay-close:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 3px;
+}
+
+.nav-overlay-strip {
+  display: flex;
+  align-items: flex-start;
+  height: 22px;
+  margin: 18px 0 4px;
+  color: var(--nav-strip);
+  opacity: 0.8;
+}
+
+.nav-overlay-strip svg {
+  display: block;
+  height: 100%;
+}
+
+.nav-overlay-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-overlay-links a {
+  display: block;
+  padding: 14px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--display);
+  font-size: clamp(23px, 6.6vw, 30px);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #ffffff !important;
+  text-decoration: none;
+}
+
+.nav-overlay-links a[aria-current='page'] {
+  color: var(--nav-accent) !important;
+}
+
+.nav-overlay-links a:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 3px;
+}
+
+.nav-overlay-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: auto;
+  padding: 15px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(30, 35, 55, 0.9);
+  color: #ffffff !important;
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+/* ----------------------------------------------------------------- mobile -- */
+
+@media (max-width: 899px) {
+  .nav {
+    --nav-h: 42px;
+    --nav-pad-y: 12px;
+    padding: max(12px, env(safe-area-inset-top, 12px)) clamp(14px, 4.5vw, 22px) 12px !important;
+    gap: 10px;
+  }
+
+  .nav.is-scrolled {
+    background: rgba(8, 12, 22, 0.92) !important;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .nav-bar {
+    display: none;
+  }
+
+  .nav-cta-signin {
+    display: none;
+  }
+
+  .nav-cta-pass {
+    display: inline-flex;
+    width: auto;
+    padding: 0 14px;
+    font-size: 10.5px !important;
+    letter-spacing: 0.09em !important;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .nav-burger {
+    display: grid;
+    min-width: 42px;
+    min-height: 42px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .nav-burger:active {
+    transform: scale(0.95);
+  }
+
+  .nav-overlay-links a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .nav-logo img {
+    width: 84px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav,
+  .nav-fill,
+  .nav-cta,
+  .nav-burger,
+  .nav-overlay,
+  .nav-links a {
+    transition: none !important;
+    animation: none !important;
+  }
+}

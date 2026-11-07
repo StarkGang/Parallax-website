@@ -48,6 +48,8 @@ export default function HolographicTicket({
     <>
       <style>{css}</style>
       <div className="ht-stage">
+        <div className="ht-back" aria-hidden="true" />
+        <div className="ht-glow" aria-hidden="true" />
         <div
           ref={tiltRef}
           className="ht-tilt"
@@ -104,11 +106,49 @@ const css = `
 
 .ht-stage {
   --stub: 120px;
+  position: relative;
+  isolation: isolate;
   display: grid;
   place-items: center;
   gap: 28px;
   padding: 40px 16px;
   perspective: 1200px;
+}
+
+/* Rear plate gives the ticket thickness behind the front face. */
+.ht-back {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  left: 50%;
+  width: min(706px, 90%);
+  aspect-ratio: 760 / 420;
+  translate: -50% -52%;
+  transform: rotate(-2.4deg);
+  border-radius: 12px;
+  border: 1px solid rgba(126, 108, 220, 0.24);
+  background: linear-gradient(160deg, rgba(25, 21, 44, 0.9), rgba(6, 8, 15, 0.94));
+  box-shadow: 0 30px 60px -34px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
+
+/* Contact glow so the ticket sits in the scene instead of floating on black. */
+.ht-glow {
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  bottom: 12%;
+  width: min(680px, 86%);
+  height: 90px;
+  translate: -50% 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    rgba(124, 92, 255, 0.32) 0%,
+    rgba(56, 189, 248, 0.16) 45%,
+    rgba(5, 8, 15, 0) 75%
+  );
+  pointer-events: none;
 }
 
 .ht-tilt {
@@ -131,9 +171,12 @@ const css = `
   border-radius: 10px;
   color: #f6f4fb;
   background:
-    radial-gradient(60% 70% at 0% 30%, rgba(98, 40, 210, .75), transparent 60%),
-    linear-gradient(160deg, #0b0714 0%, #07050c 60%, #0d0618 100%);
-  box-shadow: 0 30px 60px -20px rgba(80, 30, 200, .45);
+    radial-gradient(60% 72% at 0% 26%, rgba(88, 42, 196, .58), transparent 62%),
+    linear-gradient(160deg, #0a0d18 0%, #070a12 58%, #0d0a1c 100%);
+  box-shadow:
+    0 0 0 1px rgba(125, 211, 252, .16),
+    0 26px 60px -26px rgba(0, 0, 0, .8),
+    0 44px 100px -52px rgba(90, 40, 220, .6);
   -webkit-mask:
     radial-gradient(circle 14px at calc(100% - var(--stub)) 0, #0000 97%, #000),
     radial-gradient(circle 14px at calc(100% - var(--stub)) 100%, #0000 97%, #000);
@@ -147,7 +190,7 @@ const css = `
 .ht-grain {
   position: absolute; inset: 0;
   background-image: ${noise};
-  opacity: .7;
+  opacity: .38;
   mix-blend-mode: screen;
   pointer-events: none;
 }

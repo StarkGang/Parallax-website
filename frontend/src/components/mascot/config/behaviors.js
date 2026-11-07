@@ -7,6 +7,13 @@
  *
  * No pixel coordinates live here. The registry measures the element and picks
  * a free spot beside it at runtime.
+ *
+ * VOICE GUIDE (keep new lines in this voice):
+ * - Parallax is a student-built mascot who actually wants you to come to the fest.
+ * - Short, chatty, a little cheeky. Contractions always. One idea per bubble.
+ * - No corporate phrases ("explore our offerings", "take your time", "worth a look").
+ * - Facts stay accurate: pass = both days + up to 3 events, lunch both days,
+ *   add-ons cost extra, fee basis shows on every card, registration is in the portal.
  */
 
 /** On-screen walking speed; MascotModel paces the Walk clip to match it. */
@@ -33,10 +40,11 @@ export const MASCOT_TIMING = {
 export const EXCLUDED_PREFIXES = ['/portal', '/manage', '/login'];
 
 export const GENERAL_TIPS = [
-  'I can point out the parts of the convention worth a closer look.',
-  'Everything on this site comes from the live convention catalogue.',
-  'Take your time — the programme is published and waiting.',
-  'Click any card or section and I will follow along!',
+  'Click any card and I\'ll tag along.',
+  'Everything here is pulled live from the organisers, so no stale info.',
+  'Lost? Same. Try the menu up top.',
+  'I walk around a lot. Don\'t take it personally.',
+  'Psst. The good stuff is usually a scroll away.',
 ];
 
 const COOLDOWN = 12000;
@@ -45,51 +53,52 @@ export const MASCOT_ROUTES = [
   {
     id: 'home',
     match: /^\/$/,
-    line: 'Hover a card below and I will tell you what it is.',
-    ambient: 'One pass, two days. Start wherever your curiosity lands.',
+    line: 'Hey, I\'m your guide! Scroll down, I\'ll show you around.',
+    ambient: 'Two days, one pass. Start wherever looks fun.',
     tips: [
-      'I can point out the edition, the schedule and the competition catalogue.',
-      'The pass includes both days and up to three included events.',
-      'Every event card shows its fee basis before you open it.',
+      'Edition, schedule, competitions. That\'s the whole site, really.',
+      'One pass covers both days and up to three events.',
+      'Every event card shows what it costs before you click in. No surprises.',
+      'Lunch is sorted on both days, by the way.',
     ],
     tour: {
       intro:
-        'Point at any of these three and I will explain it — or let me walk you through them in order.',
+        'Three things to see here. Poke any of them, or let me walk you through in order.',
       outro:
-        'That is the whole map: the edition, the programme and the competitions. Open whichever one you came for.',
+        'And that\'s the map! Go open whichever one made you curious.',
       steps: [
         {
           target: 'home-edition',
-          message: 'First, the edition — what Parallax is, the dates and the host institution.',
+          message: 'First up, the edition. What Parallax is, when it\'s on, and who\'s hosting.',
         },
         {
           target: 'home-schedule',
-          message: 'Second, the programme — both convention days, session by session.',
+          message: 'Next, the schedule. Both days, session by session.',
         },
         {
           target: 'home-events',
-          message: 'And the competition catalogue, where every event lists its fee basis.',
+          message: 'And the competitions. Fees are listed on every card.',
         },
       ],
     },
     behaviors: [
       {
         target: 'home-edition',
-        message: 'Curious about Parallax? Start with the edition.',
+        message: 'New here? Start with this one.',
         action: 'point',
         cooldownMs: 8000,
         maxShows: 99,
       },
       {
         target: 'home-schedule',
-        message: 'Check out the schedule!',
+        message: 'Two days of stuff. Have a look!',
         action: 'point',
         cooldownMs: 8000,
         maxShows: 99,
       },
       {
         target: 'home-events',
-        message: 'Ready to explore events?',
+        message: 'Okay, this is the fun part. Competitions!',
         action: 'point',
         cooldownMs: 8000,
         maxShows: 99,
@@ -99,50 +108,51 @@ export const MASCOT_ROUTES = [
   {
     id: 'events',
     match: /^\/events$/,
-    ambient: 'The catalogue updates live from the organisers.',
+    ambient: 'The organisers update this list live, so check back.',
     tips: [
-      'Filter by category or format when the catalogue gets long.',
-      'Every card shows its fee basis before you open it.',
-      'Registration happens inside the participant portal.',
+      'Too many events? Filter by category or format.',
+      'Fee info is right on the card. Look before you click.',
+      'You register in the participant portal, not here.',
+      'Can\'t pick just one? Your pass covers up to three.',
     ],
     group: {
       prefix: 'event-',
-      message: 'Discover exciting events!',
+      message: 'Pick a fight. I mean, an event.',
       action: 'point',
       cooldownMs: 10000,
       maxShows: 99,
     },
     tour: {
-      intro: 'These cards are the live catalogue. Hover one and I will read you its details.',
-      outro: 'Open any card for the full brief — registration happens after you hold a pass.',
+      intro: 'This is the live catalogue. Hover a card and I\'ll read you the details.',
+      outro: 'Open any card for the full brief. You\'ll need a pass before you can register.',
       steps: [{ group: 'event-', count: 3 }],
     },
   },
   {
     id: 'event-detail',
     match: /^\/events\/[^/]+$/,
-    ambient: 'The full brief is on this page — take your time.',
+    ambient: 'Everything about this event is on this page. Scroll on.',
     tips: [
-      'Every participant needs an active convention pass first.',
-      'Check the team size before you invite your teammates.',
-      'I can point you at the registration entry point.',
+      'You\'ll need an active pass before you can register.',
+      'Check the team size first, then go bug your friends.',
+      'Want the register button? I know where it is.',
     ],
     behaviors: [
       {
         target: 'event-register',
-        message: 'Ready to join the challenge?',
+        message: 'Feeling brave? Hit register.',
         action: 'point',
         cooldownMs: COOLDOWN,
         maxShows: 2,
       },
     ],
     tour: {
-      intro: 'Here is the short version of this page.',
-      outro: 'That is the flow — an active pass first, then this register button.',
+      intro: 'Quick version of this page, coming up.',
+      outro: 'That\'s it. Pass first, then this button.',
       steps: [
         {
           target: 'event-register',
-          message: 'This button is the registration entry point for this event.',
+          message: 'This is where you sign up for the event.',
         },
       ],
     },
@@ -150,56 +160,60 @@ export const MASCOT_ROUTES = [
   {
     id: 'pass',
     match: /^\/pass$/,
-    line: 'One pass, two days, up to three included events.',
-    ambient: 'The pass price and policy are read from the live edition record.',
+    line: 'One pass, two days, up to three events. Simple.',
+    ambient: 'Price and rules here are always the latest ones.',
     tips: [
-      'Add-on events are charged separately from the included allowance.',
-      'Lunch is included on both convention days.',
-      'Pass orders and event choices live in the participant portal.',
+      'Want more than three events? Extras cost a little more.',
+      'Lunch is included on both days. You\'re welcome.',
+      'You buy the pass and pick your events in the participant portal.',
     ],
   },
   {
     id: 'schedule',
     match: /^\/schedule$/,
-    line: 'The full programme, live from the catalogue.',
-    ambient: 'Every session here is a real record the organisers maintain.',
+    line: 'Here\'s the whole programme, straight from the organisers.',
+    ambient: 'Nothing here is made up. The team updates it themselves.',
     tips: [
-      'Open an event from the programme to read its rules and fees.',
-      'The schedule and the event catalogue share one source of truth.',
+      'Tap a session to see the rules and fees.',
+      'If two things clash, that\'s a you-problem. Plan ahead!',
+      'The schedule and the events list always match.',
     ],
   },
   {
     id: 'venue',
     match: /^\/venue$/,
-    line: 'This is where the convention happens.',
-    ambient: 'The map is embedded below — no directions needed.',
-    tips: ['The campus map is on this page.', 'Travel and contact details are in the footer.'],
+    line: 'This is where it all goes down.',
+    ambient: 'The map\'s below. Scroll and you won\'t get lost.',
+    tips: [
+      'Campus map is right on this page.',
+      'Travel and contact details are down in the footer.',
+    ],
   },
   {
     id: 'faq',
     match: /^\/faq$/,
-    line: 'Most questions are answered right here.',
-    ambient: 'If something is missing, the contact desk replies within a day.',
+    line: 'Got questions? Probably answered here already.',
+    ambient: 'Still stuck after this? The organisers reply within a day.',
     tips: [
-      'The pass and registration answers are grouped first.',
-      'Still stuck? Contact the organisers from the contact page.',
+      'Pass and registration questions are right at the top.',
+      'Can\'t find yours? Message the organisers, they don\'t bite.',
     ],
   },
   {
     id: 'contact',
     match: /^\/contact$/,
-    line: 'Need a human? The desk is right here.',
-    ambient: 'The organisers reply within a day on convention business.',
+    line: 'Need a real human? Right this way.',
+    ambient: 'The organisers usually reply within a day.',
     tips: [
-      'Use the contact form for registration or payment questions.',
-      'Pick an inquiry category above to route your message directly.',
-      'Include your registered email so the team can find your record.',
-      'Our student organising committee is standing by!',
+      'Use the form for registration or payment trouble.',
+      'Pick a category first so your message lands with the right person.',
+      'Add the email you registered with, so they can find you fast.',
+      'The student committee is on it. Promise.',
     ],
     behaviors: [
       {
         target: 'contact-topics',
-        message: 'Pick an inquiry category to route your message quickly!',
+        message: 'Pick what this is about, so it reaches the right desk.',
         action: 'point',
         cooldownMs: 8000,
         maxShows: 99,
@@ -207,7 +221,7 @@ export const MASCOT_ROUTES = [
       },
       {
         target: 'contact-name',
-        message: 'Enter your full name here.',
+        message: 'Your name goes here. Full one, please.',
         action: 'point',
         cooldownMs: 10000,
         maxShows: 99,
@@ -215,7 +229,7 @@ export const MASCOT_ROUTES = [
       },
       {
         target: 'contact-message',
-        message: 'Describe your question or issue in detail.',
+        message: 'Tell them what\'s up. A few lines is plenty.',
         action: 'point',
         cooldownMs: 10000,
         maxShows: 99,
@@ -223,7 +237,7 @@ export const MASCOT_ROUTES = [
       },
       {
         target: 'contact-submit',
-        message: 'Hit dispatch when you are ready to send!',
+        message: 'Ready? Hit dispatch!',
         action: 'point',
         cooldownMs: 10000,
         maxShows: 99,
@@ -231,17 +245,17 @@ export const MASCOT_ROUTES = [
       },
     ],
     tour: {
-      intro: 'Let me show you the form field by field.',
-      outro: 'That is it — send it and the desk replies within a day.',
+      intro: 'It\'s a short form. I\'ll walk you through it.',
+      outro: 'Done! Send it and someone will get back to you within a day.',
       steps: [
         {
           target: 'contact-topics',
-          message: 'Pick a category first so your message reaches the right desk.',
+          message: 'Pick a category first. It saves everyone time.',
         },
-        { target: 'contact-name', message: 'Your registered full name goes here.' },
+        { target: 'contact-name', message: 'Name goes here. Same one you registered with.' },
         {
           target: 'contact-message',
-          message: 'Then describe the question in a couple of lines.',
+          message: 'Then tell them what you need in a couple of lines.',
         },
       ],
     },
@@ -249,31 +263,49 @@ export const MASCOT_ROUTES = [
   {
     id: 'team',
     match: /^\/team$/,
-    line: 'This platform was built end to end by students.',
-    ambient: 'Design, frontend, backend and operations — all student work.',
+    line: 'Students built this whole thing. Yes, really.',
+    ambient: 'Hover a face and I will tell you who they are.',
     tips: [
-      'The team page lists who built and runs the convention platform.',
-      'Questions about the build can go to the contact desk.',
+      'These are the people who built and run all of this.',
+      'Hover a card for names. I do the remembering for you.',
+      'Questions about how it was built? Ask through the contact page.',
+    ],
+    group: {
+      prefix: 'team-',
+      message: 'Pick a face, I will introduce them.',
+      action: 'point',
+      cooldownMs: 12000,
+      maxShows: 99,
+    },
+    behaviors: [
+      {
+        target: 'team-midhun-k-m',
+        message: 'That one is the reason I exist. Go say hi.',
+        action: 'point',
+        cooldownMs: 60000,
+        maxShows: 1,
+        priority: 1,
+      },
     ],
   },
   {
     id: 'about',
     match: /^\/about$/,
-    line: 'A different angle changes everything.',
-    ambient: 'The edition, host and venue all come from the live record.',
+    line: 'Change your angle, change the whole picture. That\'s the idea.',
+    ambient: 'Host, dates and venue are all on this page.',
     tips: [
-      'The host institution and dates are on this page.',
-      'The pass and programme are one click away in the navigation.',
+      'Host college and dates are right here.',
+      'Pass and schedule are one click away in the menu.',
     ],
   },
   {
     id: 'not-found',
     match: /.*/,
-    line: 'This page is off the map.',
-    ambient: 'The event catalogue is a good place to get back on track.',
+    line: 'Whoops, you\'ve wandered off the map.',
+    ambient: 'Let\'s get you back. Events list is a good start.',
     tips: [
-      'Try the event catalogue or the homepage.',
-      'Older links may point at events that moved in the programme.',
+      'Try the events page or head back home.',
+      'Old links sometimes break when events move around.',
     ],
   },
 ];

@@ -1,0 +1,214 @@
+/* ==========================================================================
+   INNER PAGE HERO SCENE
+   One full-bleed stack: artwork behind, the page heading in the middle
+   distance, the character cut-out in front. Everything scrubs on scroll.
+   ========================================================================== */
+
+.page-scene-page {
+  position: relative;
+}
+
+.page-scene-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: clamp(600px, 92svh, 960px);
+  background: #070b12;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.page-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* -- far: the scene artwork ------------------------------------------------ */
+
+.page-scene-bg {
+  position: absolute;
+  inset: -6% 0;
+  will-change: transform;
+}
+
+.page-scene-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 45%;
+  display: block;
+  filter: saturate(1.06);
+}
+
+.page-scene-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 9, 16, 0.58) 0%,
+    rgba(6, 9, 16, 0.12) 22%,
+    rgba(6, 9, 16, 0.04) 55%,
+    rgba(6, 9, 16, 0.42) 82%,
+    rgba(6, 9, 16, 0.86) 100%
+  );
+}
+
+/* -- middle: the heading --------------------------------------------------- */
+
+.page-scene-title-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(112px, 15vh, 180px) 6% clamp(170px, 30vh, 320px);
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* A soft pool of shade keeps the headline legible where the character
+   crosses in front of it, without turning the scene back into a panel. */
+.page-scene-title-layer::before {
+  content: '';
+  position: absolute;
+  inset: 6% 0 18%;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(58% 52% at 50% 40%, rgba(5, 8, 15, 0.55) 0%, rgba(5, 8, 15, 0) 72%);
+}
+
+.page-scene-title-layer .page-title {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 !important;
+  min-height: 0 !important;
+  background: none !important;
+  border: 0 !important;
+  text-align: center;
+}
+
+/* The shared heading carries its own backdrop plate; inside the scene the
+   artwork is the backdrop, so that plate is dropped. */
+.page-scene-title-layer .page-title-bg {
+  display: none;
+}
+
+.page-scene-title-layer .page-title-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 0;
+  text-align: center;
+}
+
+.page-scene-title-layer .page-title-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.page-scene-title-layer .page-title-aside {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+}
+
+/* The app pins heading sizes with !important, so the hero claims its own. */
+.page-scene-title-layer .page-title h1 {
+  font-size: clamp(46px, 10.4vw, 148px) !important;
+  line-height: 0.96;
+  letter-spacing: -0.045em;
+  color: #ffffff;
+  text-shadow: 0 22px 60px rgba(0, 0, 0, 0.62);
+}
+
+.page-scene-title-layer .page-title > p {
+  margin: 0;
+  max-width: 54ch;
+  color: rgba(226, 236, 246, 0.9);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+
+.page-scene-title-layer .page-title .mono-note,
+.page-scene-title-layer .page-title > span {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* -- near: the character --------------------------------------------------- */
+
+.page-scene-mascot {
+  position: absolute;
+  z-index: 3;
+  right: 2%;
+  bottom: -4%;
+  width: min(26vw, 340px);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  will-change: transform;
+  filter: drop-shadow(0 30px 60px rgba(0, 0, 0, 0.55));
+}
+
+.page-scene-mascot img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.page-scene-mascot.is-wide {
+  left: 50%;
+  right: auto;
+  bottom: -16%;
+  width: min(60vw, 780px);
+  translate: -50% 0;
+}
+
+.page-scene-fade {
+  position: absolute;
+  z-index: 4;
+  inset: auto 0 0;
+  height: 18%;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(5, 8, 15, 0) 0%, #05080f 100%);
+}
+
+@media (max-width: 900px) {
+  .page-scene-hero {
+    min-height: clamp(520px, 84svh, 720px);
+  }
+
+  .page-scene-title-layer {
+    padding: 104px 16px clamp(170px, 30vh, 260px);
+  }
+
+  .page-scene-title-layer .page-title h1 {
+    font-size: clamp(40px, 12.4vw, 72px) !important;
+  }
+
+  .page-scene-mascot {
+    right: -8%;
+    bottom: -4%;
+    width: min(56vw, 280px);
+  }
+
+  .page-scene-mascot.is-wide {
+    bottom: -12%;
+    width: min(122vw, 620px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-scene-bg,
+  .page-scene-title-layer,
+  .page-scene-mascot {
+    transform: none !important;
+  }
+}

@@ -51,23 +51,44 @@ h3 {
   justify-content: center;
 }
 
-/* FLOATING PILL NAV */
-.nav {
-  position: sticky;
-  top: 14px;
-  z-index: 60;
-  width: min(1320px, calc(100% - 32px));
-  height: 64px;
-  margin: 14px auto 0;
-  padding: 0 14px 0 22px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: rgba(8, 10, 16, 0.92);
-  box-shadow:
-    0 22px 60px -34px rgba(0, 0, 0, 0.95),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
+/* ANGLED NAV: legacy styles removed, see styles/nav.css */
+
+.nav-plate {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 34px;
+}
+
+.nav-plate::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(
+      97deg,
+      rgba(56, 189, 248, 0.22) 0%,
+      rgba(56, 189, 248, 0.05) 40%,
+      rgba(255, 255, 255, 0.04) 68%,
+      rgba(56, 189, 248, 0.12) 100%
+    ),
+    rgba(8, 10, 16, 0.54);
+  clip-path: polygon(20px 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 20px 100%, 0 50%);
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.24))
+    drop-shadow(0 18px 34px rgba(0, 0, 0, 0.55));
+  backdrop-filter: blur(22px) saturate(155%);
+  -webkit-backdrop-filter: blur(22px) saturate(155%);
+}
+
+.nav .brand {
+  flex-shrink: 0;
+  padding-left: 4px;
 }
 
 .brand {
@@ -137,32 +158,129 @@ h3 {
   }
 }
 
+
+
+.nav > .portal-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 8px 0 20px;
+  border-radius: 999px !important;
+  background: #f1f5f9;
+  color: #08090d !important;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    transform 0.3s var(--ease),
+    background-color 0.3s var(--ease);
+}
+
+.nav > .portal-link:hover {
+  background: var(--cyan);
+  color: #08090d !important;
+  transform: translateY(-1px);
+}
+
+.nav > .portal-link .portal-link-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #050811;
+  color: #ffffff;
+  transition:
+    transform 0.3s var(--ease),
+    background-color 0.3s var(--ease);
+}
+
+.nav > .portal-link:hover .portal-link-icon {
+  background: #0284c7;
+  transform: translate(2px, -2px);
+}
+
+/* NAV SEGMENTS */
 .links {
-  gap: 20px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 100%;
 }
 
 .links a {
-  font-size: 12.5px;
-  letter-spacing: 0.01em;
-  transition: color 0.3s var(--ease);
-}
-
-.links .portal-link {
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: #08090d;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  padding: 0 16px;
   font-size: 11.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.13em;
+  line-height: 1;
   text-transform: uppercase;
-  transition: transform 0.4s var(--ease), background-color 0.3s var(--ease);
+  color: rgba(255, 255, 255, 0.6) !important;
+  transition:
+    color 0.2s var(--ease),
+    background-color 0.2s var(--ease);
 }
 
-.links .portal-link:hover {
-  background: var(--cyan);
-  color: #08090d;
-  transform: translateY(-1px);
+.links a + a::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.14);
+  transform: translateY(-50%) skewX(-16deg);
+}
+
+.links a::after {
+  display: none;
+}
+
+.links a:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.links a.active {
+  color: #ffffff !important;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.26), rgba(56, 189, 248, 0.05));
+  box-shadow: inset 0 -2px 0 var(--cyan);
+}
+
+.nav-flag {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-transform: uppercase;
+  color: #fbbf24;
+  white-space: nowrap;
+}
+
+@media (min-width: 921px) and (max-width: 1160px) {
+  .nav-plate {
+    padding: 0 24px;
+  }
+  .links a {
+    padding: 0 11px;
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+  }
 }
 
 /* BUTTONS: pill with a nested icon circle */
@@ -2279,8 +2397,7 @@ h3 {
 }
 
 .about-facts span {
-  font: 9.5px var(--mono);
-  letter-spacing: 0.14em;
+  font: 12px var(--sans);
   color: var(--muted-dark);
 }
 
@@ -2562,19 +2679,39 @@ h3 {
 }
 
 @media (max-width: 920px) {
-  .nav {
-    top: 10px;
-    height: 60px;
-    width: calc(100% - 20px);
-    margin-top: 10px;
-    padding: 0 10px 0 16px;
+  /* legacy mobile nav overrides removed in favor of styles/nav.css */
+  .nav-plate {
+    display: contents;
+  }
+
+  .nav-plate::before {
+    display: none;
+  }
+
+  .nav .brand {
+    padding-left: 0;
+  }
+
+  .nav > .portal-link {
+    order: 2;
+    margin-left: auto;
+    height: 40px;
+    padding: 0 6px 0 14px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+  }
+
+  .nav > .portal-link .portal-link-icon {
+    width: 28px;
+    height: 28px;
   }
 
   .menu-toggle {
+    order: 3;
     display: grid;
     place-items: center;
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
     border: 1px solid var(--line);
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.03);
@@ -2582,14 +2719,16 @@ h3 {
   }
 
   .links {
-    position: absolute;
-    top: calc(100% + 10px);
-    left: 0;
-    right: 0;
+    order: 4;
+    position: fixed;
+    top: 72px;
+    left: 10px;
+    right: 10px;
     display: none;
     flex-direction: column;
     align-items: stretch;
     gap: 2px;
+    height: auto;
     padding: 12px;
     border: 1px solid var(--line-strong);
     border-radius: 22px;
@@ -2602,14 +2741,29 @@ h3 {
   }
 
   .links a {
-    padding: 11px 12px;
+    height: auto;
+    justify-content: flex-start;
+    padding: 12px;
     border-radius: 10px;
-    font-size: 13px;
+    font-size: 11.5px;
+    letter-spacing: 0.13em;
   }
 
-  .links .portal-link {
-    justify-content: center;
-    margin-top: 6px;
+  .links a + a::before {
+    display: none;
+  }
+
+  .links a:hover,
+  .links a.active {
+    box-shadow: none;
+    background: rgba(56, 189, 248, 0.14);
+  }
+
+  .nav-flag {
+    position: static;
+    transform: none;
+    order: 2;
+    margin-left: 8px;
   }
 
   .hero {
@@ -3798,4 +3952,68 @@ h3 {
   font-weight: 500;
   padding: 8px 16px;
   animation: fadeIn 0.2s ease;
+}
+
+
+/* ============================================================
+   QUIET LABELS — no shouted caps, no tracked-out micro type
+   ============================================================ */
+.hero-status-tag, .badge, .badge-sub, .badge-role-pill, .button, .field > span,
+.contact-field-label, .contact-fast-stat span, .mono-note, .sched-legend-item,
+.sched-range-pill, .sched-head-sub, .sched-day-date, .sched-block-time,
+.sched-agenda-time em, .sched-agenda-head span, .sched-gutter-label,
+.sched-foot-note, .schedule-stat-label, .schedule-parallel-badge, .stat-card span,
+.event-meta, .exc-plaque, .exc-eyebrow, .exc-action, .px-card-meta,
+.apple-schedule-kicker, .apple-pass-kicker, .apple-pass-edition, .apple-pass-badge,
+.apple-price-caption, .apple-cap-amount small, .cap-callout small, .apple-day-pill,
+.apple-event-venue, .apple-event-meta-top, .apple-event-status, .card-status-pill,
+.hero-meter-label, .hero-floating-chip, .mascot-bubble-kicker, .boot p, .login-divider,
+.checkin-result > span, .admin-sidebar-heading, .links .portal-link, .day-kicker,
+.lusion-meta-venue, .lusion-status-corner, .lusion-cue-text, .lusion-head-kicker,
+.lusion-intro-badge, .lusion-cta-pill, .pro-price-caption, .pro-pass-badge,
+.ho-facts li, .hero-scrub-meter, .contact-topic-chip {
+  font-family: var(--sans) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-weight: 500 !important;
+}
+
+/* Label chips read as captions, not pills. */
+.badge, .badge-role-pill, .badge-slot, .card-status-pill, .contact-topic-chip,
+.exc-action, .exc-plaque, .hero-floating-chip, .hero-kicker-badge, .hero-reg-status,
+.hero-scrub-meter, .lusion-cta-pill, .lusion-head-kicker, .lusion-intro-badge,
+.lusion-status-corner, .sched-range-pill, .apple-pass-badge, .apple-event-status,
+.skip, .mascot-show, .mascot-hide {
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+/* Status dots and logo keep their colour, lose the neon halo. */
+.brand img.brand-logo-iste, .contact-topic-chip.is-active, .dot-amber, .dot-cyan,
+.dot-lime, .event-dot, .hero-pulse-dot, .status-live-dot {
+  box-shadow: none !important;
+}
+
+.field textarea:focus, .contact-textarea:focus {
+  box-shadow: none !important;
+  border-color: rgba(96, 180, 255, 0.45) !important;
+}
+
+.apple-pass-btn,
+.apple-pass-btn:hover,
+.pro-pass-btn,
+.pro-pass-btn:hover {
+  box-shadow: none !important;
+}
+
+/* Pass-page micro labels sit inside deeper selectors; anchor them to the app root. */
+#root .apple-pass-kicker,
+#root .apple-pass-edition,
+#root .apple-pass-badge,
+#root .apple-price-caption,
+#root .apple-cap-title {
+  font-family: var(--sans) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-weight: 500 !important;
 }

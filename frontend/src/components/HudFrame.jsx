@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import "./HudFrame.css";
 
 /**
- * Scalable 12-slice HUD shell (from (design reference)).
+ * Scalable 12-slice HUD shell (from .reference/scifi-card.html).
  *
  * The artwork is fixed-size slices: corners and crests keep their shape while
  * the thin runs between them stretch. `--s` is derived from the element width

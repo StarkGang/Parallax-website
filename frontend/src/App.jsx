@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowUpRight, Menu, X } from 'lucide-react';
+import { ArrowUpRight, LogIn, Menu, X } from 'lucide-react';
 import { useAuth } from './lib/auth.jsx';
 import { useSite } from './lib/site.jsx';
-import { ThemeCustomizer } from './lib/theme.jsx';
 import { AppErrorBoundary, Button, ErrorBox, Loading } from './components/ui.jsx';
 import { initSmoothScroll, gsap } from './lib/motion.js';
 import { SamaritanBootLoader } from './components/SamaritanBootLoader.jsx';
@@ -60,8 +59,8 @@ const PUBLIC_NAV = [
   ['Meet the Team', '/team'],
 ];
 
-const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
-const ISTE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/ISTE LOGO NO  BG PNG.png`;
+const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
+const ISTE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png`;
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -114,10 +113,51 @@ function NotFound() {
   );
 }
 
+/**
+ * Notched metal strip that runs under the link bar: two fixed corner hooks
+ * plus a stretched middle segment, so the steps keep their depth while the
+ * run scales with the bar.
+ */
+function NavStrip({ className = 'nav-strip' }) {
+  return (
+    <span className={className} aria-hidden="true">
+      <svg
+        className="nav-strip-corner is-left"
+        viewBox="0 0 34 24"
+        preserveAspectRatio="xMinYMid meet"
+        focusable="false"
+      >
+        <path d="M0 0h7v6h27v8H7v8H0z" fill="currentColor" />
+      </svg>
+      <svg
+        className="nav-strip-mid"
+        viewBox="0 0 800 24"
+        preserveAspectRatio="none"
+        focusable="false"
+      >
+        <path
+          d="M0 6h800v8H720v4H640v-4H560v4H480v-4H400v4H320v-4H240v4H160v-4H80v4H0z"
+          fill="currentColor"
+        />
+      </svg>
+      <svg
+        className="nav-strip-corner is-right"
+        viewBox="0 0 34 24"
+        preserveAspectRatio="xMinYMid meet"
+        focusable="false"
+      >
+        <path d="M0 0h7v6h27v8H7v8H0z" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
+
 export default function App() {
   const { user, isStaff, loading: authLoading } = useAuth();
   const site = useSite();
   const [menu, setMenu] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const navSentinelRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -131,6 +171,32 @@ export default function App() {
   useEffect(() => {
     setMenu(false);
   }, [location.pathname]);
+
+  // The site scrolls through Lenis, so a sentinel (not window.scrollY) tells
+  // us when the page has moved past the top 40px.
+  useEffect(() => {
+    const node = navSentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver(([entry]) => setScrolled(!entry.isIntersecting), {
+      threshold: 0,
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!menu) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setMenu(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [menu]);
 
   const chromeHidden = location.pathname.startsWith('/manage') || location.pathname === '/login';
   const [booted, setBooted] = useState(() => {
@@ -186,36 +252,114 @@ export default function App() {
         Skip to content
       </a>
       {!chromeHidden ? (
-        <header className="nav">
-          <Link to="/" className="brand" aria-label={`${site.edition?.name || 'Parallax 2026'} home`}>
-            <img src={ISTE} alt="ISTE" className="brand-logo-iste" />
-            <span className="brand-divider" aria-hidden="true">|</span>
-            <img src={LOGO} alt={site.edition?.name || 'Parallax 2026'} className="brand-logo" />
+        <header className={`nav${scrolled ? ' is-scrolled' : ''}`}>
+          <Link
+            to="/"
+            className="nav-logo"
+            aria-label={`${site.edition?.name || 'Parallax 2026'} home`}
+          >
+            <img src={LOGO} alt={site.edition?.name || 'Parallax 2026'} />
           </Link>
+
+          <nav className="nav-bar" aria-label="Main navigation">
+            <span className="nav-fill" aria-hidden="true" />
+            <span className="nav-wing is-left" aria-hidden="true" />
+            <span className="nav-wing is-right" aria-hidden="true" />
+            <ul className="nav-links">
+              {PUBLIC_NAV.map(([label, to]) => {
+                const isActive =
+                  location.pathname === to || location.pathname.startsWith(`${to}/`);
+                return (
+                  <li key={to}>
+                    <Link to={to} aria-current={isActive ? 'page' : undefined}>
+                      {to === '/pass' ? <span className="nav-tag">One pass</span> : null}
+                      <span>{label}</span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+            <NavStrip />
+          </nav>
+
+          <Link
+            className="nav-cta nav-cta-signin"
+            to={user ? (isStaff ? '/manage' : '/portal') : '/login'}
+          >
+            <LogIn size={16} strokeWidth={1.8} aria-hidden="true" />
+            <span>
+              {authLoading ? 'Portal' : user ? (isStaff ? 'Console' : 'My portal') : 'Sign in'}
+            </span>
+          </Link>
+
+          <Link className="nav-cta nav-cta-pass" to="/pass">
+            <span>Get pass</span>
+          </Link>
+
           <button
-            className="menu-toggle"
+            type="button"
+            className="nav-burger"
             onClick={() => setMenu((value) => !value)}
             aria-label={menu ? 'Close navigation' : 'Open navigation'}
             aria-expanded={menu}
+            aria-controls="nav-overlay"
           >
-            {menu ? <X size={20} strokeWidth={1.6} /> : <Menu size={20} strokeWidth={1.6} />}
+            {menu ? <X size={20} strokeWidth={1.7} /> : <Menu size={20} strokeWidth={1.7} />}
           </button>
-          <nav className={menu ? 'links open' : 'links'} aria-label="Main navigation">
-            {PUBLIC_NAV.map(([label, to]) => (
-              <Link
-                key={to}
-                to={to}
-                className={location.pathname === to || location.pathname.startsWith(`${to}/`) ? 'active' : ''}
-              >
-                {label}
-              </Link>
-            ))}
-            <Link className="portal-link" to={user ? (isStaff ? '/manage' : '/portal') : '/login'}>
-              <span>{authLoading ? 'Portal' : user ? (isStaff ? 'Console' : 'My portal') : 'Sign in'}</span>
-              <span className="portal-link-icon"><ArrowUpRight size={13} strokeWidth={2.4} /></span>
-            </Link>
-          </nav>
         </header>
+      ) : null}
+
+      {!chromeHidden ? (
+        <span ref={navSentinelRef} className="nav-sentinel" aria-hidden="true" />
+      ) : null}
+
+      {!chromeHidden ? (
+        <div className="nav-overlay" id="nav-overlay" hidden={!menu}>
+          <div className="nav-overlay-head">
+            <Link to="/" className="nav-logo" aria-label="Parallax 2026 home">
+              <img src={LOGO} alt={site.edition?.name || 'Parallax 2026'} />
+            </Link>
+            <button
+              type="button"
+              className="nav-overlay-close"
+              onClick={() => setMenu(false)}
+              aria-label="Close navigation"
+            >
+              <X size={20} strokeWidth={1.7} />
+            </button>
+          </div>
+
+          <NavStrip className="nav-overlay-strip" />
+
+          <nav aria-label="Mobile navigation">
+            <ul className="nav-overlay-links">
+              {PUBLIC_NAV.map(([label, to]) => {
+                const isActive =
+                  location.pathname === to || location.pathname.startsWith(`${to}/`);
+                return (
+                  <li key={to}>
+                    <Link
+                      to={to}
+                      aria-current={isActive ? 'page' : undefined}
+                      onClick={() => setMenu(false)}
+                    >
+                      {label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+
+          <Link
+            className="nav-overlay-cta"
+            to={user ? (isStaff ? '/manage' : '/portal') : '/login'}
+            onClick={() => setMenu(false)}
+          >
+            <span>{user ? (isStaff ? 'Open console' : 'My portal') : 'Sign in'}</span>
+            <ArrowUpRight size={16} strokeWidth={2} aria-hidden="true" />
+          </Link>
+        </div>
       ) : null}
 
       <main id="main">
@@ -281,7 +425,6 @@ export default function App() {
       </main>
 
       {!chromeHidden ? <Footer edition={site.edition} /> : null}
-      <ThemeCustomizer />
       <MascotProvider />
     </>
   );

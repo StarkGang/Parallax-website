@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, CheckCircle2, ShieldCheck, Wrench } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ShieldCheck, Wrench } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { Button, Eyebrow, Field, InlineMessage } from '../components/ui.jsx';
 
-const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png`;
+const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
 
 function GoogleIcon() {
   return (
@@ -44,8 +44,7 @@ export default function Login() {
   const navigate = useNavigate();
   const next = params.get('next') || '/portal';
   const errorParam = params.get('error');
-  const [form, setForm] = useState({ email: '', fullName: '' });
-  const [isStaffLogin, setIsStaffLogin] = useState(params.get('staff') === 'true');
+  const [devEmail, setDevEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(errorParam ? (ERROR_MESSAGES[errorParam] || 'Sign-in failed.') : '');
 
@@ -56,26 +55,26 @@ export default function Login() {
     }
   }, [loading, user, next, navigate]);
 
-  const submit = async (event) => {
+  // Dev mode is strictly restricted to local development builds with ?dev=true
+  const isDevMode = import.meta.env.DEV && (params.get('dev') === 'true' || params.get('test') === 'true');
+
+  const submitDevLogin = async (event) => {
     event.preventDefault();
     setBusy(true);
     setError('');
     try {
       const account = await login({
-        email: form.email.trim(),
-        role: isStaffLogin ? 'admin' : 'participant',
-        fullName: form.fullName.trim() || undefined,
+        email: devEmail.trim(),
+        role: 'participant',
       });
       const staff = account?.roles?.some((grant) => grant.role !== 'participant');
       navigate(staff && next === '/portal' ? '/manage' : next, { replace: true });
     } catch (err) {
-      setError(err.message || 'Sign-in failed.');
+      setError(err.message || 'Dev sign-in failed.');
     } finally {
       setBusy(false);
     }
   };
-
-  const isDevMode = params.get('dev') === 'true' || params.get('test') === 'true';
 
   return (
     <section className="login-page">
@@ -88,11 +87,11 @@ export default function Login() {
           <h1>Convention Sign In</h1>
           <p>
             Passes, included events, add-on registrations, team invites and entry tickets live in
-            the portal. Staff credentials open the administrative console.
+            the portal. Authorized staff and organizers are automatically directed to the management console.
           </p>
           <div className="login-points">
             <span>
-              <ShieldCheck size={16} strokeWidth={1.5} /> Secure attendee authentication
+              <ShieldCheck size={16} strokeWidth={1.5} /> Secure Google authentication
             </span>
             <span>
               <CheckCircle2 size={16} strokeWidth={1.5} /> NSSCE Palakkad convention network
@@ -107,12 +106,10 @@ export default function Login() {
       <div className="login-panel">
         <div className="login-card bezel">
           <div className="bezel-core is-padded">
-            <Eyebrow>{isStaffLogin ? 'Staff Access' : 'Sign In'}</Eyebrow>
-            <h2>{isStaffLogin ? 'Staff Console' : 'Access your account'}</h2>
+            <Eyebrow>Single Sign-On</Eyebrow>
+            <h2>Access your account</h2>
             <p className="muted">
-              {isStaffLogin
-                ? 'Enter your staff credentials to access administrative operations.'
-                : 'Sign in with your Google account to access your pass, events, and portal.'}
+              Sign in with your Google account. Attendees will access passes and registrations; organizers will be directed to the admin console.
             </p>
 
             {error ? (
@@ -121,106 +118,34 @@ export default function Login() {
               </div>
             ) : null}
 
-            {!isStaffLogin && (
-              <div className="login-oauth-action" style={{ margin: '24px 0 16px 0' }}>
-                <a
-                  href={`/api/v1/auth/google/login?next=${encodeURIComponent(next)}`}
-                  className="google-sign-in-btn"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '12px',
-                    width: '100%',
-                    padding: '14px 22px',
-                    backgroundColor: '#ffffff',
-                    color: '#1f1f1f',
-                    border: '1px solid #dadce0',
-                    borderRadius: '12px',
-                    fontSize: '15px',
-                    fontWeight: '600',
-                    fontFamily: 'inherit',
-                    textDecoration: 'none',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
-                    transition: 'all 0.2s ease',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <GoogleIcon />
-                  <span>Sign in with Google</span>
-                </a>
-
-                <div style={{ marginTop: '16px', textAlign: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsStaffLogin(true);
-                      setError('');
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--muted)',
-                      font: '12px var(--mono)',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                      textUnderlineOffset: '4px',
-                    }}
-                  >
-                    Staff or organiser sign in →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {isStaffLogin && (
-              <form onSubmit={submit} className="login-form" style={{ marginTop: '20px' }}>
-                <Field label="Staff email address">
-                  <input
-                    type="email"
-                    value={form.email}
-                    onChange={(event) => setForm({ ...form, email: event.target.value })}
-                    placeholder="staff@nssce.ac.in"
-                    autoComplete="email"
-                    required
-                  />
-                </Field>
-                <Field label="Staff full name" hint="Optional, used for console identity.">
-                  <input
-                    value={form.fullName}
-                    onChange={(event) => setForm({ ...form, fullName: event.target.value })}
-                    placeholder="e.g. Coordinator Name"
-                    autoComplete="name"
-                  />
-                </Field>
-                <InlineMessage tone="accent">
-                  Signing in with administrative credentials
-                </InlineMessage>
-                <Button type="submit" disabled={busy} icon={ArrowRight} className="full">
-                  {busy ? 'Verifying…' : 'Sign in to Console'}
-                </Button>
-                <div style={{ marginTop: '12px', textAlign: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsStaffLogin(false);
-                      setError('');
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--muted)',
-                      font: '12px var(--mono)',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                      textUnderlineOffset: '4px',
-                    }}
-                  >
-                    ← Switch to participant sign-in
-                  </button>
-                </div>
-              </form>
-            )}
+            <div className="login-oauth-action" style={{ margin: '28px 0 20px 0' }}>
+              <a
+                href={`/api/v1/auth/google/login?next=${encodeURIComponent(next)}`}
+                className="google-sign-in-btn"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '12px',
+                  width: '100%',
+                  padding: '14px 22px',
+                  backgroundColor: '#ffffff',
+                  color: '#1f1f1f',
+                  border: '1px solid #dadce0',
+                  borderRadius: '9999px',
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  fontFamily: 'inherit',
+                  textDecoration: 'none',
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+                  transition: 'all 0.2s ease',
+                  cursor: 'pointer',
+                }}
+              >
+                <GoogleIcon />
+                <span>Sign in with Google</span>
+              </a>
+            </div>
 
             {isDevMode && (
               <div
@@ -235,29 +160,29 @@ export default function Login() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
                   <Wrench size={14} color="var(--accent)" />
                   <span style={{ font: '11px var(--mono)', color: 'var(--accent)', textTransform: 'uppercase' }}>
-                    Dev / Test Direct Sign-In
+                    Local Dev Only Sign-In
                   </span>
                 </div>
-                <form onSubmit={submit} className="login-form" style={{ marginTop: 0 }}>
+                <form onSubmit={submitDevLogin} className="login-form" style={{ marginTop: 0 }}>
                   <Field label="Test Email">
                     <input
                       type="email"
-                      value={form.email}
-                      onChange={(event) => setForm({ ...form, email: event.target.value })}
+                      value={devEmail}
+                      onChange={(event) => setDevEmail(event.target.value)}
                       placeholder="test@example.com"
                       required
                     />
                   </Field>
                   <Button type="submit" disabled={busy} className="full">
-                    {busy ? 'Signing in…' : 'Direct Test Login'}
+                    {busy ? 'Signing in…' : 'Local Dev Login'}
                   </Button>
                 </form>
               </div>
             )}
 
             <p className="login-legal">
-              By continuing you agree to the convention code of conduct. Student verification
-              and institutional credentials are authenticated in the portal.
+              By continuing you agree to the convention code of conduct.
+              Authentication is securely handled by Google.
             </p>
           </div>
         </div>

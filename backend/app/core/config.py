@@ -116,8 +116,8 @@ class Settings(BaseSettings):
 
     # Auth & login switches
     mfa_enforced: bool = False
-    allow_direct_login: bool = True
-    dev_auth_enabled: bool = True
+    allow_direct_login: bool = False
+    dev_auth_enabled: bool = False
     dev_admin_email: str = "owner@parallax.local"
     dev_participant_email: str = "participant@parallax.local"
 
@@ -330,8 +330,14 @@ class Settings(BaseSettings):
         return bool(self.google_client_id and self.google_client_secret)
 
     @property
+    def is_debug(self) -> bool:
+        return bool(self.debug or self.debug_mode or self.app_debug)
+
+    @property
     def dev_login_available(self) -> bool:
-        return self.allow_direct_login or (self.is_development and self.dev_auth_enabled)
+        if self.is_production:
+            return False
+        return self.is_debug and self.dev_auth_enabled
 
     @property
     def allowed_origins(self) -> list[str]:

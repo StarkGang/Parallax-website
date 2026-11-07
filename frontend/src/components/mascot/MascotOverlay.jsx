@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import MascotCanvas from './MascotCanvas.jsx';
 import SpeechBubble from './SpeechBubble.jsx';
 import { MascotBrain, REST_YAW } from './MascotBrain.js';
 import { TargetRegistry } from './TargetRegistry.js';
+import {
+  MASCOT_EGG_EVENT,
+  formatEggText,
+  pickEasterEgg,
+} from '../MascotEasterEgg.jsx';
 import { resolveRouteBehavior } from './config/behaviors.js';
 
 function computeLayout() {
@@ -24,41 +29,6 @@ function fallbackRest(layout) {
   };
 }
 
-function TargetRing({ target }) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (!target) return undefined;
-    let raf = 0;
-
-    const update = () => {
-      const element = target.el;
-      const ring = ref.current;
-      if (!ring || !element || !element.isConnected) return;
-
-      const rect = element.getBoundingClientRect();
-      const visible =
-        rect.bottom > 84 &&
-        rect.top < window.innerHeight - 8 &&
-        rect.right > 0 &&
-        rect.left < window.innerWidth;
-
-      ring.style.opacity = visible ? '1' : '0';
-      ring.style.transform = `translate3d(${Math.round(rect.left - 6)}px, ${Math.round(rect.top - 6)}px, 0)`;
-      ring.style.width = `${Math.round(rect.width + 12)}px`;
-      ring.style.height = `${Math.round(rect.height + 12)}px`;
-
-      if (visible) raf = requestAnimationFrame(update);
-    };
-
-    update();
-    return () => cancelAnimationFrame(raf);
-  }, [target]);
-
-  if (!target) return null;
-  return <div ref={ref} className="mascot-ring" aria-hidden="true" />;
-}
-
 export default function MascotOverlay({ pathname, settings, onFail }) {
   const [layout, setLayout] = useState(computeLayout);
   const layoutRef = useRef(layout);
@@ -70,11 +40,12 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
   }));
   const [mascotState, setMascotState] = useState('idle');
   const [bubble, setBubble] = useState(null);
-  const [highlight, setHighlight] = useState(null);
   const [hovered, setHovered] = useState(false);
   const [gesture, setGesture] = useState(0);
   const [failed, setFailed] = useState(false);
 
+  const tapCountRef = useRef(0);
+  const eggTimerRef = useRef(null);
   const brainRef = useRef(null);
   const registryRef = useRef(null);
   const settingsRef = useRef(settings);
@@ -102,7 +73,6 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
       lowPower: settingsRef.current.lowPower,
       onPose: setPose,
       onBubble: setBubble,
-      onHighlight: setHighlight,
       onState: setMascotState,
       onGesture: (type = 'wave') => setGesture(`${type}-${Date.now()}`),
     });
@@ -179,6 +149,40 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      if (eggTimerRef.current) clearTimeout(eggTimerRef.current);
+    },
+    [],
+  );
+
+  const speakEgg = useCallback(() => {
+    const text = formatEggText(pickEasterEgg());
+    if (brainRef.current) {
+      brainRef.current.say(text, 'user', 7500);
+      return;
+    }
+    setBubble({ text });
+    if (eggTimerRef.current) clearTimeout(eggTimerRef.current);
+    eggTimerRef.current = setTimeout(() => setBubble(null), 7500);
+  }, []);
+
+  // Keyboard ("midhun", arrows) and swipe triggers from the provider.
+  useEffect(() => {
+    window.addEventListener(MASCOT_EGG_EVENT, speakEgg);
+    return () => window.removeEventListener(MASCOT_EGG_EVENT, speakEgg);
+  }, [speakEgg]);
+
+  // Four taps on the guide turn the usual reaction into an easter egg.
+  const handleMascotTap = () => {
+    brainRef.current?.interact();
+    tapCountRef.current += 1;
+    if (tapCountRef.current < 4) return;
+
+    tapCountRef.current = 0;
+    speakEgg();
+  };
+
   const handleFail = () => {
     setFailed(true);
     onFail?.();
@@ -205,8 +209,6 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
         }}
       >
         <div className={`mascot-float${hovered ? ' is-hovered' : ''}`}>
-          <div className="mascot-ground" aria-hidden="true" />
-
           <MascotCanvas
             facing={pose.facing}
             state={mascotState}
@@ -223,7 +225,7 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
           <div
             className="mascot-hit"
             aria-hidden="true"
-            onClick={() => brainRef.current?.interact()}
+            onClick={handleMascotTap}
             onPointerEnter={() => setHovered(true)}
             onPointerLeave={() => setHovered(false)}
           />
@@ -232,7 +234,7 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
             type="button"
             className="mascot-hide"
             onClick={() => settings.setHidden(true)}
-            aria-label="Hide the Parallax guide"
+            aria-label="Hide the Analogue Interface"
             title="Hide guide"
           >
             <X size={12} strokeWidth={2.4} aria-hidden="true" />
@@ -240,7 +242,6 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
         </div>
       </div>
 
-      <TargetRing target={highlight} />
     </div>
   );
 }

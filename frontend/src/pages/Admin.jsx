@@ -62,7 +62,7 @@ import {
   AdminErrorBoundary,
 } from '../components/ui.jsx';
 
-const LOGO = String(import.meta.env.BASE_URL) + 'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.png';
+const LOGO = String(import.meta.env.BASE_URL) + 'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp';
 
 const NAV = [
   ['Overview', '/manage', LayoutDashboard, true],

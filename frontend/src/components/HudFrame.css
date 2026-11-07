@@ -1,6 +1,6 @@
 /* ==========================================================================
    HUD SHELL — 12-slice scalable container
-   Geometry comes from (design reference): top row 565, bottom 741,
+   Geometry comes from .reference/scifi-card.html: top row 565, bottom 741,
    corners 191 (top) / 262 (bottom), centre crest 771 / 629, side rails 200.
    Everything scales with --s, which HudFrame.jsx derives from the box width.
    ========================================================================== */

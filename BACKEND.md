@@ -416,8 +416,8 @@ All paths are under `/api/v1` unless noted.
 | GET | `/auth/csrf` | Session CSRF token |
 | POST | `/auth/login` | Direct/dev login |
 | GET | `/auth/dev/login` | Development redirect login |
-| GET | `/auth/google/login` · `/auth/google/callback` | OAuth |
-| POST | `/auth/logout` · `/auth/logout-all` | End session(s) |
+| GET | `/auth/google/login`  /  `/auth/google/callback` | OAuth |
+| POST | `/auth/logout`  /  `/auth/logout-all` | End session(s) |
 | GET | `/me` | Identity, roles, profile/verification flags |
 | GET/PATCH | `/me/profile` | Read/update profile |
 | GET | `/me/sessions` | Active sessions |
@@ -438,7 +438,7 @@ All paths are under `/api/v1` unless noted.
 | POST | `/teams/{id}/rotate-invite` | Rotate the invite code (leader) |
 | GET/POST | `/verification` | Read / submit verification |
 | POST | `/verification/confirm` | Confirm institutional email code |
-| GET | `/tickets` · `/tickets/{id}/qr` | Entry tickets and QR |
+| GET | `/tickets`  /  `/tickets/{id}/qr` | Entry tickets and QR |
 | GET | `/payments/{order_id}` | Payment status |
 | POST | `/payments/{order_id}/mock` | Sandbox payment (payments disabled) |
 
@@ -449,18 +449,18 @@ All paths are under `/api/v1` unless noted.
 | GET | `/overview` | Dashboard metrics and recent activity |
 | GET | `/my-permissions` | Effective role and permissions |
 | GET/PATCH | `/settings` | Edition settings |
-| GET/POST | `/policies` · POST `/policies/check` | Version and validate policy |
-| GET/POST | `/categories` · PATCH `/categories/{id}` | Category management |
-| GET/POST | `/events` · GET/PATCH `/events/{id}` | Catalogue management |
+| GET/POST | `/policies`  /  POST `/policies/check` | Version and validate policy |
+| GET/POST | `/categories`  /  PATCH `/categories/{id}` | Category management |
+| GET/POST | `/events`  /  GET/PATCH `/events/{id}` | Catalogue management |
 | GET/POST/DELETE | `/icons` | Icon library |
-| GET | `/users` · PATCH `/users/{id}/status` · POST `/users/{id}/reset-mfa` | User administration |
-| GET/POST | `/memberships` · POST `/staff-invites` | Staff access |
+| GET | `/users`  /  PATCH `/users/{id}/status`  /  POST `/users/{id}/reset-mfa` | User administration |
+| GET/POST | `/memberships`  /  POST `/staff-invites` | Staff access |
 | GET | `/registrations` | Registration records |
-| GET | `/payments` · GET/POST `/refunds` | Finance ledger |
-| GET | `/verifications` · GET `/verifications/{id}/document` · POST `/verifications/{id}/decide` | Review queue |
+| GET | `/payments`  /  GET/POST `/refunds` | Finance ledger |
+| GET | `/verifications`  /  GET `/verifications/{id}/document`  /  POST `/verifications/{id}/decide` | Review queue |
 | GET/POST/PATCH/DELETE | `/announcements` | Bulletin |
 | GET | `/audit` | Audit log |
-| POST | `/checkin` · GET `/recent-checkins` · GET `/attendance` | Door desk |
+| POST | `/checkin`  /  GET `/recent-checkins`  /  GET `/attendance` | Door desk |
 
 ### Webhooks
 

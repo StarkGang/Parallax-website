@@ -455,71 +455,36 @@ async def user_service_roles(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
 
 
 @router.get("/dev/login")
-
 async def dev_login(
-
     request: Request,
-
     role: str = Query("participant", pattern="^(participant|admin)$"),
-
     next: str = Query("/portal"),
-
     db: AsyncSession = Depends(get_db),
-
 ) -> Response:
-
     settings = get_settings()
-
     if not settings.dev_login_available:
-
-        raise NotFound("Not available.")
-
+        raise NotFound("Dev login is disabled. Please sign in with Google.")
     email = settings.dev_admin_email if role == "admin" else settings.dev_participant_email
-
     claims = {
-
         "sub": f"dev-{role}-{email}",
-
         "email": email,
-
         "email_verified": True,
-
-        "name": "Convention Owner" if role == "admin" else "Aparna Menon",
-
+        "name": "Convention Owner" if role == "admin" else "Dev Participant",
         "picture": None,
-
     }
-
     user, _ = await user_service.upsert_google_user(db, claims=claims, request=request)
-
     if role == "admin":
-
         await ensure_dev_admin(db, user)
-
     else:
-
         await ensure_dev_participant(db, user)
-
     session, token = await create_session(db, user, request, is_staff=role == "admin")
-
     if role == "admin":
-
-        # Local preview only: the seeded owner has no authenticator enrolled, so the
-
-        # dev session starts elevated. /auth/dev/login does not exist outside development.
-
         session.auth_level = "staff_mfa"
-
         session.mfa_verified_at = datetime.now(UTC)
-
     await db.commit()
-
     target = valid_next(next)
-
     response = RedirectResponse(f"{settings.frontend_origin}{target}", status_code=302)
-
     set_session_cookie(response, token, is_staff=role == "admin")
-
     return response
 
 
@@ -1004,18 +969,23 @@ async def direct_login(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     settings = get_settings()
-    if not settings.allow_direct_login and not settings.is_development and not settings.is_test:
-        raise NotFound("Direct login is disabled.")
+    # Direct login is only enabled when debug mode is explicitly set in a non-production environment
+    if not (settings.dev_login_available and settings.allow_direct_login):
+        raise NotFound("Direct login is disabled. Please sign in with Google.")
     email = payload.email.strip().lower()
     claims = {
-        "sub": f"google-{email}",
+        "sub": f"dev-{email}",
         "email": email,
         "email_verified": True,
         "name": payload.full_name or email.split("@")[0],
         "picture": None,
     }
     user, _ = await user_service.upsert_google_user(db, claims=claims, request=request)
-    if payload.role == "admin" or (settings.bootstrap_owner_email and email == settings.bootstrap_owner_email.lower()):
+    # Security: Do NOT grant admin based on client payload.role!
+    # Admin is ONLY granted if email matches configured bootstrap owner or admin email.
+    is_owner = bool(settings.bootstrap_owner_email and email == settings.bootstrap_owner_email.lower())
+    is_admin_configured = bool(settings.admin_email and email == settings.admin_email.lower())
+    if is_owner or is_admin_configured:
         await ensure_dev_admin(db, user)
     await user_service.apply_bootstrap_and_invites(db, user, request=request)
     roles = await user_service_roles(db, user.id)

@@ -21,9 +21,19 @@ export function readPageContext() {
 
   const title = textOf('h1', main);
 
+  const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
+
+  // Keep track of whether a heading is on screen right now: the guide talks
+  // about what the reader can see, not about the top of a long page.
   const headings = [...main.querySelectorAll('h2, h3')]
-    .map((node) => clean(node.textContent))
-    .filter((value) => value.length > 2 && value.length < 90);
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        text: clean(node.textContent),
+        visible: rect.bottom > 0 && rect.top < viewportHeight * 0.92,
+      };
+    })
+    .filter(({ text }) => text.length > 2 && text.length < 90);
 
   const targets = [...main.querySelectorAll('[data-mascot-target]')].map((element) => ({
     id: element.getAttribute('data-mascot-target'),
@@ -38,7 +48,11 @@ export function readPageContext() {
     links: main.querySelectorAll('a[href]').length,
   };
 
-  return { title, headings: [...new Set(headings)].slice(0, 8), targets, counts };
+  const uniqueHeadings = headings.filter(
+    (heading, index) => headings.findIndex((other) => other.text === heading.text) === index,
+  );
+
+  return { title, headings: uniqueHeadings.slice(0, 10), targets, counts };
 }
 
 /** One sentence about the page, drawn from its own content. */
@@ -52,7 +66,9 @@ export function contextLine(context, routeLine = '') {
   }
 
   if (headings.length) {
-    const heading = headings[Math.floor(Math.random() * headings.length)];
+    const onScreen = headings.filter((heading) => heading.visible);
+    const pool = onScreen.length ? onScreen : headings;
+    const heading = pool[Math.floor(Math.random() * pool.length)].text;
     const short = heading.length > 46 ? `${heading.slice(0, 44)}…` : heading;
     return `${short} — that is what this part of the page covers.`;
   }
