@@ -1,5 +1,6 @@
 """Application factory: middleware, routers, lifespan and health checks."""
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 
@@ -23,8 +24,47 @@ from app.db.base import Base
 logger = get_logger("app")
 
 
+_bootstrap_lock = asyncio.Lock()
+_bootstrapped = False
+
+
+async def ensure_db_initialized() -> None:
+    global _bootstrapped
+    if _bootstrapped:
+        return
+    async with _bootstrap_lock:
+        if _bootstrapped:
+            return
+        await _bootstrap_database()
+        _bootstrapped = True
+
+
+async def _bootstrap_database() -> None:
+    settings = get_settings()
+    from app.db.session import get_engine
+    from app.seed import seed_if_empty
+    import app.models  # noqa: F401 - ensure all tables are registered on Base.metadata
+
+    try:
+        async with get_engine().begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        logger.warning("schema_init_failed", error=str(exc))
+
+    try:
+        async with session_scope() as db:
+            from app.services.system_settings import seed_system_settings
+
+            await seed_system_settings(db)
+            await seed_if_empty(db)
+    except Exception as exc:  # seeding must never stop the API from booting
+        logger.warning("seed_failed", error=type(exc).__name__)
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            await ensure_db_initialized()
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         request_id_ctx.set(request_id)
         response: Response = await call_next(request)
@@ -94,34 +134,11 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def _bootstrap_local_dev() -> None:
-    settings = get_settings()
-    from app.db.session import get_engine
-    from app.seed import seed_if_empty
-
-    if settings.auto_create_tables:
-        try:
-            async with get_engine().begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-        except Exception as exc:
-            logger.warning("schema_init_failed", error=str(exc))
-
-    try:
-        async with session_scope() as db:
-            from app.services.system_settings import seed_system_settings
-
-            await seed_system_settings(db)
-            if settings.seed_demo_data or settings.is_development:
-                await seed_if_empty(db)
-    except Exception as exc:  # seeding must never stop the API from booting
-        logger.warning("seed_failed", error=type(exc).__name__)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(debug=settings.app_debug, json_logs=not settings.is_development)
-    await _bootstrap_local_dev()
+    await ensure_db_initialized()
     logger.info("api_started", env=settings.app_env, payments=settings.payments_enabled)
     yield
     await dispose_engine()
