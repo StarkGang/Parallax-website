@@ -40,7 +40,7 @@ async def seats_taken(db: AsyncSession, event_ids: list[uuid.UUID]) -> dict[uuid
                 select(Registration.event_id, func.count(Registration.id))
                 .where(
                     Registration.event_id.in_(event_ids),
-                    Registration.status.in_(["confirmed", "reserved"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending_verification"]),
                 )
                 .group_by(Registration.event_id)
             )

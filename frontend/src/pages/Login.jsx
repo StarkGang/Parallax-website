@@ -169,7 +169,7 @@ export default function Login() {
                       type="email"
                       value={devEmail}
                       onChange={(event) => setDevEmail(event.target.value)}
-                      placeholder="test@example.com"
+                      aria-label="test@example.com" placeholder="test@example.com"
                       required
                     />
                   </Field>

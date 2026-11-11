@@ -24,11 +24,11 @@ import {
   Utensils,
 } from 'lucide-react';
 import { authApi, portalApi, publicApi } from '../lib/api.js';
-import { ISTE, LOGO, NSSCE } from './Public.jsx';
+import { ISTE, LOGO, NSSCE, RegistrationPricing } from './Public.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { useTheme } from '../lib/theme.jsx';
-import { date, dateRange, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
+import { date, dateRange, dateTime, dayLabel, initials, money, percent, time } from '../lib/format.js';
 import {
   Badge,
   Button,
@@ -71,7 +71,7 @@ function loadRazorpay() {
   });
 }
 
-async function openRazorpay(order, user) {
+async function openRazorpay(order, user, verifyPayment) {
   const Razorpay = await loadRazorpay();
   return new Promise((resolve, reject) => {
     const checkout = new Razorpay({
@@ -83,7 +83,14 @@ async function openRazorpay(order, user) {
       description: 'Convention pass',
       prefill: { email: user?.email, name: user?.fullName },
       theme: { color: '#38bdf8' },
-      handler: () => resolve(true),
+      handler: async (response) => {
+        try {
+          await verifyPayment(response);
+          resolve(true);
+        } catch (error) {
+          reject(error);
+        }
+      },
       modal: { ondismiss: () => resolve(false) },
     });
     try {
@@ -367,6 +374,8 @@ export function PortalPass() {
   const { editionId, policy } = useSite();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const registration = useAsync(() => publicApi.registrationPolicy(), [], { enabled: true });
+  const participantProfile = useAsync(() => authApi.profile(), [user?.id], { enabled: Boolean(user) });
   const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
   const [order, setOrder] = useState(null);
   const [busy, setBusy] = useState('');
@@ -396,16 +405,34 @@ export function PortalPass() {
       if (order.mock) {
         await portalApi.mockPay(editionId, order.orderId);
       } else {
-        const paid = await openRazorpay(order, user);
+        const paid = await openRazorpay(order, user, (response) =>
+          portalApi.verifyPayment(editionId, order.orderId, response),
+        );
         if (!paid) {
           setMessage({ tone: 'info', text: 'Payment window closed. The order is still open.' });
           setBusy('');
           return;
         }
-        for (let attempt = 0; attempt < 6; attempt += 1) {
+        let settled = false;
+        for (let attempt = 0; attempt < 10; attempt += 1) {
           const status = await portalApi.payment(editionId, order.orderId);
-          if (status.data?.status === 'paid') break;
+          if (status.data?.status === 'paid') {
+            settled = true;
+            break;
+          }
+          if (status.data?.status === 'failed' || status.data?.status === 'expired') {
+            throw new Error('Payment was not completed. You can start a new order.');
+          }
           await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        if (!settled) {
+          await pass.reload();
+          setMessage({
+            tone: 'info',
+            text: 'Payment confirmation is still processing. Refresh this page shortly; the signed gateway webhook will update your pass.',
+          });
+          setBusy('');
+          return;
         }
       }
       await pass.reload();
@@ -422,6 +449,12 @@ export function PortalPass() {
   return (
     <>
       <SectionHead kicker="Convention Pass" title="One pass, full access" />
+      <RegistrationPricing policy={registration.data?.data} profile={participantProfile.data?.data} user={user} />
+      {registration.data?.data?.registrationOpen === false ? (
+        <InlineMessage tone="info">
+          Registrations open on {date(registration.data.data.registrationUnlockAt)} at {time(registration.data.data.registrationUnlockAt)} IST.
+        </InlineMessage>
+      ) : null}
       {pass.loading ? <Loading label="Loading pass" rows={1} /> : null}
       {pass.error ? <ErrorBox error={pass.error} onRetry={pass.reload} /> : null}
       {!pass.loading && passData ? (
@@ -469,7 +502,7 @@ export function PortalPass() {
             <div>
               <Eyebrow>STEP 01</Eyebrow>
               <h2>Buy the convention pass</h2>
-              <p className="buy-price">{money(policy?.passPricePaise)}</p>
+              <p className="buy-price">{policy?.passPricePaise == null ? 'Price shown in registration rates above' : money(policy.passPricePaise)}</p>
             </div>
             <CreditCard size={40} strokeWidth={1} />
           </div>
@@ -493,7 +526,7 @@ export function PortalPass() {
           </ul>
           {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
           {!order ? (
-            <Button onClick={createOrder} disabled={busy === 'order'} icon={ArrowRight}>
+            <Button onClick={createOrder} disabled={busy === 'order' || registration.data?.data?.registrationOpen === false || !user?.profileComplete} icon={ArrowRight}>
               {busy === 'order' ? 'Creating order' : 'Create payment order'}
             </Button>
           ) : (
@@ -963,18 +996,23 @@ export function PortalTickets() {
   };
 
   const downloadQr = async (ticket) => {
+    let objectUrl = null;
     try {
       const url = portalApi.ticketQrUrl(editionId, ticket.id, effectiveQrAccent);
       const res = await fetch(url);
+      // fetch() resolves on 4xx/5xx, so check before treating the body as an image.
+      if (!res.ok) throw new Error(`QR request failed (${res.status})`);
       const blob = await res.blob();
+      objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      a.href = objectUrl;
       a.download = `parallax-pass-${ticket.token}-${effectiveQrAccent}.svg`;
       a.click();
-      URL.revokeObjectURL(a.href);
       setMessage({ tone: 'success', text: `Pass QR code downloaded (${effectiveQrAccent} theme).` });
     } catch {
       setMessage({ tone: 'error', text: 'Could not download QR code.' });
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     }
   };
 
@@ -1033,7 +1071,7 @@ export function PortalTickets() {
               </div>
               <h2 className="badge-name">{prof.fullName || user?.fullName || 'Convention Delegate'}</h2>
               <p className="badge-college">
-                {prof.collegeName || 'NSS College of Engineering, Palakkad'}
+                {prof.collegeName || 'Convention Delegate'}
               </p>
               {prof.branch || prof.course ? (
                 <p className="badge-dept">
@@ -1223,7 +1261,7 @@ export function PortalTeams() {
               <input
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder="Vector Five"
+                aria-label="Vector Five" placeholder="Vector Five"
                 maxLength={100}
               />
             </Field>
@@ -1248,7 +1286,7 @@ export function PortalTeams() {
             <input
               value={joinCode}
               onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-              placeholder="A1B2C3D4"
+              aria-label="A1B2C3D4" placeholder="A1B2C3D4"
               maxLength={16}
             />
           </Field>
@@ -1443,12 +1481,12 @@ export function PortalVerification() {
             </select>
           </Field>
           {method === 'college_email' ? (
-            <Field label="Institutional email" hint="Must use an accepted college domain.">
+            <Field label="Institutional email" hint="Your college, polytechnic or student email address.">
               <input
                 type="email"
                 value={institutionEmail}
                 onChange={(event) => setInstitutionEmail(event.target.value)}
-                placeholder="you@college.ac.in"
+                aria-label="you@college.ac.in" placeholder="you@college.ac.in"
               />
             </Field>
           ) : null}
@@ -1491,6 +1529,8 @@ export function PortalVerification() {
 
 export function PortalProfile() {
   const profile = useAsync(() => authApi.profile(), []);
+  const branchOptions = useAsync(() => publicApi.profileOptions('branch'), [], { enabled: true });
+  const collegeOptions = useAsync(() => publicApi.profileOptions('college'), [], { enabled: true });
   const sessions = useAsync(() => authApi.sessions(), []);
   const { user, reload, logout } = useAuth();
   const navigate = useNavigate();
@@ -1505,11 +1545,15 @@ export function PortalProfile() {
         fullName: data.fullName || '',
         phone: data.phone || '',
         collegeName: data.collegeName || '',
+        customCollegeName: '',
         universityName: data.universityName || '',
         course: data.course || '',
+        educationLevel: data.educationLevel || data.course || '',
+        isteMember: Boolean(data.isteMember),
+        accommodationNeeded: Boolean(data.accommodationNeeded),
+        privacyConsent: Boolean(data.privacyConsent),
         branch: data.branch || '',
         yearOfStudy: data.yearOfStudy || '',
-        studentIdentifier: '',
         institutionEmail: data.institutionEmail || '',
       });
     }
@@ -1517,22 +1561,47 @@ export function PortalProfile() {
 
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
+  const uploadDocument = async (kind, file) => {
+    if (!file) return;
+    setBusy(`upload:${kind}`);
+    setMessage(null);
+    try {
+      const body = new FormData();
+      body.append('kind', kind);
+      body.append('file', file);
+      await authApi.uploadProfileDocument(body);
+      await Promise.all([profile.reload(), reload()]);
+      setMessage({ tone: 'success', text: kind === 'college_id' ? 'College ID uploaded.' : 'ISTE proof uploaded.' });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
+
   const save = async (event) => {
     event.preventDefault();
     setBusy('save');
     setMessage(null);
     try {
+      const resolvedCollege =
+        form.collegeName === 'Other / Custom College' && form.customCollegeName?.trim()
+          ? form.customCollegeName.trim()
+          : form.collegeName;
+
       const payload = {
         fullName: form.fullName,
         phone: form.phone || null,
-        collegeName: form.collegeName,
+        collegeName: resolvedCollege,
         universityName: form.universityName,
-        course: form.course,
+        educationLevel: form.educationLevel,
+        isteMember: form.isteMember,
+        accommodationNeeded: form.accommodationNeeded,
+        privacyConsent: form.privacyConsent,
         branch: form.branch,
         yearOfStudy: form.yearOfStudy ? Number(form.yearOfStudy) : null,
         institutionEmail: form.institutionEmail || null,
       };
-      if (form.studentIdentifier) payload.studentIdentifier = form.studentIdentifier;
       await authApi.updateProfile(payload);
       await Promise.all([profile.reload(), reload()]);
       setMessage({ tone: 'success', text: 'Profile saved.' });
@@ -1563,35 +1632,53 @@ export function PortalProfile() {
             <Field label="Phone" hint="International format, e.g. +919876543210">
               <input value={form.phone} onChange={(event) => update('phone', event.target.value)} />
             </Field>
-            <Field label="College">
-              <input value={form.collegeName} onChange={(event) => update('collegeName', event.target.value)} />
+            <Field
+              label="College name"
+              hint="Select from suggestions or enter any custom college / polytechnic name (state-wide event)."
+            >
+              <input
+                list="college-options"
+                value={form.collegeName}
+                onChange={(event) => update('collegeName', event.target.value)}
+                placeholder="Search or enter your college / polytechnic name"
+                required
+              />
+              <datalist id="college-options">
+                {(collegeOptions.data?.data || []).map((name) => <option key={name} value={name} />)}
+              </datalist>
             </Field>
+            {form.collegeName === 'Other / Custom College' && (
+              <Field label="Custom institution name" hint="Type the official name of your institution.">
+                <input
+                  value={form.customCollegeName || ''}
+                  onChange={(event) => update('customCollegeName', event.target.value)}
+                  placeholder="e.g. Government Engineering College, Wayanad"
+                  required
+                />
+              </Field>
+            )}
             <Field label="University">
               <input value={form.universityName} onChange={(event) => update('universityName', event.target.value)} />
             </Field>
-            <Field label="Course">
-              <input value={form.course} onChange={(event) => update('course', event.target.value)} />
+            <Field label="Education level">
+              <select value={form.educationLevel} onChange={(event) => update('educationLevel', event.target.value)} required>
+                <option value="">Choose your education level</option>
+                <option value="B.Tech">B.Tech</option>
+                <option value="Polytechnic">Polytechnic</option>
+              </select>
             </Field>
-            <Field label="Branch">
-              <input value={form.branch} onChange={(event) => update('branch', event.target.value)} />
+            <Field label="Branch" hint="Select a previous entry or type a new one.">
+              <input list="branch-options" value={form.branch} onChange={(event) => update('branch', event.target.value)} required />
+              <datalist id="branch-options">{(branchOptions.data?.data || []).map((name) => <option key={name} value={name} />)}</datalist>
             </Field>
             <Field label="Year of study">
               <input
                 type="number"
                 min="1"
-                max="6"
+                max="4"
                 value={form.yearOfStudy}
                 onChange={(event) => update('yearOfStudy', event.target.value)}
-              />
-            </Field>
-            <Field
-              label="Student ID"
-              hint={profile.data?.data?.studentIdentifierLast4 ? `Saved ending ${profile.data.data.studentIdentifierLast4}` : 'Required for verification'}
-            >
-              <input
-                value={form.studentIdentifier}
-                onChange={(event) => update('studentIdentifier', event.target.value)}
-                placeholder="Leave blank to keep the saved value"
+                required
               />
             </Field>
             <Field label="Institutional email">
@@ -1602,11 +1689,42 @@ export function PortalProfile() {
               />
             </Field>
           </FieldGrid>
+          <fieldset className="profile-preferences">
+            <legend>Registration details</legend>
+            <label><input type="checkbox" checked={form.isteMember} onChange={(event) => update('isteMember', event.target.checked)} /> I am an ISTE member</label>
+            <label><input type="checkbox" checked={form.accommodationNeeded} onChange={(event) => update('accommodationNeeded', event.target.checked)} /> I need accommodation for the 8th</label>
+          </fieldset>
+          <div className="profile-document-grid">
+            <Field label="College ID" hint={profile.data?.data?.collegeIdUploaded ? 'ID uploaded.' : 'Required. JPEG, PNG, WebP or PDF; up to 5 MB.'}>
+              <label className="file-action">Choose file<input type="file" accept="image/*,application/pdf" onChange={(event) => uploadDocument('college_id', event.target.files?.[0])} /></label>
+              <label className="file-action mobile-capture">Take photo<input type="file" accept="image/*,application/pdf" capture="environment" onChange={(event) => uploadDocument('college_id', event.target.files?.[0])} /></label>
+            </Field>
+            {form.isteMember ? <Field label="ISTE membership proof" hint={profile.data?.data?.isteProofUploaded ? 'Proof uploaded.' : 'Required for ISTE member pricing.'}>
+              <label className="file-action">Choose file<input type="file" accept="image/*,application/pdf" onChange={(event) => uploadDocument('iste_proof', event.target.files?.[0])} /></label>
+              <label className="file-action mobile-capture">Take photo<input type="file" accept="image/*,application/pdf" capture="environment" onChange={(event) => uploadDocument('iste_proof', event.target.files?.[0])} /></label>
+            </Field> : null}
+          </div>
+          <p className="privacy-notice">We use your student details and ID only for event eligibility and entry. Documents are stored privately and deleted 365 days after upload unless retention is legally required.</p>
+          <label className="privacy-consent"><input type="checkbox" checked={form.privacyConsent} onChange={(event) => update('privacyConsent', event.target.checked)} required /> I have read the privacy notice and consent to this use of my information.</label>
           <p className="muted">Email {profile.data?.data?.email} is the signed-in identity and cannot be edited here.</p>
           <Button busy={busy === 'save'} type="submit" disabled={busy === 'save'} icon={Check}>
             {busy === 'save' ? 'Saving' : 'Save profile'}
           </Button>
         </form>
+      </Panel>
+
+      <Panel>
+        <Eyebrow>ACCOUNT DATA</Eyebrow>
+        <p className="muted">You can request deletion of your profile, uploaded student documents, and account identity. Payment records required for financial audit remain anonymized.</p>
+        <Button variant="ghost" onClick={async () => {
+          if (!window.confirm('Request deletion of your account data and uploaded documents?')) return;
+          try {
+            await authApi.requestDeletion();
+            window.alert('Deletion request sent to the event administrators.');
+          } catch (error) {
+            window.alert(error.message);
+          }
+        }}>Request account deletion</Button>
       </Panel>
 
       <Panel>

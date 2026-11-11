@@ -193,6 +193,7 @@ class Refund(Base, UUIDPrimaryKey, Timestamps):
     requested_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     approved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     gateway_refund_id: Mapped[str | None] = mapped_column(String(80), unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

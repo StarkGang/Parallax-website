@@ -5,8 +5,12 @@ from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient):
+async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient, db_session):
+    from support import ensure_eligible_participant, open_registration
+
     client = participant_client
+    await open_registration(db_session)
+    await ensure_eligible_participant(db_session, "participant@parallax.local")
 
     # Get current edition
     ed_resp = await client.get("/api/v1/public/editions/current")
@@ -19,14 +23,15 @@ async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient
 
     # 2. Create pass order
     order_resp = await client.post(f"/api/v1/editions/{edition_id}/pass/order")
-    assert order_resp.status_code == 200
+    assert order_resp.status_code == 200, order_resp.text
     order_data = order_resp.json()["data"]
     order_id = order_data["orderId"]
-    assert order_data["amountPaise"] == 35000
+    # Non-ISTE B.Tech participants pay the stored non-ISTE rate.
+    assert order_data["amountPaise"] == 59900
 
     # 3. Pay for order via mock
     pay_resp = await client.post(f"/api/v1/editions/{edition_id}/payments/{order_id}/mock")
-    assert pay_resp.status_code == 200
+    assert pay_resp.status_code == 200, pay_resp.text
     assert pay_resp.json()["data"]["paid"] is True
 
     # 4. Check pass is now active

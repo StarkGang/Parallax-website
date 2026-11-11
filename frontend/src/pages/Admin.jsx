@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { BrowserQRCodeReader } from '@zxing/browser';
 import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   ArrowUpRight,
@@ -37,6 +38,8 @@ import {
   paise,
   rupees,
   toLocalInput,
+  toISTInput,
+  fromISTInput,
 } from '../lib/format.js';
 import {
   Badge,
@@ -359,7 +362,10 @@ export function AdminOverview() {
           {recent.length ? (
             <div className="registration-list">
               {recent.slice(0, 8).map((row, index) => (
-                <div className="registration-row" key={`${row.id || row.registrationNumber || index}`}>
+                <div
+                  className="registration-row"
+                  key={row.id || row.registrationNumber || `${row.userName}-${row.eventTitle}`}
+                >
                   <span className="event-dot" />
                   <div>
                     <b>{row.userName || row.participantName || row.name || 'Participant'}</b>
@@ -623,7 +629,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
             <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
               <input
                 type="url"
-                placeholder="https://... or click Upload Banner"
+                aria-label="Banner image URL" placeholder="https://... or click Upload Banner"
                 value={form.bannerUrl || ''}
                 onChange={(e) => set('bannerUrl', e.target.value)}
                 style={{ flex: 1 }}
@@ -836,7 +842,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           rows="2"
           value={form.summary}
           onChange={(event) => set('summary', event.target.value)}
-          placeholder="Brief 1-2 sentence overview for cards and public previews"
+          aria-label="Short event summary" placeholder="Brief 1-2 sentence overview for cards and public previews"
           required
         />
       </Field>
@@ -845,7 +851,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           rows="4"
           value={form.descriptionMd}
           onChange={(event) => set('descriptionMd', event.target.value)}
-          placeholder="Write in Markdown. Detailed breakdown of the event, schedule, and guidelines..."
+          aria-label="Event details in Markdown" placeholder="Write in Markdown. Detailed breakdown of the event, schedule, and guidelines..."
         />
       </Field>
       <Field label="Rules (Markdown)" className="full-span" hint="Code of conduct and evaluation criteria">
@@ -853,7 +859,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           rows="3"
           value={form.rulesMd}
           onChange={(event) => set('rulesMd', event.target.value)}
-          placeholder="1. General guidelines&#10;2. Round structure and timing&#10;3. Judging criteria..."
+          aria-label="Round guidelines, one step per line" placeholder="1. General guidelines&#10;2. Round structure and timing&#10;3. Judging criteria..."
         />
       </Field>
       <Field label="Prizes (Markdown)" className="full-span" hint="Cash rewards, certificates, or perks">
@@ -861,7 +867,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           rows="2"
           value={form.prizesMd}
           onChange={(event) => set('prizesMd', event.target.value)}
-          placeholder="1st Prize: ₹10,000&#10;2nd Prize: ₹5,000&#10;Certificates for all finalists"
+          aria-label="Prize breakdown" placeholder="1st Prize: ₹10,000&#10;2nd Prize: ₹5,000&#10;Certificates for all finalists"
         />
       </Field>
       <div className="toggle-row">
@@ -1321,7 +1327,7 @@ export function AdminPolicy() {
             <input value={form.gstNote} onChange={(event) => set('gstNote', event.target.value)} />
           </Field>
           <Field label="Reason for change" className="full-span">
-            <input value={form.reason} onChange={(event) => set('reason', event.target.value)} placeholder="Explain this version" />
+            <input value={form.reason} onChange={(event) => set('reason', event.target.value)} aria-label="Explain this version" placeholder="Explain this version" />
           </Field>
         </FieldGrid>
         <div className="toggle-row">
@@ -1408,7 +1414,7 @@ export function AdminRegistrations() {
               setQuery(e.target.value);
               setPage(1);
             }}
-            placeholder="Name, email, PX-..., or event title..."
+            aria-label="Name, email, PX-..., or event title..." placeholder="Name, email, PX-..., or event title..."
           />
         </Field>
         <Field label="Status filter">
@@ -1498,10 +1504,39 @@ export function AdminUsers() {
   const users = useAsync(() => adminApi.users(editionId, { q: debounced }), [editionId, debounced], {
     enabled: Boolean(editionId),
   });
+  const [choiceKind, setChoiceKind] = useState('branch');
+  const choices = useAsync(() => adminApi.profileChoices(editionId, choiceKind), [editionId, choiceKind], { enabled: Boolean(editionId) });
+  const choiceList = choices.data?.data || [];
+  const [sourceChoice, setSourceChoice] = useState('');
+  const [targetChoice, setTargetChoice] = useState('');
   const [target, setTarget] = useState(null);
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState(null);
   const rows = users.data?.data || [];
+
+  const mergeChoice = async () => {
+    try {
+      await adminApi.mergeProfileChoice(editionId, sourceChoice, targetChoice);
+      await choices.reload();
+      setSourceChoice('');
+      setTargetChoice('');
+      setMessage({ tone: 'success', text: 'Profile choice merged.' });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    }
+  };
+
+  const removeChoice = async () => {
+    if (!sourceChoice || !window.confirm('Delete this unused profile choice?')) return;
+    try {
+      await adminApi.deleteProfileChoice(editionId, sourceChoice);
+      await choices.reload();
+      setSourceChoice('');
+      setMessage({ tone: 'success', text: 'Profile choice deleted.' });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    }
+  };
 
   const apply = async () => {
     if (!target) return;
@@ -1526,9 +1561,35 @@ export function AdminUsers() {
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       <div className="table-filters">
         <Field label="Search">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or email" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Name or email" placeholder="Name or email" />
         </Field>
       </div>
+      <details className="profile-choice-admin">
+        <summary>Manage branch and college options</summary>
+        <div className="table-filters">
+          <Field label="Option type">
+            <select value={choiceKind} onChange={(event) => { setChoiceKind(event.target.value); setSourceChoice(''); setTargetChoice(''); }}>
+              <option value="branch">Branches</option><option value="college">Colleges</option>
+            </select>
+          </Field>
+          <Field label="Entry">
+            <select value={sourceChoice} onChange={(event) => setSourceChoice(event.target.value)}>
+              <option value="">Choose an entry</option>
+              {choiceList.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Merge into">
+            <select value={targetChoice} onChange={(event) => setTargetChoice(event.target.value)}>
+              <option value="">Choose a target</option>
+              {choiceList.filter((item) => item.id !== sourceChoice).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </Field>
+          <div className="sheet-actions">
+            <Button variant="ghost" onClick={removeChoice} disabled={!sourceChoice}>Delete unused</Button>
+            <Button onClick={mergeChoice} disabled={!sourceChoice || !targetChoice}>Merge entries</Button>
+          </div>
+        </div>
+      </details>
       {users.loading ? <Loading label="Loading users" rows={2} /> : null}
       {users.error ? <ErrorBox error={users.error} onRetry={users.reload} /> : null}
       <DataTable
@@ -1554,6 +1615,18 @@ export function AdminUsers() {
               <button className="table-action" onClick={() => setTarget(row)}>
                 {row.status === 'active' ? 'Suspend' : 'Reactivate'}
               </button>
+              {row.status === 'deletion_requested' ? (
+                <button className="table-action" onClick={async () => {
+                  if (!window.confirm(`Delete ${row.fullName}'s account data and documents?`)) return;
+                  try {
+                    await adminApi.fulfillDeletion(editionId, row.id);
+                    await users.reload();
+                    setMessage({ tone: 'success', text: 'Account data and documents deleted.' });
+                  } catch (error) {
+                    setMessage({ tone: 'error', text: error.message });
+                  }
+                }}>Fulfill deletion request</button>
+              ) : null}
             </td>
           </tr>
         ))}
@@ -1564,7 +1637,7 @@ export function AdminUsers() {
           accounts cannot sign in or register.
         </p>
         <Field label="Reason">
-          <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Shown in the audit log" />
+          <input value={reason} onChange={(event) => setReason(event.target.value)} aria-label="Shown in the audit log" placeholder="Shown in the audit log" />
         </Field>
         <div className="sheet-actions">
           <Button variant="ghost" onClick={() => setTarget(null)}>
@@ -1586,6 +1659,7 @@ export function AdminVerifications() {
   const [target, setTarget] = useState(null);
   const [decision, setDecision] = useState('verified');
   const [reason, setReason] = useState('');
+  const [fakeOrInvalid, setFakeOrInvalid] = useState(false);
   const [message, setMessage] = useState(null);
   const list = rows.data?.data || [];
 
@@ -1607,10 +1681,12 @@ export function AdminVerifications() {
       await adminApi.decideVerification(editionId, target.id, {
         decision,
         reason: reason || null,
+        fakeOrInvalid: decision === 'rejected' && fakeOrInvalid,
       });
       await rows.reload();
       setTarget(null);
       setReason('');
+      setFakeOrInvalid(false);
       setMessage({ tone: 'success', text: 'Verification decision recorded.' });
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
@@ -1654,6 +1730,12 @@ export function AdminVerifications() {
               <StatusBadge status={row.status} />
             </td>
             <td className="row-actions">
+              <button className="table-action" onClick={() => window.open(adminApi.profileDocumentUrl(editionId, row.userId, 'college_id'), '_blank', 'noopener,noreferrer')}>
+                View College ID
+              </button>
+              <button className="table-action" onClick={() => window.open(adminApi.profileDocumentUrl(editionId, row.userId, 'iste_proof'), '_blank', 'noopener,noreferrer')}>
+                View ISTE Proof
+              </button>
               {row.documentName ? (
                 <button className="table-action" onClick={() => openDocument(row.id)}>
                   View Document
@@ -1685,6 +1767,7 @@ export function AdminVerifications() {
                   setTarget(row);
                   setDecision('verified');
                   setReason(row.rejectionReason || '');
+                  setFakeOrInvalid(false);
                 }}
               >
                 Review
@@ -1706,6 +1789,7 @@ export function AdminVerifications() {
         <Field label="Reason" hint={decision === 'rejected' ? 'Required for a rejection.' : 'Optional note.'}>
           <input value={reason} onChange={(event) => setReason(event.target.value)} />
         </Field>
+        {decision === 'rejected' ? <label className="privacy-consent"><input type="checkbox" checked={fakeOrInvalid} onChange={(event) => setFakeOrInvalid(event.target.checked)} /> Mark the proof as fake or invalid and automatically refund paid orders.</label> : null}
         <div className="sheet-actions">
           <Button variant="ghost" onClick={() => setTarget(null)}>
             Cancel
@@ -1735,6 +1819,7 @@ export function AdminPayments() {
       amount: rupees(row.amountPaise),
       reasonCode: 'requested_by_participant',
       note: '',
+      idempotencyKey: globalThis.crypto?.randomUUID?.() || `refund-${row.id}-${Date.now()}`,
     });
   };
 
@@ -1746,6 +1831,7 @@ export function AdminPayments() {
         amountPaise: paise(form.amount),
         reasonCode: form.reasonCode,
         reasonNote: form.note || null,
+        idempotencyKey: form.idempotencyKey,
       });
       await Promise.all([payments.reload(), refunds.reload()]);
       setTarget(null);
@@ -1858,6 +1944,11 @@ export function AdminCheckin() {
   const [result, setResult] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [scannerActive, setScannerActive] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef(null);
+  const scannerControls = useRef(null);
+  const scanLocked = useRef(false);
   const recent = useAsync(() => adminApi.recentCheckins(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
@@ -1865,13 +1956,22 @@ export function AdminCheckin() {
     enabled: Boolean(editionId),
   });
 
-  const scan = async (event) => {
-    event.preventDefault();
+  const stopScanner = () => {
+    scannerControls.current?.stop();
+    scannerControls.current = null;
+    setScannerActive(false);
+  };
+
+  useEffect(() => () => scannerControls.current?.stop(), []);
+
+  const checkInToken = async (rawToken) => {
+    const cleanToken = String(rawToken || '').trim();
+    if (!cleanToken) return;
     setBusy(true);
     setMessage(null);
     setResult(null);
     try {
-      const body = await adminApi.checkin(editionId, { token: token.trim(), day: day || null });
+      const body = await adminApi.checkin(editionId, { token: cleanToken, day: day || null });
       setResult(body.data);
       setToken('');
       recent.reload();
@@ -1883,6 +1983,39 @@ export function AdminCheckin() {
     }
   };
 
+  const scan = (event) => {
+    event.preventDefault();
+    void checkInToken(token);
+  };
+
+  const startScanner = async () => {
+    setCameraError('');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera scanning is unavailable in this browser. Use the ticket token field.');
+      return;
+    }
+    try {
+      const reader = new BrowserQRCodeReader();
+      setScannerActive(true);
+      const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
+        if (!result || scanLocked.current) return;
+        scanLocked.current = true;
+        const ticketToken = result.getText().trim();
+        scannerControls.current?.stop();
+        scannerControls.current = null;
+        setScannerActive(false);
+        setToken(ticketToken);
+        void checkInToken(ticketToken).finally(() => {
+          scanLocked.current = false;
+        });
+      });
+      scannerControls.current = controls;
+    } catch {
+      setScannerActive(false);
+      setCameraError('Could not start the camera. Check camera permission or enter the token manually.');
+    }
+  };
+
   const recentRows = recent.data?.data || [];
   const attendanceRows = attendance.data?.data || [];
 
@@ -1890,12 +2023,18 @@ export function AdminCheckin() {
     <>
       <SectionHead kicker="DOOR DESK" title="Check-in" />
       <Panel className="checkin-panel">
+        <div className="checkin-camera-actions">
+          {!scannerActive ? <Button variant="ghost" onClick={startScanner} icon={Search}>Scan QR with camera</Button> : null}
+          {scannerActive ? <Button variant="ghost" onClick={stopScanner} icon={X}>Stop camera</Button> : null}
+          {cameraError ? <InlineMessage tone="error">{cameraError}</InlineMessage> : null}
+        </div>
+        <video ref={videoRef} className="checkin-camera" hidden={!scannerActive} autoPlay muted playsInline aria-label="Live camera view for scanning a ticket QR code" />
         <form onSubmit={scan} className="checkin-form">
           <Field label="Ticket token" hint="Scan the QR, or type the PX-… token from the participant portal.">
             <input
               value={token}
               onChange={(event) => setToken(event.target.value)}
-              placeholder="PX-…"
+              aria-label="PX-…" placeholder="PX-…"
               autoFocus
               required
             />
@@ -2234,6 +2373,10 @@ export function AdminSettings() {
       endsAt: toLocalInput(data.endsAt),
       registrationOpensAt: toLocalInput(data.registrationOpensAt),
       registrationClosesAt: toLocalInput(data.registrationClosesAt),
+      registrationUnlockAt: toISTInput(data.registrationUnlockAt),
+      rateISTE: data.registrationPrices?.isteMemberPaise ?? 49900,
+      rateNonISTE: data.registrationPrices?.nonIstePaise ?? 59900,
+      ratePolytechnic: data.registrationPrices?.polytechnicPaise ?? 29900,
       status: data.status || 'draft',
       contactEmail: data.contactEmail || '',
       allowedEmailDomains: (data.allowedEmailDomains || []).join(', '),
@@ -2256,6 +2399,10 @@ export function AdminSettings() {
         endsAt: fromLocalInput(form.endsAt),
         registrationOpensAt: fromLocalInput(form.registrationOpensAt),
         registrationClosesAt: fromLocalInput(form.registrationClosesAt),
+        registrationUnlockAt: fromISTInput(form.registrationUnlockAt),
+        registrationPriceIsteMemberPaise: Number(form.rateISTE),
+        registrationPriceNonIstePaise: Number(form.rateNonISTE),
+        registrationPricePolytechnicPaise: Number(form.ratePolytechnic),
         status: form.status,
         contactEmail: form.contactEmail || null,
         allowedEmailDomains: form.allowedEmailDomains
@@ -2371,6 +2518,18 @@ export function AdminSettings() {
                 value={form.registrationClosesAt}
                 onChange={(event) => set('registrationClosesAt', event.target.value)}
               />
+            </Field>
+            <Field label="Registration unlock (IST)" hint="Stored in UTC; this value is shown in India Standard Time.">
+              <input type="datetime-local" value={form.registrationUnlockAt} onChange={(event) => set('registrationUnlockAt', event.target.value)} required />
+            </Field>
+            <Field label="ISTE member rate (₹)">
+              <input type="number" min="1" value={form.rateISTE / 100} onChange={(event) => set('rateISTE', Math.round((Number(event.target.value) || 0) * 100))} required />
+            </Field>
+            <Field label="Non-ISTE rate (₹)">
+              <input type="number" min="1" value={form.rateNonISTE / 100} onChange={(event) => set('rateNonISTE', Math.round((Number(event.target.value) || 0) * 100))} required />
+            </Field>
+            <Field label="Polytechnic rate (₹)" hint="Polytechnic rate takes precedence over ISTE membership.">
+              <input type="number" min="1" value={form.ratePolytechnic / 100} onChange={(event) => set('ratePolytechnic', Math.round((Number(event.target.value) || 0) * 100))} required />
             </Field>
             <Field label="Status">
               <select value={form.status} onChange={(event) => set('status', event.target.value)}>

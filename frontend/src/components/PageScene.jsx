@@ -54,6 +54,15 @@ export default function PageScene({ bg, mascot, wide = false, children }) {
         <div
           className={wide ? 'page-scene-mascot is-wide' : 'page-scene-mascot'}
           onClick={onMascotTap}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onMascotTap?.();
+            }
+          }}
+          role={onMascotTap ? 'button' : undefined}
+          tabIndex={onMascotTap ? 0 : undefined}
+          aria-label={onMascotTap ? 'Mascot easter egg' : undefined}
         >
           <img src={mascot} alt="" decoding="async" />
           <MascotEasterEggBubble message={message} />

@@ -8,6 +8,8 @@
   --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
   --radius-panel: 18px;
   --radius-control: 12px;
+  /* Matches the 22px used by the shared card surfaces. */
+  --radius-surface: 22px;
 }
 
 html {
@@ -2987,7 +2989,10 @@ h3 {
 .map-frame-wrapper {
   position: relative;
   width: 100%;
-  height: 380px;
+  /* Flex so the map matches the copy card's height instead of floating
+     with slack above and below it. */
+  flex: 1 1 auto;
+  min-height: 380px;
   background: #11141e;
 }
 
@@ -3620,9 +3625,6 @@ h3 {
 /* ============================================================
    CUSTOMIZABLE THEME ACCENTS
    ============================================================ */
-:root {
-  }
-
 [data-accent="violet"] {
   --cyan: #c084fc;
   --cyan-soft: rgba(192, 132, 252, 0.16);

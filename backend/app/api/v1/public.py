@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_get, cache_set
 from app.core.config import get_settings
-from app.core.errors import Forbidden, NotFound
+from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.integrations.storage import LocalStorage, verify_local_signature
 from app.schemas.common import paged
 from app.schemas.public import PublicConfig
@@ -22,14 +22,50 @@ from app.services.editions import (
     registration_open,
     serialize_edition,
 )
+from app.services.system_settings import all_settings, registration_is_open, unlock_at
 from app.db.session import get_db
 from app.models.edition import EventCategory, Icon
+from app.models.user import ProfileChoice
 from sqlalchemy import select
 
 router = APIRouter(prefix="/public", tags=["public"])
 
 CACHE_EDGE = {"Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600"}
 CACHE_60 = CACHE_EDGE
+
+
+@router.get("/registration-policy")
+async def registration_policy(db: AsyncSession = Depends(get_db)) -> dict:
+    settings = await all_settings(db)
+    opens_at = await unlock_at(db)
+    return {
+        "data": {
+            "registrationOpen": await registration_is_open(db),
+            "registrationUnlockAt": opens_at.isoformat(),
+            "prices": {
+                "isteMemberPaise": settings["isteMemberPaise"],
+                "nonIstePaise": settings["nonIstePaise"],
+                "polytechnicPaise": settings["polytechnicPaise"],
+            },
+        }
+    }
+
+
+@router.get("/profile-options")
+async def profile_options(kind: str, db: AsyncSession = Depends(get_db)) -> dict:
+    if kind not in {"branch", "college"}:
+        raise ValidationFailed("Choose branch or college options.")
+    names = list(
+        (
+            await db.execute(
+                select(ProfileChoice.name)
+                .where(ProfileChoice.kind == kind)
+                .order_by(ProfileChoice.normalized_name)
+                .limit(250)
+            )
+        ).scalars()
+    )
+    return {"data": names}
 
 
 @router.get("/config", response_model=PublicConfig)
@@ -77,6 +113,8 @@ async def edition_current(response: Response, db: AsyncSession = Depends(get_db)
     except Exception:
         pass
     data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    if not await registration_is_open(db) and data["data"].get("policy"):
+        data["data"]["policy"]["passPricePaise"] = None
     cache_set("public:edition:current", data, ttl_seconds=60)
     return data
 
@@ -165,7 +203,13 @@ async def events(
         page=page,
         page_size=page_size,
     )
-    result = paged([row.model_dump(by_alias=True) for row in rows], total, page, page_size)
+    price_visible = await registration_is_open(db)
+    event_data = [row.model_dump(by_alias=True) for row in rows]
+    if not price_visible:
+        for item in event_data:
+            item["baseValuePaise"] = None
+            item["addonPricePaise"] = None
+    result = paged(event_data, total, page, page_size)
     cache_set(cache_key, result, ttl_seconds=30)
     return result
 
@@ -182,6 +226,9 @@ async def event_detail(
     edition = await edition_by_slug(db, slug)
     row = await event_service.public_event(db, edition, event_slug)
     result = {"data": row.model_dump(by_alias=True)}
+    if not await registration_is_open(db):
+        result["data"]["baseValuePaise"] = None
+        result["data"]["addonPricePaise"] = None
     cache_set(cache_key, result, ttl_seconds=60)
     return result
 
@@ -271,10 +318,11 @@ async def document(key: str, expires: int, signature: str) -> Response:
 async def public_policy(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
     edition = await edition_by_slug(db, slug)
     policy = await current_policy(db, edition.id)
-    return {
-        "data": {
-            **policy_public(policy).model_dump(by_alias=True),
-            "registrationOpen": registration_open(edition),
-            "selectionChangeDeadline": policy.selection_change_deadline,
-        }
+    data = {
+        **policy_public(policy).model_dump(by_alias=True),
+        "registrationOpen": registration_open(edition) and await registration_is_open(db),
+        "selectionChangeDeadline": policy.selection_change_deadline,
     }
+    if not await registration_is_open(db):
+        data["passPricePaise"] = None
+    return {"data": data}

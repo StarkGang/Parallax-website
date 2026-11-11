@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
+from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,7 @@ from app.schemas.participant import (
     TicketView,
     VerificationView,
 )
+from app.schemas.common import CamelModel
 from app.services import (
     editions as edition_service,
     idempotency as idempotency_service,
@@ -43,8 +45,20 @@ from app.services import (
 router = APIRouter(prefix="/editions/{edition_id}", tags=["participant"])
 
 
+class CheckoutSignature(CamelModel):
+    razorpay_payment_id: str = Field(min_length=8, max_length=80)
+    razorpay_order_id: str = Field(min_length=8, max_length=80)
+    razorpay_signature: str = Field(min_length=32, max_length=128)
+
+
 async def _edition(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition:
     return await edition_service.edition_by_id(db, edition_id)
+
+
+async def _require_registration_open(db: AsyncSession) -> None:
+    from app.services.system_settings import require_registration_open
+
+    await require_registration_open(db)
 
 
 @router.get("/pass")
@@ -82,6 +96,7 @@ async def create_pass_order(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _require_registration_open(db)
     edition = await _edition(db, edition_id)
     policy = await edition_service.current_policy(db, edition.id)
 
@@ -120,6 +135,7 @@ async def update_selections(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _require_registration_open(db)
     edition = await _edition(db, edition_id)
     user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
     if user_pass is None:
@@ -141,6 +157,7 @@ async def create_registrations(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _require_registration_open(db)
     edition = await _edition(db, edition_id)
     regs, order = await reg_service.create_addon_registrations(
         db, request, ctx.user.id, edition, payload.event_ids
@@ -208,6 +225,7 @@ async def create_team(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _require_registration_open(db)
     edition = await _edition(db, edition_id)
     team = await team_service.create_team(
         db, request, ctx.user.id, edition, payload.event_id, payload.name
@@ -225,6 +243,7 @@ async def join_team(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _require_registration_open(db)
     edition = await _edition(db, edition_id)
     team = await team_service.join_team(
         db, request, ctx.user.id, edition, payload.invite_code
@@ -292,6 +311,7 @@ async def submit_verification(
         institution_email=institution_email,
         file_bytes=file_bytes,
         filename=file.filename if file else None,
+        content_type=file.content_type if file else None,
     )
     await db.commit()
     return {"data": res}
@@ -367,6 +387,33 @@ async def payment_status(
             "paidAt": edition_service.aware(order.paid_at).isoformat() if order.paid_at else None,
         }
     }
+
+
+@router.post("/payments/{order_id}/verify")
+async def verify_checkout(
+    edition_id: uuid.UUID,
+    order_id: uuid.UUID,
+    payload: CheckoutSignature,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Validate Checkout's signature; only the webhook can settle the order as paid."""
+    settings = get_settings()
+    order = await payment_service.order_for(db, order_id)
+    if order.user_id != ctx.user.id or order.edition_id != edition_id:
+        raise NotFound("Order not found.")
+    if not settings.payments_enabled or not settings.razorpay_key_secret:
+        raise AppError("Payment verification is unavailable.", status_code=503)
+    if payload.razorpay_order_id != order.gateway_order_id:
+        raise ValidationFailed("The payment does not belong to this order.")
+    if not payment_service.verify_checkout_signature(
+        payload.razorpay_order_id,
+        payload.razorpay_payment_id,
+        payload.razorpay_signature,
+        settings.razorpay_key_secret,
+    ):
+        raise ValidationFailed("Payment signature verification failed.")
+    return {"data": {"verified": True, "status": order.status}}
 
 
 @router.post("/payments/{order_id}/mock")

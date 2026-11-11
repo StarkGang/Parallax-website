@@ -567,13 +567,13 @@ async def ensure_dev_participant(db: AsyncSession, user: User) -> None:
 
                 user_id=user.id,
 
-                college_name="NSS College of Engineering, Palakkad",
+                college_name=None,
 
-                university_name="APJ Abdul Kalam Technological University",
+                university_name=None,
 
                 course="B.Tech",
 
-                branch="Computer Science",
+                branch=None,
 
                 year_of_study=3,
 

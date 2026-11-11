@@ -43,11 +43,27 @@ class ParticipantProfile(Base, UUIDPrimaryKey, Timestamps):
     college_name: Mapped[str | None] = mapped_column(String(200))
     university_name: Mapped[str | None] = mapped_column(String(200))
     course: Mapped[str | None] = mapped_column(String(120))
+    education_level: Mapped[str | None] = mapped_column(String(24))
+    iste_member: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    accommodation_needed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    privacy_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    college_id_document_key: Mapped[str | None] = mapped_column(String(300))
+    iste_proof_document_key: Mapped[str | None] = mapped_column(String(300))
+    documents_retention_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     branch: Mapped[str | None] = mapped_column(String(120))
     year_of_study: Mapped[int | None] = mapped_column(Integer)
     student_identifier_enc: Mapped[str | None] = mapped_column(Text)
     student_identifier_last4: Mapped[str | None] = mapped_column(String(8))
     institution_email: Mapped[str | None] = mapped_column(String(320))
+
+
+class ProfileChoice(Base, UUIDPrimaryKey, Timestamps):
+    __tablename__ = "profile_choices"
+
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    __table_args__ = (UniqueConstraint("kind", "normalized_name", name="uq_profile_choice"),)
 
 
 class Session(Base, UUIDPrimaryKey):

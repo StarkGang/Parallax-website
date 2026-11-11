@@ -17,22 +17,23 @@
  */
 
 /** On-screen walking speed; MascotModel paces the Walk clip to match it. */
-export const WALK_SPEED_PX_PER_SEC = 150;
+export const WALK_SPEED_PX_PER_SEC = 118;
 
 export const MASCOT_TIMING = {
   evaluateDelayMs: 300,
-  ambientDelayMs: 2800,
+  /** Long enough that the guide stays quiet while someone is reading. */
+  ambientDelayMs: 6000,
   holdMs: 3400,
   globalCooldownMs: 1800,
   repositionCooldownMs: 600,
   /** How often a resting mascot crosses the layout on its own. */
-  strollMs: 3200,
+  strollMs: 11000,
   /** Random extra wait, so the pacing never feels metronomic. */
-  strollJitterMs: 1800,
+  strollJitterMs: 6000,
   /** A stroll is only worth walking if it actually crosses ground. */
-  strollMinDistancePx: 180,
+  strollMinDistancePx: 320,
   /** After this long standing still, the mascot hops instead of idling. */
-  boredMs: 6500,
+  boredMs: 18000,
   /** How long a pointed-out card stays ringed after an arrival point. */
   pointHighlightMs: 2600,
 };

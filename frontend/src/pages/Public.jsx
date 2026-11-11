@@ -26,10 +26,11 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
-import { publicApi } from '../lib/api.js';
+import { authApi, publicApi } from '../lib/api.js';
 import { gsap, ScrollTrigger, useCardTilt } from '../lib/motion.js';
 
 import { useSite } from '../lib/site.jsx';
+import { useAuth } from '../lib/auth.jsx';
 import { date, dateRange, dayLabel, money, time, weekday } from '../lib/format.js';
 import {
   Badge,
@@ -153,15 +154,24 @@ const IST_ZONE = 'Asia/Kolkata';
 
 // Convention days are grouped in the edition's timezone so an event that
 // starts after midnight UTC still belongs to its local convention day.
+const DAY_KEY_FMT = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  timeZone: IST_ZONE,
+});
+
+const DAY_LABEL_FMT = new Intl.DateTimeFormat('en-GB', {
+  weekday: 'long',
+  day: '2-digit',
+  month: 'long',
+  timeZone: IST_ZONE,
+});
+
 const dayKeyOf = (iso) => {
   if (!iso) return 'tba';
   try {
-    return new Intl.DateTimeFormat('en-CA', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      timeZone: IST_ZONE,
-    }).format(new Date(iso));
+    return DAY_KEY_FMT.format(new Date(iso));
   } catch {
     return 'tba';
   }
@@ -170,14 +180,7 @@ const dayKeyOf = (iso) => {
 const dayLabelOf = (iso) => {
   if (!iso) return 'Date to be announced';
   try {
-    return new Intl.DateTimeFormat('en-GB', {
-      weekday: 'long',
-      day: '2-digit',
-      month: 'long',
-      timeZone: IST_ZONE,
-    })
-      .format(new Date(iso))
-      .toUpperCase();
+    return DAY_LABEL_FMT.format(new Date(iso)).toUpperCase();
   } catch {
     return 'Date to be announced';
   }
@@ -218,8 +221,11 @@ export function EventCard({ event, index = 0 }) {
     : 'Individual';
   const title = event.title || 'Untitled event';
   const detailPath = `/events/${event.slug}`;
-  const feeLabel =
-    event.addonPricePaise > 0 ? `Add-on ${money(event.addonPricePaise)}` : 'Included with pass';
+  const feeLabel = event.addonPricePaise == null
+    ? 'Registration details open soon'
+    : event.addonPricePaise > 0
+      ? `Add-on ${money(event.addonPricePaise)}`
+      : 'Included with pass';
   const mascotHover = `${title}: ${event.categoryName || 'competition'}, ${formatLabel.toLowerCase()}, ${feeLabel.toLowerCase()}.`;
 
   // The whole card opens its detail page; the Explore and Register links keep
@@ -490,6 +496,7 @@ function HeroParallax({ edition, days }) {
 
     // Priority 3: Remainder in idle batches of 12 to avoid network congestion
     let nextBatchStart = 24;
+    let idleCallback = null;
     const loadNextBatch = () => {
       if (!active || nextBatchStart >= TOTAL_HERO_FRAMES) return;
       const end = Math.min(nextBatchStart + 12, TOTAL_HERO_FRAMES);
@@ -497,12 +504,13 @@ function HeroParallax({ edition, days }) {
         loadFrame(i);
       }
       nextBatchStart = end;
-      if (nextBatchStart < TOTAL_HERO_FRAMES) {
-        if (typeof window.requestIdleCallback === 'function') {
-          window.requestIdleCallback(loadNextBatch, { timeout: 200 });
-        } else {
-          setTimeout(loadNextBatch, 80);
-        }
+      if (nextBatchStart >= TOTAL_HERO_FRAMES) return;
+      if (typeof window.requestIdleCallback === 'function') {
+        idleCallback = window.requestIdleCallback(loadNextBatch, { timeout: 200 });
+      } else {
+        // No idle API: finish the remainder in one pass rather than chaining
+        // timers, so the effect owns a single cancellable allocation.
+        loadNextBatch();
       }
     };
 
@@ -517,6 +525,9 @@ function HeroParallax({ edition, days }) {
     return () => {
       active = false;
       clearTimeout(idleTimer);
+      if (idleCallback !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleCallback);
+      }
       window.removeEventListener('resize', onResize);
     };
   }, []);
@@ -664,7 +675,7 @@ function useParallaxScroll() {
   }, []);
 }
 
-function PassHighlightSection({ policy }) {
+function PassHighlightSection({ policy, registration, profile, user }) {
   const tiltRef = useCardTilt({ maxTilt: 2.5, scale: 1.01 });
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
@@ -703,8 +714,102 @@ function PassHighlightSection({ policy }) {
       </div>
       <div className="pass-scene-veil" aria-hidden="true" />
       <div className="pass-scene-floor" aria-hidden="true" />
-      <div className="pass-scene-card">
-        <HolographicTicket />
+      <div className="pass-scene-content">
+        <div className="pass-scene-card">
+          <HolographicTicket />
+        </div>
+        <RegistrationPricing policy={registration} profile={profile} user={user} />
+      </div>
+    </section>
+  );
+}
+
+export function RegistrationPricing({ policy, profile, user }) {
+  if (!policy?.prices) return null;
+  const education = String(profile?.educationLevel || profile?.course || '').toLowerCase();
+  const currentKey = user
+    ? education === 'polytechnic'
+      ? 'polytechnicPaise'
+      : profile?.isteMember
+        ? 'isteMemberPaise'
+        : education === 'b.tech'
+          ? 'nonIstePaise'
+          : null
+    : null;
+  const rates = [
+    {
+      key: 'isteMemberPaise',
+      label: 'ISTE Member',
+      sub: 'Active membership ID verified at desk',
+    },
+    {
+      key: 'nonIstePaise',
+      label: 'Non-ISTE Student',
+      sub: 'College & university undergraduates',
+    },
+    {
+      key: 'polytechnicPaise',
+      label: 'Polytechnic Student',
+      sub: 'Diploma students (subsidized rate)',
+    },
+  ];
+
+  return (
+    <section className="px-pricing" aria-label="Registration pricing">
+      <div className="px-pricing-head">
+        <div className="px-pricing-tag">
+          <span>REGISTRATION TIERS</span>
+        </div>
+
+        <h3>{policy.registrationOpen ? 'Choose your pass rate' : 'Registration opens soon'}</h3>
+
+        {policy.registrationOpen ? (
+          <p className="px-pricing-note">
+            Rates auto-qualify based on your saved student profile credentials.
+          </p>
+        ) : (
+          <div className="px-pricing-chip">
+            <CalendarDays size={13} className="px-pricing-chip-icon" />
+            <span>
+              Opens {date(policy.registrationUnlockAt)} • {time(policy.registrationUnlockAt)} IST
+            </span>
+          </div>
+        )}
+
+        <div className="px-pricing-perks">
+          <div className="px-perk-item">
+            <Check size={12} strokeWidth={2.5} />
+            <span>2 full convention days floor access</span>
+          </div>
+          <div className="px-perk-item">
+            <Check size={12} strokeWidth={2.5} />
+            <span>Up to 3 included events + lunch</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-price-list">
+        <div className="px-price-list-header">
+          <span>Category</span>
+          <span>All-Access Pass</span>
+        </div>
+        {rates.map(({ key, label, sub }) => {
+          const isCurrent = key === currentKey;
+          return (
+            <div className={`px-price-row${isCurrent ? ' is-current' : ''}`} key={key}>
+              <div className="px-price-row-info">
+                <span className="px-price-label">
+                  {label}
+                  {isCurrent ? <b className="px-price-current">Your Rate</b> : null}
+                </span>
+                <span className="px-price-sub">{sub}</span>
+              </div>
+              <div className="px-price-amount">
+                <strong>{money(policy.prices[key])}</strong>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -712,6 +817,7 @@ function PassHighlightSection({ policy }) {
 
 export function Home() {
   const { edition, policy, config } = useSite();
+  const { user } = useAuth();
   const heroStackRef = useRef(null);
   const odysseyRef = useRef(null);
   const slug = edition?.slug;
@@ -726,18 +832,8 @@ export function Home() {
   const news = useAsync(() => publicApi.announcements(slug, { pageSize: 2 }), [slug], {
     enabled: Boolean(slug),
   });
-
-  if (!edition) return null;
-  const announcements = news.data?.data || [];
-  const eventTotal = catalogue.data?.meta?.total ?? null;
-  const categoryTotal = categories.data?.data?.length ?? null;
-  const days = Math.max(
-    1,
-    Math.round(
-      (new Date(edition.endsAt).setHours(23, 59) - new Date(edition.startsAt).setHours(0, 0)) /
-        86_400_000,
-    ),
-  );
+  const registration = useAsync(() => publicApi.registrationPolicy(), [], { enabled: true });
+  const participantProfile = useAsync(() => authApi.profile(), [user?.id], { enabled: Boolean(user) });
 
   const { message: eggMessage, onMascotTap } = useMascotEasterEgg();
 
@@ -778,6 +874,20 @@ export function Home() {
     return () => ctx.revert();
   }, []);
 
+  // Hooks are all called above this guard. Returning any earlier changed hook
+  // order between renders ("Rendered fewer hooks than expected").
+  if (!edition) return null;
+  const announcements = news.data?.data || [];
+  const eventTotal = catalogue.data?.meta?.total ?? null;
+  const categoryTotal = categories.data?.data?.length ?? null;
+  const days = Math.max(
+    1,
+    Math.round(
+      (new Date(edition.endsAt).setHours(23, 59) - new Date(edition.startsAt).setHours(0, 0)) /
+        86_400_000,
+    ),
+  );
+
   return (
     <>
       <div className="home-hero-stack" ref={heroStackRef}>
@@ -808,6 +918,15 @@ export function Home() {
           src={SCENE_MASCOT}
           alt=""
           onClick={onMascotTap}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onMascotTap();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          aria-label="Mascot easter egg"
           draggable="false"
           decoding="async"
         />
@@ -815,7 +934,7 @@ export function Home() {
 
         <div className="px-stage-inner">
           <header className="px-preview-head">
-            <span className="px-preview-kicker">Parallax 2027</span>
+            <span className="px-preview-kicker">{edition?.name || 'Parallax'}</span>
             <h2 id="px-preview-title">
               Pick your <em>path.</em>
             </h2>
@@ -858,7 +977,12 @@ export function Home() {
       </section>
 
       {/* Chapter 02: All-Access Pass Architecture with Layer Parallax */}
-      <PassHighlightSection policy={policy} />
+      <PassHighlightSection
+        policy={policy}
+        registration={registration.data?.data}
+        profile={participantProfile.data?.data}
+        user={user}
+      />
 
       {announcements.length ? (
         <section className="section news-section">
@@ -1281,14 +1405,14 @@ export function EventDetail() {
               </b>
             </div>
           ) : null}
-          <div className="detail-row">
+          {event.baseValuePaise != null ? <div className="detail-row">
             <span>Included value</span>
             <b>{money(event.baseValuePaise)}</b>
-          </div>
-          <div className="detail-row">
+          </div> : null}
+          {event.addonPricePaise != null ? <div className="detail-row">
             <span>Add-on fee</span>
             <b>{money(event.addonPricePaise)}</b>
-          </div>
+          </div> : null}
           <div className="detail-row">
             <span>Capacity</span>
             <b>
@@ -1333,10 +1457,13 @@ export function EventDetail() {
 
 export function PassPage() {
   const { edition, policy } = useSite();
+  const { user } = useAuth();
+  const registration = useAsync(() => publicApi.registrationPolicy(), [], { enabled: true });
+  const participantProfile = useAsync(() => authApi.profile(), [user?.id], { enabled: Boolean(user) });
   const mode = policy?.includedSelectionMode === 'exact' ? 'Exactly' : 'Up to';
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
-  const priceRupees = Math.round((policy?.passPricePaise || 35000) / 100);
+  const priceRupees = policy?.passPricePaise == null ? null : Math.round(policy.passPricePaise / 100);
   const valueCap = money(policy?.includedValueCapPaise || 45000);
 
   return (
@@ -1355,14 +1482,33 @@ export function PassPage() {
       />
       </PageScene>
 
+      <RegistrationPricing
+        policy={registration.data?.data}
+        profile={participantProfile.data?.data}
+        user={user}
+      />
+
       <section className="section apple-pass-page-section">
         <div className="apple-pass-page-grid">
           <HudFrame as="article" className="apple-pass-pricing-box apple-pass-page-card">
             <span className="apple-price-caption">All-access pass</span>
-            <div className="apple-price-amount">
-              <span className="apple-price-currency">₹</span>
-              <span className="apple-price-number">{priceRupees}</span>
-              <span className="apple-price-tenure">/ pass</span>
+            <div className={`apple-price-amount${priceRupees == null ? ' is-locked' : ''}`}>
+              {priceRupees == null ? (
+                <span className="apple-price-reveal">
+                  <span className="apple-price-reveal-label">Registration starts on</span>
+                  <span className="apple-price-reveal-date">
+                    {registration.data?.data?.registrationUnlockAt
+                      ? date(registration.data.data.registrationUnlockAt)
+                      : 'when registration opens'}
+                  </span>
+                </span>
+              ) : (
+                <>
+                  <span className="apple-price-currency">₹</span>
+                  <span className="apple-price-number">{priceRupees}</span>
+                  <span className="apple-price-tenure">/ pass</span>
+                </>
+              )}
             </div>
             <p className="apple-price-note">{edition?.name || 'Parallax 2026'} Convention Pass</p>
 
@@ -1542,7 +1688,8 @@ export function VenuePage() {
         desc={`${placeLabel(edition?.venue, edition?.city) || 'NSSCE Campus, Palakkad'}.`}
       />
       </PageScene>
-      <section className="section venue-grid">
+      <section className="section venue-grid venue-page-section">
+        <SectionHead kicker="Getting there" title="One campus, two days" />
         <HudFrame as="article" className="venue-map-card">
           <div className="map-toolbar">
             <div className="map-status">
@@ -1562,6 +1709,7 @@ export function VenuePage() {
             <iframe
               title="Google Map - NSS College of Engineering, Palakkad"
               src="https://maps.google.com/maps?q=NSS+College+of+Engineering+Palakkad&t=&z=16&ie=UTF8&iwloc=&output=embed"
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               width="100%"
               height="100%"
               style={{ border: 0 }}
@@ -1674,7 +1822,7 @@ export function FAQPage() {
         kicker="FAQ"
         title={
           <>
-            Common
+            Common{' '}
             <br />
             <em>questions.</em>
           </>
@@ -1711,12 +1859,12 @@ const TEAM_GROUPS = [
       {
         name: 'Dr. Sudeep U',
         role: 'Faculty Chairperson',
-        image: 'faculty-chairperson.jpg',
+        image: 'chairperson.jpg',
       },
       {
         name: 'Dr. Praseeda K I',
         role: 'Faculty Secretary',
-        image: 'faculty-secretary.jpg',
+        image: 'secretary.jpg',
       },
     ],
   },
@@ -1804,7 +1952,7 @@ const TEAM_GROUPS = [
       {
         name: 'Sreenath K',
         role: 'Technical Coordinator',
-        image: 'technical-coordinator.jpg',
+        image: 'Sreenath K_.png',
       },
     ],
   },
@@ -1824,7 +1972,14 @@ function teamSlug(name = '') {
 }
 
 function TeamMemberCard({ member }) {
+  const [imgError, setImgError] = useState(false);
   const imageUrl = `${import.meta.env.BASE_URL}images/team/${member.image}`;
+  const initials = member.name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('');
   const mascotProps = {
     'data-mascot-target': `team-${teamSlug(member.name)}`,
     'data-mascot-label': member.name,
@@ -1850,23 +2005,16 @@ function TeamMemberCard({ member }) {
         {...mascotProps}
       >
         <div className="tm-frame">
-          <div
-            className="tm-frame-media"
-            data-initials={member.name
-              .split(' ')
-              .filter(Boolean)
-              .slice(0, 2)
-              .map((part) => part[0])
-              .join('')}
-          >
-            <img
-              src={imageUrl}
-              alt={member.name}
-              loading="lazy"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
-            />
+          <div className="tm-frame-media" data-initials={initials}>
+            {!imgError && (
+              <img
+                src={imageUrl}
+                alt={member.name}
+                loading="eager"
+                decoding="async"
+                onError={() => setImgError(true)}
+              />
+            )}
           </div>
 
           <div className="tm-frame-scrim" />
@@ -1890,15 +2038,16 @@ function TeamMemberCard({ member }) {
 
   return (
     <article className="team-member-card" {...mascotProps}>
-      <div className="team-member-image">
-        <img
-          src={imageUrl}
-          alt={member.name}
-          loading="lazy"
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
-        />
+      <div className="team-member-image" data-initials={initials}>
+        {!imgError && (
+          <img
+            src={imageUrl}
+            alt={member.name}
+            loading="eager"
+            decoding="async"
+            onError={() => setImgError(true)}
+          />
+        )}
       </div>
 
       <div className="team-member-info">
@@ -1910,6 +2059,18 @@ function TeamMemberCard({ member }) {
 }
 
 export function TeamPage() {
+  useEffect(() => {
+    // Preload all team member images eagerly so they display instantly without lag
+    TEAM_GROUPS.forEach((group) => {
+      group.members.forEach((member) => {
+        if (member.image) {
+          const img = new Image();
+          img.src = `${import.meta.env.BASE_URL}images/team/${member.image}`;
+        }
+      });
+    });
+  }, []);
+
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
@@ -1917,7 +2078,7 @@ export function TeamPage() {
         kicker="Team"
         title={
           <>
-            Who runs
+            Who runs{' '}
             <br />
             <em>Parallax.</em>
           </>
@@ -1983,7 +2144,7 @@ export function ContactPage() {
         kicker="Contact"
         title={
           <>
-            Talk to
+            Talk to{' '}
             <br />
             <em>the team.</em>
           </>

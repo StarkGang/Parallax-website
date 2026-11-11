@@ -1,6 +1,7 @@
 """User account operations, profile management, staff membership and Google user upsert."""
 
 import uuid
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -12,12 +13,13 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role, STAFF_ROLES
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
-from app.models.commerce import ConventionPass, Registration
+from app.models.commerce import ConventionPass, PaymentOrder, Registration
 from app.models.edition import ConventionEdition, EligibilityVerification
 from app.models.user import (
     EditionMembership,
     MfaCredential,
     ParticipantProfile,
+    ProfileChoice,
     Session,
     StaffInvite,
     User,
@@ -257,6 +259,12 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
         "collegeName": profile.college_name if profile else None,
         "universityName": profile.university_name if profile else None,
         "course": profile.course if profile else None,
+        "educationLevel": profile.education_level if profile else None,
+        "isteMember": bool(profile and profile.iste_member),
+        "accommodationNeeded": bool(profile and profile.accommodation_needed),
+        "privacyConsent": bool(profile and profile.privacy_consent_at),
+        "collegeIdUploaded": bool(profile and profile.college_id_document_key),
+        "isteProofUploaded": bool(profile and profile.iste_proof_document_key),
         "branch": profile.branch if profile else None,
         "yearOfStudy": profile.year_of_study if profile else None,
         "studentIdentifier": identifier,
@@ -270,6 +278,14 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
 async def update_profile(
     db: AsyncSession, request: Request, user: User, payload: dict[str, Any]
 ) -> dict[str, Any]:
+    paid = await db.scalar(
+        select(PaymentOrder.id).where(
+            PaymentOrder.user_id == user.id,
+            PaymentOrder.status.in_(("paid", "refunded")),
+        ).limit(1)
+    )
+    if paid is not None:
+        raise Conflict("Profile details are locked after payment.")
     profile = (
         await db.execute(
             select(ParticipantProfile).where(ParticipantProfile.user_id == user.id)
@@ -290,8 +306,19 @@ async def update_profile(
         profile.university_name = payload["universityName"]
     if "course" in payload:
         profile.course = payload["course"]
+    if "educationLevel" in payload:
+        profile.education_level = payload["educationLevel"]
+        profile.course = payload["educationLevel"]
+    if "isteMember" in payload and payload["isteMember"] is not None:
+        profile.iste_member = payload["isteMember"]
+    if "accommodationNeeded" in payload and payload["accommodationNeeded"] is not None:
+        profile.accommodation_needed = payload["accommodationNeeded"]
+    if payload.get("privacyConsent"):
+        profile.privacy_consent_at = datetime.now(UTC)
     if "branch" in payload:
-        profile.branch = payload["branch"]
+        profile.branch = await _canonical_choice(db, "branch", payload["branch"])
+    if "collegeName" in payload:
+        profile.college_name = await _canonical_choice(db, "college", payload["collegeName"])
     if "yearOfStudy" in payload:
         profile.year_of_study = payload["yearOfStudy"]
     if "studentIdentifier" in payload and payload["studentIdentifier"]:
@@ -303,6 +330,25 @@ async def update_profile(
 
     await db.flush()
     return await profile_payload(db, user)
+
+
+async def _canonical_choice(db: AsyncSession, kind: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    name = " ".join(unicodedata.normalize("NFKC", value).split())
+    if not name:
+        return None
+    normalized = name.casefold()
+    row = await db.scalar(
+        select(ProfileChoice).where(
+            ProfileChoice.kind == kind, ProfileChoice.normalized_name == normalized
+        )
+    )
+    if row is None:
+        row = ProfileChoice(kind=kind, name=name, normalized_name=normalized)
+        db.add(row)
+        await db.flush()
+    return row.name
 
 
 async def list_users(
@@ -554,6 +600,7 @@ async def revoke_own_session(
 
 async def request_deletion(db: AsyncSession, user: User) -> None:
     user.status = "deletion_requested"
+    user.deletion_requested_at = datetime.now(UTC)
     await db.flush()
 
 

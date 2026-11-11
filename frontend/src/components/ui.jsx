@@ -343,6 +343,7 @@ export function Sheet({ open, title, onClose, children, wide = false }) {
   return (
     <div
       className="modal-backdrop"
+      role="presentation"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <section

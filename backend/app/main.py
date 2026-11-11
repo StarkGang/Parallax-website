@@ -106,12 +106,15 @@ async def _bootstrap_local_dev() -> None:
         except Exception as exc:
             logger.warning("schema_init_failed", error=str(exc))
 
-    if settings.seed_demo_data or settings.is_development:
-        try:
-            async with session_scope() as db:
+    try:
+        async with session_scope() as db:
+            from app.services.system_settings import seed_system_settings
+
+            await seed_system_settings(db)
+            if settings.seed_demo_data or settings.is_development:
                 await seed_if_empty(db)
-        except Exception as exc:  # seeding must never stop the API from booting
-            logger.warning("seed_failed", error=type(exc).__name__)
+    except Exception as exc:  # seeding must never stop the API from booting
+        logger.warning("seed_failed", error=type(exc).__name__)
 
 
 @asynccontextmanager

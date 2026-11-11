@@ -4,10 +4,12 @@ Every value here has smart defaults. Production-first by default;
 a single DEBUG_MODE=true environment variable enables dev mode.
 """
 
+import logging
 import os
 import secrets
 import tempfile
 import urllib.parse
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,6 +17,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_database_url(url: str | None) -> str:
@@ -100,7 +104,14 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_statement_timeout_ms: int = 5000
     db_ssl: bool = False
-    auto_create_tables: bool = True
+    auto_create_tables: bool = False
+
+    # Initial database seed values. Admin-edited values live in system_settings.
+    registration_unlock_at: datetime = datetime.fromisoformat("2026-11-15T00:00:00+05:30")
+    registration_price_iste_member_paise: int = 49900
+    registration_price_non_iste_paise: int = 59900
+    registration_price_polytechnic_paise: int = 29900
+    verification_mode: str = "manual"
 
     # Sessions / cookies (30-day persistent sessions)
     session_cookie_name: str = "px_session"
@@ -128,6 +139,7 @@ class Settings(BaseSettings):
 
     # Payments (Razorpay, optional)
     payments_enabled: bool = False
+    razorpay_mode: str = "test"
     razorpay_key_id: str | None = None
     razorpay_key_secret: str | None = None
     razorpay_webhook_secret: str | None = None
@@ -151,7 +163,7 @@ class Settings(BaseSettings):
 
     # Limits
     max_request_body_bytes: int = 1_048_576
-    max_upload_bytes_document: int = 3_145_728
+    max_upload_bytes_document: int = 5_242_880
     max_upload_bytes_icon_svg: int = 65_536
     max_upload_bytes_icon_png: int = 262_144
 
@@ -161,6 +173,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> "Settings":
+        if self.verification_mode not in {"manual", "api", "both"}:
+            raise ValueError("VERIFICATION_MODE must be manual, api, or both")
+        if min(
+            self.registration_price_iste_member_paise,
+            self.registration_price_non_iste_paise,
+            self.registration_price_polytechnic_paise,
+        ) <= 0:
+            raise ValueError("Registration prices must be positive paise amounts")
         # Check single DEBUG_MODE switch
         is_debug_explicit = bool(
             self.debug_mode
@@ -182,6 +202,9 @@ class Settings(BaseSettings):
             self.app_env = "production"
             self.app_debug = False
             self.cookie_secure = True
+
+        # create_all is a local bootstrap convenience. Deployed schemas are managed by Alembic.
+        self.auto_create_tables = self.is_development
 
         # Resolve admin_email alias
         if self.admin_email and not self.bootstrap_owner_email:
@@ -258,6 +281,19 @@ class Settings(BaseSettings):
             self.database_url = self.supabase_db_url
 
         self.database_url = _sanitize_database_url(self.database_url)
+
+        # A template value left in .env (for example a placeholder Supabase
+        # project ref) fails at connect time with an opaque ENOTFOUND on every
+        # request. Outside production, fall back to the local database instead.
+        if self.is_development and any(
+            marker in self.database_url
+            for marker in ("your-project-ref", "your-project", "<project", "changeme")
+        ):
+            logger.warning(
+                "DATABASE_URL looks like a template value; using the local SQLite database."
+            )
+            self.database_url = "sqlite+aiosqlite:///./var/parallax.db"
+
         if self.database_migration_url:
             self.database_migration_url = _sanitize_database_url(self.database_migration_url)
 
@@ -267,6 +303,9 @@ class Settings(BaseSettings):
             self.database_url = "postgresql+asyncpg://" + self.database_url[len("postgres://") :]
 
         if self.payments_enabled:
+            self.razorpay_mode = self.razorpay_mode.strip().casefold()
+            if self.razorpay_mode not in {"test", "live"}:
+                raise ValueError("RAZORPAY_MODE must be test or live")
             missing = [
                 name
                 for name, value in {
@@ -279,10 +318,9 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(f"PAYMENTS_ENABLED requires {', '.join(missing)}")
             key_id = self.razorpay_key_id or ""
-            if self.app_env == "production" and key_id.startswith("rzp_test_"):
-                raise ValueError("Razorpay test key used in production")
-            if self.app_env == "staging" and key_id.startswith("rzp_live_"):
-                raise ValueError("Razorpay live key used in staging")
+            expected_prefix = "rzp_live_" if self.razorpay_mode == "live" else "rzp_test_"
+            if not key_id.startswith(expected_prefix):
+                raise ValueError(f"RAZORPAY_MODE={self.razorpay_mode} requires a {expected_prefix} key")
 
         return self
 
@@ -316,6 +354,10 @@ class Settings(BaseSettings):
         for default_host in ("*.vercel.app", "testserver"):
             if default_host not in hosts:
                 hosts.append(default_host)
+        if self.is_development:
+            for local_host in ("localhost", "127.0.0.1", "[::1]"):
+                if local_host not in hosts:
+                    hosts.append(local_host)
         vercel_url = os.getenv("VERCEL_URL")
         if vercel_url and vercel_url not in hosts:
             hosts.append(vercel_url)
@@ -337,7 +379,11 @@ class Settings(BaseSettings):
     def dev_login_available(self) -> bool:
         if self.is_production:
             return False
-        return self.is_debug and self.dev_auth_enabled
+        # The test environment is never production, but it also does not enable
+        # DEBUG_MODE (which would rewrite APP_ENV to development). Tests still
+        # need the gated dev login, so treat test as an explicitly allowed
+        # non-production environment.
+        return (self.is_debug or self.is_test) and self.dev_auth_enabled
 
     @property
     def allowed_origins(self) -> list[str]:

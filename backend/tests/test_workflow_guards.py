@@ -22,7 +22,11 @@ async def _current_edition(client: AsyncClient) -> dict:
     return resp.json()["data"]
 
 
-async def _ensure_active_pass(client: AsyncClient, edition_id: str) -> dict:
+async def _ensure_active_pass(client: AsyncClient, edition_id: str, db) -> dict:
+    from support import ensure_eligible_participant, open_registration
+
+    await open_registration(db)
+    await ensure_eligible_participant(db, "participant@parallax.local")
     current = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
     if current and current["status"] == "active":
         return current
@@ -89,7 +93,7 @@ async def test_selections_issue_event_tickets_and_cancel_revokes(
     client = participant_client
     edition = await _current_edition(client)
     edition_id = edition["id"]
-    await _ensure_active_pass(client, edition_id)
+    await _ensure_active_pass(client, edition_id, db_session)
 
     cap = (edition.get("policy") or {}).get("includedValueCapPaise") or 10**9
     event = (

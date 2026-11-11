@@ -1,5 +1,7 @@
 import { useRef } from "react";
 import { Link } from "react-router-dom";
+import { useSite } from "../lib/site.jsx";
+import { dateRange, money } from "../lib/format.js";
 
 /**
  * HolographicTicket
@@ -7,20 +9,46 @@ import { Link } from "react-router-dom";
  * Dependencies: React only (styles are injected via <style>, no Tailwind needed).
  */
 export default function HolographicTicket({
-  eyebrow = "Two days of engineering. One all-pass.",
-  name = "ALL ACCESS PASS",
-  venue = "Full floor clearance, Competition & Workshop with zero gated tracks or hidden fees.",
-  dates = "DECMBER XX_XX, 2026",
-  city = "ISTE",
-  stubText = "₹500",
-  price = "GET NOW",
-  perks = [
-    "Lunch on both days",
-    "Upto 3 events",
-    "Unrestricted access to all exhibitions",
-  ],
+  eyebrow,
+  name,
+  venue,
+  dates,
+  city,
+  stubText,
+  price,
+  perks,
 }) {
+  const { edition, policy } = useSite();
   const tiltRef = useRef(null);
+
+  // The card reads the live edition and policy itself, so no caller can ship
+  // placeholder copy by forgetting a prop. Explicit props still win.
+  const includedCount = policy?.includedEventCount;
+  const lunchDays = policy?.lunchIncludedDays?.length;
+  const resolved = {
+    eyebrow: eyebrow ?? "Two days of engineering. One all-pass.",
+    name: name ?? `${edition?.name ?? "Convention"} Pass`,
+    venue:
+      venue ??
+      "Full floor clearance, competitions, workshops and every exhibition - no gated tracks.",
+    dates: dates ?? dateRange(edition?.startsAt, edition?.endsAt),
+    city: city ?? edition?.city ?? "Palakkad, Kerala",
+    stubText:
+      stubText ??
+      (policy?.passPricePaise
+        ? money(policy.passPricePaise)
+        : "Price reveal"),
+    price: price ?? "Get now",
+    perks:
+      perks ??
+      [
+        lunchDays === 2 ? "Lunch on both convention days" : "Lunch included",
+        includedCount ? `Up to ${includedCount} included events` : "Included event allowance",
+        "Unrestricted access to all exhibitions",
+      ],
+  };
+
+  const isStubLong = resolved.stubText.length > 7;
 
   const handleMove = (e) => {
     const el = tiltRef.current;
@@ -57,32 +85,34 @@ export default function HolographicTicket({
           onPointerLeave={handleLeave}
         >
         <Link to="/pass">
-          <article className="ht-ticket" aria-label={`${stubText} pass for ${name}`}>
+          <article className="ht-ticket" aria-label={`${resolved.name}, ${resolved.stubText}`}>
             <div className="ht-streak" aria-hidden="true" />
             <div className="ht-grain" aria-hidden="true" />
 
             <div className="ht-main">
-              <p className="ht-eyebrow">{eyebrow}</p>
+              <p className="ht-eyebrow">{resolved.eyebrow}</p>
 
-              <h2 className="ht-name">{name}</h2>
+              <h2 className="ht-name">{resolved.name}</h2>
 
               <div className="ht-foot">
                 <p className="ht-venue">
-                  {venue} • {dates} • {city}
+                  {resolved.venue} • {resolved.dates} • {resolved.city}
                 </p>
                 <ul className="ht-perks">
-                  {perks.map((p) => (
+                  {resolved.perks.map((p) => (
                     <li key={p}>{p}</li>
                   ))}
-                  <br />
-                  <br />
-                  <li className="ht-price">{price}</li>
                 </ul>
+                {resolved.price && (
+                  <div className="ht-cta-wrap">
+                    <span className="ht-cta">{resolved.price} &rarr;</span>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="ht-stub" aria-hidden="true">
-              <span>{stubText}</span>
+            <div className={`ht-stub${isStubLong ? " is-long" : ""}`} aria-hidden="true">
+              <span>{resolved.stubText}</span>
             </div>
 
             <div className="ht-foil" aria-hidden="true" />
@@ -165,8 +195,8 @@ const css = `
   position: relative;
   display: grid;
   grid-template-columns: 1fr var(--stub);
-  aspect-ratio: 760 / 420;
-  min-height: 300px;
+  aspect-ratio: 760 / 430;
+  min-height: 350px;
   overflow: hidden;
   border-radius: 10px;
   color: #f6f4fb;
@@ -207,14 +237,15 @@ const css = `
 .ht-main {
   position: relative; z-index: 1;
   display: flex; flex-direction: column; justify-content: space-between;
-  padding: clamp(20px, 5%, 56px);
+  padding: clamp(20px, 4vw, 36px) clamp(22px, 4.5vw, 44px);
+  gap: clamp(10px, 1.8vw, 18px);
   font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
   transform: translateZ(30px);
 }
 
 .ht-eyebrow {
   margin: 0;
-  font-size: clamp(10px, 1.6vw, 13px);
+  font-size: clamp(10px, 1.4vw, 12.5px);
   letter-spacing: .04em;
   color: #a8a2b8;
 }
@@ -223,47 +254,86 @@ const css = `
   margin: 0;
   font-family: 'Archivo Black', 'Segoe UI', system-ui, sans-serif;
   font-weight: 900;
-  font-size: clamp(34px, 8vw, 66px);
-  line-height: .98;
+  font-size: clamp(28px, 6vw, 52px);
+  line-height: 1.02;
   letter-spacing: -.01em;
   text-transform: uppercase;
-  max-width: 9ch;
+  max-width: 12ch;
 }
 
-.ht-foot { display: grid; gap: 10px; }
+.ht-foot {
+  display: grid;
+  gap: 8px;
+}
 
 .ht-venue {
   margin: 0;
-  font-size: clamp(10px, 1.6vw, 13px);
+  font-size: clamp(9.5px, 1.35vw, 12px);
   font-weight: 700;
   letter-spacing: .02em;
+  line-height: 1.4;
   color: #ddd9ea;
 }
 
 .ht-perks {
-  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
   margin: 0; padding: 0; list-style: none;
-  font-size: clamp(9px, 1.4vw, 11px);
+  font-size: clamp(8.5px, 1.2vw, 10.5px);
+  line-height: 1.35;
   color: #9d97b0;
 }
 .ht-perks li::before { content: "✓ "; color: #8f6bff; }
-.ht-perks .ht-price { color: #f6f4fb; font-weight: 700; }
-.ht-perks .ht-price::before { content: ""; }
+
+.ht-cta-wrap {
+  margin-top: 4px;
+}
+.ht-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f6f4fb;
+  font-size: clamp(9.5px, 1.25vw, 11px);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+.ht-ticket:hover .ht-cta {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: none;
+  transform: translateX(2px);
+}
 
 .ht-stub {
   position: relative; z-index: 1;
-  display: grid; place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-left: 1.5px dashed rgba(200, 190, 230, .35);
   transform: translateZ(20px);
+  padding: 16px 4px;
+  overflow: hidden;
 }
 .ht-stub span {
   writing-mode: vertical-rl;
   font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
-  font-size: clamp(34px, 7.5vw, 62px);
+  font-size: clamp(26px, 5.5vw, 42px);
   font-weight: 700;
   letter-spacing: .06em;
   color: #dcd8e8;
   white-space: nowrap;
+  text-align: center;
+}
+.ht-stub.is-long span {
+  font-size: clamp(14px, 2.5vw, 20px);
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  color: #d4cee4;
 }
 
 /* Holographic foil */
@@ -306,8 +376,11 @@ const css = `
 }
 
 @media (max-width: 560px) {
-  .ht-stage { --stub: 72px; }
+  .ht-stage { --stub: 64px; }
   .ht-ticket { aspect-ratio: auto; min-height: 340px; }
+  .ht-main { padding: 18px 16px; }
+  .ht-stub span { font-size: 18px; }
+  .ht-stub.is-long span { font-size: 11px; letter-spacing: .1em; }
 }
 
 @media (prefers-reduced-motion: reduce) {

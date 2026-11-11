@@ -60,8 +60,12 @@ class ProfilePatch(CamelModel):
     college_name: str | None = Field(default=None, max_length=200)
     university_name: str | None = Field(default=None, max_length=200)
     course: str | None = Field(default=None, max_length=120)
+    education_level: str | None = Field(default=None, pattern="^(B\\.Tech|Polytechnic)$")
+    iste_member: bool | None = None
+    accommodation_needed: bool | None = None
+    privacy_consent: bool | None = None
     branch: str | None = Field(default=None, max_length=120)
-    year_of_study: int | None = Field(default=None, ge=1, le=6)
+    year_of_study: int | None = Field(default=None, ge=1, le=4)
     student_identifier: str | None = Field(default=None, max_length=60)
     institution_email: str | None = Field(default=None, max_length=320)
 
@@ -83,6 +87,12 @@ class ProfileResponse(CamelModel):
     college_name: str | None = None
     university_name: str | None = None
     course: str | None = None
+    education_level: str | None = None
+    iste_member: bool = False
+    accommodation_needed: bool = False
+    privacy_consent: bool = False
+    college_id_uploaded: bool = False
+    iste_proof_uploaded: bool = False
     branch: str | None = None
     year_of_study: int | None = None
     student_identifier_last4: str | None = None

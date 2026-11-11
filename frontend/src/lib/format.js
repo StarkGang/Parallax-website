@@ -1,13 +1,31 @@
 const IST = 'Asia/Kolkata';
 
-export const money = (paise) => {
-  const value = Number(paise || 0) / 100;
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
-  }).format(value);
-};
+// Formatters are module-level: building Intl objects per call is measurable in
+// tables that render one price or date per row.
+const inrFmt = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+const istInputFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: IST,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+const dayMonthFmt = new Intl.DateTimeFormat('en-IN', {
+  day: '2-digit',
+  month: 'short',
+  timeZone: IST,
+});
+
+export const money = (paise) => inrFmt.format(Number(paise || 0) / 100);
 
 export const rupees = (paise) => Number(paise || 0) / 100;
 export const paise = (amount) => Math.round(Number(amount || 0) * 100);
@@ -41,9 +59,7 @@ export const dateRange = (start, end) => {
   const b = end ? new Date(end) : null;
   if (!b) return date(start);
   const sameYear = a.getFullYear() === b.getFullYear();
-  const left = sameYear
-    ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', timeZone: IST }).format(a)
-    : date(a);
+  const left = sameYear ? dayMonthFmt.format(a) : date(a);
   const right = date(b);
   return `${left} - ${right}`;
 };
@@ -56,6 +72,21 @@ export const toLocalInput = (iso) => {
 };
 
 export const fromLocalInput = (value) => (value ? new Date(value).toISOString() : null);
+
+export const toISTInput = (iso) => {
+  if (!iso) return '';
+  const parts = istInputFmt.formatToParts(new Date(iso));
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+};
+
+export const fromISTInput = (value) => {
+  if (!value) return null;
+  const [day, clock] = value.split('T');
+  const [year, month, dateValue] = day.split('-').map(Number);
+  const [hour, minute] = clock.split(':').map(Number);
+  return new Date(Date.UTC(year, month - 1, dateValue, hour - 5, minute - 30)).toISOString();
+};
 
 export const initials = (name = '') =>
   name

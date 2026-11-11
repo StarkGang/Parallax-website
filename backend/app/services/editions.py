@@ -331,7 +331,7 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         await db.execute(
             select(func.count(Registration.id)).where(
                 Registration.edition_id == edition_id,
-                Registration.status.in_(["pending", "reserved"]),
+                Registration.status.in_(["pending", "reserved", "pending_verification"]),
             )
         )
     ).scalar() or 0

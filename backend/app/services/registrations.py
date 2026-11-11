@@ -41,7 +41,7 @@ async def list_for_user(
                 .where(
                     Registration.user_id == user_id,
                     Registration.edition_id == edition_id,
-                    Registration.status.in_(["confirmed", "reserved", "pending"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending", "pending_verification"]),
                 )
                 .order_by(Registration.created_at.desc())
             )
@@ -159,7 +159,7 @@ async def create_addon_registrations(
                 select(Registration).where(
                     Registration.user_id == user_id,
                     Registration.event_id == e.id,
-                    Registration.status.in_(["confirmed", "reserved", "pending"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending", "pending_verification"]),
                 )
             )
         ).scalar_one_or_none()

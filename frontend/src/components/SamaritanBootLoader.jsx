@@ -58,17 +58,16 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
     setCurrentResource(PARALLAX_RESOURCES[resIdx]);
   }, [progress]);
 
-  // Smooth realistic progress leading towards readiness
+  // Smooth realistic progress leading towards readiness. The updater stays
+  // pure (React may replay it); the interval is stopped from an effect that
+  // watches progress instead of from inside the updater.
+  const progressIntervalRef = useRef(null);
   useEffect(() => {
-    if (finishedRef.current) return;
+    if (finishedRef.current) return undefined;
 
-    let timer = null;
-    const interval = setInterval(() => {
+    progressIntervalRef.current = setInterval(() => {
       setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
+        if (prev >= 100) return 100;
 
         // If backend / data is ready, accelerate swiftly to 100
         if (isReady) {
@@ -86,16 +85,21 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
     }, 60);
 
     // Fallback safety: never keep the user waiting more than 2s, whatever the network does.
-    const safety = setTimeout(() => {
-      setProgress(100);
-    }, 2000);
+    const safety = setTimeout(() => setProgress(100), 2000);
 
     return () => {
-      clearInterval(interval);
+      clearInterval(progressIntervalRef.current);
       clearTimeout(safety);
-      if (timer) clearTimeout(timer);
+      progressIntervalRef.current = null;
     };
   }, [isReady]);
+
+  useEffect(() => {
+    if (progress >= 100 && progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  }, [progress]);
 
   const onCompleteRef = useRef(onComplete);
   useEffect(() => {
@@ -142,7 +146,14 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
     <div
       className={`samaritan-boot-screen ${phase === 'unveiling' ? 'fade-out' : ''}`}
       onClick={handleQuickSkip}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+          event.preventDefault();
+          handleQuickSkip();
+        }
+      }}
       role="region"
+      tabIndex={0}
       aria-label="System Initializing"
     >
       {/* Left Pane (Aperture shutter) */}
@@ -153,7 +164,7 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
         <div className="samaritan-overlay-cap left-cap" />
         <div className="samaritan-boot-log">
           {logs.map((line, idx) => (
-            <div key={idx} className="samaritan-log-line">
+            <div key={line} className="samaritan-log-line">
               <span className="samaritan-bracket">[</span>
               <span className="samaritan-log-num">{idx < 10 ? ` 0${idx}` : idx}</span>
               <span className="samaritan-bracket">]</span>

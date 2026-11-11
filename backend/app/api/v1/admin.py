@@ -6,12 +6,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, require_permission
 from app.integrations.storage import get_storage
-from app.core.errors import AppError
+from app.core.errors import AppError, Forbidden
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import permissions_for
 from app.db.session import get_db
@@ -32,6 +32,7 @@ from app.models.edition import (
     Icon,
 )
 from app.models.user import EditionMembership, User
+from app.models.user import ParticipantProfile, ProfileChoice, Session
 from app.schemas.admin import (
     AnnouncementUpsert,
     CategoryUpsert,
@@ -41,6 +42,7 @@ from app.schemas.admin import (
     EventUpsert,
     MembershipGrant,
     PolicyUpdate,
+    ProfileChoiceMerge,
     RefundCreate,
     UserStatusUpdate,
     VerificationDecision,
@@ -99,6 +101,9 @@ async def get_settings_route(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await edition_service.edition_by_id(db, edition_id)
+    from app.services.system_settings import all_settings
+
+    system = await all_settings(db)
     return {
         "data": {
             "id": str(edition.id),
@@ -111,6 +116,12 @@ async def get_settings_route(
             "endsAt": edition_service.aware(edition.ends_at).isoformat() if edition.ends_at else None,
             "registrationOpensAt": edition_service.aware(edition.registration_opens_at).isoformat() if edition.registration_opens_at else None,
             "registrationClosesAt": edition_service.aware(edition.registration_closes_at).isoformat() if edition.registration_closes_at else None,
+            "registrationUnlockAt": system["registration_unlock_at"],
+            "registrationPrices": {
+                "isteMemberPaise": system["isteMemberPaise"],
+                "nonIstePaise": system["nonIstePaise"],
+                "polytechnicPaise": system["polytechnicPaise"],
+            },
             "status": edition.status,
             "contactEmail": edition.contact_email,
             "allowedEmailDomains": edition.allowed_email_domains or [],
@@ -129,6 +140,12 @@ async def update_settings(
 ) -> dict:
     edition = await edition_service.edition_by_id(db, edition_id)
     data = payload.model_dump(exclude_unset=True)
+    unlock_at = data.pop("registration_unlock_at", None)
+    prices = {
+        "registration_price_iste_member_paise": data.pop("registration_price_iste_member_paise", None),
+        "registration_price_non_iste_paise": data.pop("registration_price_non_iste_paise", None),
+        "registration_price_polytechnic_paise": data.pop("registration_price_polytechnic_paise", None),
+    }
     if "tagline" in data:
         edition.hero_subtitle = data.pop("tagline")
     data.pop("branding", None)
@@ -151,6 +168,26 @@ async def update_settings(
     for k, v in data.items():
         if hasattr(edition, k):
             setattr(edition, k, v)
+    system_values = {}
+    if unlock_at is not None:
+        from zoneinfo import ZoneInfo
+
+        if unlock_at.tzinfo is None:
+            unlock_at = unlock_at.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        system_values["registration_unlock_at"] = unlock_at.astimezone(UTC).isoformat()
+    price_key_map = {
+        "registration_price_iste_member_paise": "isteMemberPaise",
+        "registration_price_non_iste_paise": "nonIstePaise",
+        "registration_price_polytechnic_paise": "polytechnicPaise",
+    }
+    system_values.update({price_key_map[k]: v for k, v in prices.items() if v is not None})
+    if system_values:
+        from app.services.system_settings import update_settings as update_system_settings
+
+        await update_system_settings(db, system_values, ctx.user.id)
+        from app.core.cache import cache_clear
+
+        cache_clear()
     await db.flush()
     await db.commit()
     return {"data": {"updated": True}}
@@ -463,6 +500,159 @@ async def users(
     return {"data": rows, "total": total, "page": page, "pageSize": page_size}
 
 
+@router.get("/profile-choices")
+async def profile_choices(
+    edition_id: uuid.UUID,
+    kind: str | None = Query(default=None, pattern="^(branch|college)$"),
+    ctx: AuthContext = Depends(require_permission("users.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    stmt = select(ProfileChoice).order_by(ProfileChoice.kind, ProfileChoice.name)
+    if kind:
+        stmt = stmt.where(ProfileChoice.kind == kind)
+    rows = list((await db.scalars(stmt)).all())
+    return {"data": [{"id": str(row.id), "kind": row.kind, "name": row.name} for row in rows]}
+
+
+@router.post("/profile-choices/{choice_id}/merge")
+async def merge_profile_choice(
+    edition_id: uuid.UUID,
+    choice_id: uuid.UUID,
+    payload: ProfileChoiceMerge,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("users.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    source = await db.get(ProfileChoice, choice_id)
+    target = await db.get(ProfileChoice, payload.target_id)
+    if not source or not target or source.id == target.id or source.kind != target.kind:
+        raise NotFound("Compatible profile choices not found.")
+    attr = "branch" if source.kind == "branch" else "college_name"
+    await db.execute(
+        update(ParticipantProfile).where(getattr(ParticipantProfile, attr) == source.name).values({attr: target.name})
+    )
+    await db.delete(source)
+    await db.commit()
+    return {"data": {"merged": True}}
+
+
+@router.delete("/profile-choices/{choice_id}")
+async def delete_profile_choice(
+    edition_id: uuid.UUID,
+    choice_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("users.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    source = await db.get(ProfileChoice, choice_id)
+    if not source:
+        raise NotFound("Profile choice not found.")
+    attr = "branch" if source.kind == "branch" else "college_name"
+    in_use = await db.scalar(select(ParticipantProfile.user_id).where(getattr(ParticipantProfile, attr) == source.name).limit(1))
+    if in_use:
+        raise Conflict("This choice is in use. Merge it into another choice first.")
+    await db.delete(source)
+    await db.commit()
+    return {"data": {"deleted": True}}
+
+
+@router.get("/users/{user_id}/profile-documents/{kind}")
+async def profile_document(
+    edition_id: uuid.UUID,
+    user_id: uuid.UUID,
+    kind: str,
+    ctx: AuthContext = Depends(require_permission("verification.review")),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    if kind not in {"college_id", "iste_proof"}:
+        raise NotFound("Profile document not found.")
+    verified_scope = await db.scalar(
+        select(EligibilityVerification.id).where(
+            EligibilityVerification.edition_id == edition_id,
+            EligibilityVerification.user_id == user_id,
+        )
+    )
+    profile = await db.scalar(
+        select(ParticipantProfile).where(ParticipantProfile.user_id == user_id)
+    )
+    key = getattr(profile, f"{kind}_document_key", None) if profile else None
+    if not verified_scope or not key:
+        raise NotFound("Profile document not found.")
+    data = await get_storage().get(key)
+    mime_type = "application/pdf" if data.startswith(b"%PDF-") else "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime_type = "image/png"
+    elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        mime_type = "image/webp"
+    return Response(
+        data,
+        media_type=mime_type,
+        headers={"Content-Disposition": "inline", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.post("/users/{user_id}/fulfill-deletion")
+async def fulfill_deletion_request(
+    edition_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("users.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    user = await db.get(User, user_id)
+    if user is None or user.status != "deletion_requested":
+        raise NotFound("Deletion request not found.")
+    in_edition = await db.scalar(
+        select(EditionMembership.id).where(
+            EditionMembership.edition_id == edition_id,
+            EditionMembership.user_id == user_id,
+        )
+    )
+    if not in_edition:
+        raise NotFound("Deletion request not found.")
+    profile = await db.scalar(select(ParticipantProfile).where(ParticipantProfile.user_id == user_id))
+    storage = get_storage()
+    if profile:
+        for attr in ("college_id_document_key", "iste_proof_document_key"):
+            key = getattr(profile, attr)
+            if key:
+                await storage.delete(key)
+                setattr(profile, attr, None)
+        await db.delete(profile)
+    verifications = list((await db.scalars(
+        select(EligibilityVerification).where(EligibilityVerification.user_id == user_id)
+    )).all())
+    for verification in verifications:
+        if verification.document_key:
+            await storage.delete(verification.document_key)
+            verification.document_key = None
+    sessions = list((await db.scalars(select(Session).where(Session.user_id == user_id))).all())
+    for session in sessions:
+        session.revoked_at = datetime.now(UTC)
+        session.revoked_reason = "account_deleted"
+    user.google_sub = None
+    user.email = f"deleted+{user.id}@invalid.parallax"
+    user.email_normalized = user.email.casefold()
+    user.full_name = "Deleted participant"
+    user.picture_url = None
+    user.phone_e164 = None
+    user.status = "deleted"
+    from app.services.audit import record as audit_record
+
+    audit_record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="user.deletion_fulfilled",
+        resource_type="user",
+        resource_id=user_id,
+        after={"status": "deleted", "documentsRemoved": True},
+    )
+    await db.flush()
+    await db.commit()
+    return {"data": {"deleted": True}}
+
+
 @router.patch("/users/{user_id}/status")
 async def user_status(
     edition_id: uuid.UUID,
@@ -611,6 +801,7 @@ async def create_refund(
         reason_code=payload.reason_code,
         reason_note=payload.reason_note,
         requested_by_id=ctx.user.id,
+        idempotency_key=payload.idempotency_key,
     )
     await db.commit()
     return {"data": {"refundId": str(refund.id), "status": refund.status}}
@@ -704,6 +895,10 @@ async def decide_verification(
     ctx: AuthContext = Depends(require_permission("verification.review")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    from app.core.config import get_settings
+
+    if get_settings().verification_mode == "api":
+        raise Forbidden("Manual review is disabled in API verification mode.")
     v = await db.get(EligibilityVerification, verification_id)
     if v is None or v.edition_id != edition_id:
         raise NotFound("Verification not found.")
@@ -713,6 +908,7 @@ async def decide_verification(
         v,
         decision=payload.decision,
         reason=payload.reason,
+        fake_or_invalid=payload.fake_or_invalid,
         actor_id=ctx.user.id,
         actor_role=_role(ctx, edition_id),
     )

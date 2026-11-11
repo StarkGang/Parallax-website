@@ -7,7 +7,7 @@ from app.schemas.common import CamelModel
 
 
 class PolicyPublic(CamelModel):
-    pass_price_paise: int
+    pass_price_paise: int | None = None
     lunch_included_days: list[str] = []
     included_event_count: int
     included_selection_mode: str
@@ -70,9 +70,9 @@ class EventListItem(CamelModel):
     icon_id: uuid.UUID | None = None
     banner_url: str | None = None
     accent: str | None = None
-    base_value_paise: int
+    base_value_paise: int | None = None
     included_eligible: bool
-    addon_price_paise: int
+    addon_price_paise: int | None = None
     addon_charge_basis: str
     capacity: int
     seats_left: int | None = None

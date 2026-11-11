@@ -4,6 +4,7 @@ Prices, caps, event rules, icons and copy all live here.
 """
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,14 +13,16 @@ from app.models.edition import (
     Announcement,
     ConventionEdition,
     EditionPolicy,
+    EligibilityVerification,
     Event,
     EventCategory,
     Icon,
 )
-from app.models.user import EditionMembership, User
+from app.models.user import EditionMembership, ParticipantProfile, ProfileChoice, User
 from app.services import icons as icon_service
+from app.services.system_settings import seed_system_settings
 
-EDITION_SLUG = "parallax-2026"
+EDITION_SLUG = "parallax-2027"
 
 CATEGORIES = (
     ("computing", "Computing", "cyan", 1),
@@ -279,6 +282,128 @@ async def _refresh_demo_timeline(db: AsyncSession, edition: ConventionEdition) -
     await db.flush()
 
 
+BRANCHES = (
+    "Computer Science",
+    "Information Technology",
+    "Electronics and Communication",
+    "Electrical and Electronics",
+    "Mechanical Engineering",
+    "Civil Engineering",
+    "Artificial Intelligence and Data Science",
+)
+
+COLLEGES = (
+    "NSS College of Engineering, Palakkad",
+    "College of Engineering Trivandrum (CET)",
+    "Government Engineering College, Thrissur",
+    "Government Engineering College, Barton Hill",
+    "Government Engineering College, Kozhikode",
+    "Government Engineering College, Sreekrishnapuram, Palakkad",
+    "Government Engineering College, Kannur",
+    "Government Engineering College, Wayanad",
+    "Government Engineering College, Idukki",
+    "Rajiv Gandhi Institute of Technology (RIT), Kottayam",
+    "TKM College of Engineering, Kollam",
+    "Model Engineering College (MEC), Ernakulam",
+    "Mar Athanasius College of Engineering (MACE), Kothamangalam",
+    "National Institute of Technology Calicut (NITC)",
+    "Indian Institute of Technology Palakkad (IIT Palakkad)",
+    "Cochin University College of Engineering (CUSAT)",
+    "Amrita Vishwa Vidyapeetham",
+    "Federal Institute of Science and Technology (FISAT)",
+    "Rajagiri School of Engineering & Technology (RSET)",
+    "SCMS School of Engineering and Technology",
+    "Muthoot Institute of Technology and Science (MITS)",
+    "Saintgits College of Engineering, Kottayam",
+    "Amal Jyothi College of Engineering, Kanjirappally",
+    "Vidya Academy of Science and Technology, Thrissur",
+    "LBS Institute of Technology for Women, Thiruvananthapuram",
+    "Government Polytechnic College, Palakkad",
+    "Government Polytechnic College, Thrissur",
+    "Government Polytechnic College, Kozhikode",
+    "Government Polytechnic College, Perinthalmanna",
+    "Government Polytechnic College, Kottayam",
+    "Government Polytechnic College, Kalamassery",
+    "Government Polytechnic College, Kannur",
+    "Other / Custom College",
+)
+
+
+async def _seed_profile_choices(db: AsyncSession) -> None:
+    """Populate the branch and college pickers the profile form reads."""
+    existing = {
+        (row.kind, row.normalized_name)
+        for row in (await db.execute(select(ProfileChoice))).scalars()
+    }
+    for kind, names in (("branch", BRANCHES), ("college", COLLEGES)):
+        for name in names:
+            normalized = name.casefold()
+            if (kind, normalized) in existing:
+                continue
+            db.add(ProfileChoice(kind=kind, name=name, normalized_name=normalized))
+    await db.flush()
+
+
+async def _seed_demo_participant(
+    db: AsyncSession, edition: ConventionEdition, email: str
+) -> None:
+    """A ready-to-use attendee so the local portal demo can buy a pass.
+
+    Real attendees complete this themselves; seeding it keeps the demo from
+    dead-ending at the payment step on a fresh checkout.
+    """
+    normalized = email.strip().lower()
+    user = (
+        await db.execute(select(User).where(User.email_normalized == normalized))
+    ).scalars().first()
+    if user is None:
+        user = User(
+            email=normalized,
+            email_normalized=normalized,
+            full_name="Demo Participant",
+            email_verified=True,
+            status="active",
+            google_sub=f"seed-participant-{normalized}",
+        )
+        db.add(user)
+        await db.flush()
+
+    profile = (
+        await db.execute(
+            select(ParticipantProfile).where(ParticipantProfile.user_id == user.id)
+        )
+    ).scalars().first()
+    if profile is None:
+        profile = ParticipantProfile(user_id=user.id)
+        db.add(profile)
+    profile.college_name = profile.college_name or "NSS College of Engineering, Palakkad"
+    profile.education_level = profile.education_level or "B.Tech"
+    profile.branch = profile.branch or "Computer Science"
+    profile.year_of_study = profile.year_of_study or 3
+    profile.privacy_consent_at = profile.privacy_consent_at or datetime.now(UTC)
+
+    verification = (
+        await db.execute(
+            select(EligibilityVerification).where(
+                EligibilityVerification.user_id == user.id,
+                EligibilityVerification.edition_id == edition.id,
+            )
+        )
+    ).scalars().first()
+    if verification is None:
+        db.add(
+            EligibilityVerification(
+                user_id=user.id,
+                edition_id=edition.id,
+                method="roster",
+                status="verified",
+                reviewed_at=datetime.now(UTC),
+                notes="Seeded demo verification.",
+            )
+        )
+    await db.flush()
+
+
 async def seed_if_empty(db: AsyncSession) -> None:
     ext = (
         await db.execute(
@@ -290,21 +415,21 @@ async def seed_if_empty(db: AsyncSession) -> None:
         # Seed edition
         edition = ConventionEdition(
             slug=EDITION_SLUG,
-            name="Parallax 2026",
-            hero_headline="Parallax 2026",
+            name="Parallax 2027",
+            hero_headline="Parallax 2027",
             hero_subtitle="Two days of engineering, argued in public.",
             theme="Engineering in Public",
             organizer="ISTE Student Chapter, NSSCE",
             host="NSS College of Engineering, Palakkad",
             venue="NSSCE Campus, Palakkad",
             city="Palakkad, Kerala",
-            starts_at=_at(1, 9, 0),
-            ends_at=_at(2, 18, 0),
-            registration_opens_at=_at(-30, 0, 0),
-            registration_closes_at=_at(1, 12, 0),
+            starts_at=datetime(2027, 1, 8, 9, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            ends_at=datetime(2027, 1, 9, 18, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            registration_opens_at=datetime(2026, 11, 15, 0, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            registration_closes_at=datetime(2026, 11, 30, 23, 59, 59, tzinfo=ZoneInfo("Asia/Kolkata")),
             status="published",
             contact_email="iste@nssce.ac.in",
-            allowed_email_domains=["nssce.ac.in", "gmail.com"],
+            allowed_email_domains=[],
         )
         db.add(edition)
         await db.flush()
@@ -313,7 +438,9 @@ async def seed_if_empty(db: AsyncSession) -> None:
             edition_id=edition.id,
             version=1,
             is_current=True,
-            pass_price_paise=50000,
+            # One source of truth: the catalogue shows the non-ISTE rate that
+            # the pricing service actually charges, not a separate legacy number.
+            pass_price_paise=get_settings().registration_price_non_iste_paise,
             included_event_count=3,
             lunch_included_days=["day1", "day2"],
             included_selection_mode="up_to",
@@ -323,10 +450,10 @@ async def seed_if_empty(db: AsyncSession) -> None:
             team_members_require_pass=True,
             team_fee_basis_default="per_participant",
             hold_minutes=15,
-            selection_change_deadline=_at(1, 10, 0),
+            selection_change_deadline=datetime(2027, 1, 7, 23, 59, 59, tzinfo=ZoneInfo("Asia/Kolkata")),
             refund_rules={"allowed": True, "deadlineHours": 48},
             gst_note="Inclusive of all applicable taxes",
-            reason="Initial policy for Parallax 2026",
+            reason="Initial policy for Parallax 2027",
         )
         db.add(policy)
         await db.flush()
@@ -356,7 +483,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
             await db.flush()
             cats[slug] = cat
 
-        # Schedule distribution across Day 1 (Nov 4) and Day 2 (Nov 5) at NSSCE
+        # Schedule distribution across Day 1 (Jan 8, 2027) and Day 2 (Jan 9, 2027) at NSSCE
         event_schedules = {
             "paper-presentation": (1, 9, 30, 13, 0, "CS Seminar Hall"),
             "coding-competition": (1, 10, 0, 12, 30, "Central Computing Facility"),
@@ -388,6 +515,11 @@ async def seed_if_empty(db: AsyncSession) -> None:
             day_num, s_hr, s_min, e_hr, e_min, room = event_schedules.get(
                 slug, (1, 10, 0, 13, 0, "Seminar Hall A")
             )
+            day_base = (
+                datetime(2027, 1, 8, tzinfo=ZoneInfo("Asia/Kolkata"))
+                if day_num == 1
+                else datetime(2027, 1, 9, tzinfo=ZoneInfo("Asia/Kolkata"))
+            )
             ev = Event(
                 edition_id=edition.id,
                 category_id=cats[cat_slug].id,
@@ -405,10 +537,10 @@ async def seed_if_empty(db: AsyncSession) -> None:
                 included_eligible=True,
                 addon_price_paise=addon_pr,
                 capacity=cap,
-                starts_at=_at(day_num, s_hr, s_min),
-                ends_at=_at(day_num, e_hr, e_min),
-                registration_opens_at=_at(-30, 0, 0),
-                registration_closes_at=_at(day_num, s_hr - 1, 0),
+                starts_at=day_base.replace(hour=s_hr, minute=s_min),
+                ends_at=day_base.replace(hour=e_hr, minute=e_min),
+                registration_opens_at=datetime(2026, 11, 15, 0, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+                registration_closes_at=datetime(2026, 11, 30, 23, 59, 59, tzinfo=ZoneInfo("Asia/Kolkata")),
                 venue_room=room,
                 status="published",
                 is_featured=featured,
@@ -419,18 +551,33 @@ async def seed_if_empty(db: AsyncSession) -> None:
         # Seed announcements
         a = Announcement(
             edition_id=edition.id,
-            title="Welcome to Parallax 2026!",
+            title="Welcome to Parallax 2027!",
             body_md="Registrations are officially open for all technical and robotics events at NSS College of Engineering.",
             audience="public",
-            published_at=_at(0, 8, 0),
+            published_at=datetime(2026, 11, 15, 0, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
         )
         db.add(a)
     else:
         edition = ext
+        edition.name = "Parallax 2027"
+        edition.hero_headline = "Parallax 2027"
+        edition.starts_at = datetime(2027, 1, 8, 9, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        edition.ends_at = datetime(2027, 1, 9, 18, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        edition.registration_opens_at = datetime(2026, 11, 15, 0, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        edition.registration_closes_at = datetime(2026, 11, 30, 23, 59, 59, tzinfo=ZoneInfo("Asia/Kolkata"))
+        edition.allowed_email_domains = []
+        await db.flush()
         await _refresh_demo_timeline(db, edition)
 
-    # Seed administrator / owner (configurable via env BOOTSTRAP_OWNER_EMAIL or DEV_ADMIN_EMAIL)
     settings = get_settings()
+
+    # Settings, profile pickers and a demo attendee are independent of the
+    # catalogue above, so they are seeded on every run.
+    await seed_system_settings(db)
+    await _seed_profile_choices(db)
+    await _seed_demo_participant(db, edition, settings.dev_participant_email)
+
+    # Seed administrator / owner (configurable via env BOOTSTRAP_OWNER_EMAIL or DEV_ADMIN_EMAIL)
     admin_email = (
         settings.bootstrap_owner_email
         or settings.dev_admin_email

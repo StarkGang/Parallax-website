@@ -146,6 +146,8 @@ async function runRequest(
 
 export const publicApi = {
   config: () => api('/public/config'),
+  registrationPolicy: () => api('/public/registration-policy'),
+  profileOptions: (kind) => api(`/public/profile-options?kind=${encodeURIComponent(kind)}`),
   edition: () => api('/public/editions/current'),
   editionBySlug: (slug) => api(`/public/editions/${encodeURIComponent(slug)}`),
   categories: (slug) => api(`/public/editions/${encodeURIComponent(slug)}/categories`),
@@ -168,6 +170,8 @@ export const authApi = {
   sessions: () => api('/me/sessions'),
   profile: () => api('/me/profile'),
   updateProfile: (payload) => api('/me/profile', { method: 'PATCH', body: payload }),
+  uploadProfileDocument: (form) => api('/me/profile/documents', { method: 'POST', form }),
+  requestDeletion: () => api('/me/deletion-request', { method: 'POST' }),
   googleLoginHref: (next = '/portal') =>
     `${API_BASE}/auth/google/login?next=${encodeURIComponent(next)}`,
 };
@@ -200,6 +204,8 @@ export const portalApi = {
   ticketQrUrl: (editionId, ticketId, accent = '') =>
     `${API_BASE}/editions/${editionId}/tickets/${ticketId}/qr${accent ? `?accent=${encodeURIComponent(accent)}` : ''}`,
   payment: (editionId, orderId) => api(`/editions/${editionId}/payments/${orderId}`),
+  verifyPayment: (editionId, orderId, payload) =>
+    api(`/editions/${editionId}/payments/${orderId}/verify`, { method: 'POST', body: payload }),
   mockPay: (editionId, orderId) =>
     api(`/editions/${editionId}/payments/${orderId}/mock`, { method: 'POST' }),
 };
@@ -239,6 +245,15 @@ export const adminApi = {
   users: (editionId, params = {}) => api(`${adminBase(editionId)}/users${query(params)}`),
   setUserStatus: (editionId, userId, payload) =>
     api(`${adminBase(editionId)}/users/${userId}/status`, { method: 'PATCH', body: payload }),
+  profileChoices: (editionId, kind) => api(`${adminBase(editionId)}/profile-choices${query({ kind })}`),
+  mergeProfileChoice: (editionId, choiceId, targetId) =>
+    api(`${adminBase(editionId)}/profile-choices/${choiceId}/merge`, { method: 'POST', body: { targetId } }),
+  deleteProfileChoice: (editionId, choiceId) =>
+    api(`${adminBase(editionId)}/profile-choices/${choiceId}`, { method: 'DELETE' }),
+  fulfillDeletion: (editionId, userId) =>
+    api(`${adminBase(editionId)}/users/${userId}/fulfill-deletion`, { method: 'POST' }),
+  profileDocumentUrl: (editionId, userId, kind) =>
+    `${API_BASE}${adminBase(editionId)}/users/${userId}/profile-documents/${kind}`,
   memberships: (editionId) => api(`${adminBase(editionId)}/memberships`),
   grantMembership: (editionId, payload) =>
     api(`${adminBase(editionId)}/memberships`, { method: 'POST', body: payload }),

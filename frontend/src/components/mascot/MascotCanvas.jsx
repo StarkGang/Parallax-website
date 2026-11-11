@@ -16,7 +16,10 @@ export default function MascotCanvas({
   const stageRef = useRef(null);
   const [ready, setReady] = useState(false);
   const callbacks = useRef({ onFail, onReady });
-  callbacks.current = { onFail, onReady };
+  // Render must stay pure, so the latest callbacks are published after commit.
+  useEffect(() => {
+    callbacks.current = { onFail, onReady };
+  }, [onFail, onReady]);
 
   useEffect(() => {
     const host = hostRef.current;

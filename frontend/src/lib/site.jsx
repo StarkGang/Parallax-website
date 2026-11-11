@@ -24,18 +24,18 @@ function setCached(key, value) {
 
 export const FALLBACK_EDITION = {
   id: '00000000-0000-0000-0000-000000000001',
-  slug: 'parallax-2026',
-  name: 'Parallax 2026',
+  slug: 'parallax-2027',
+  name: 'Parallax 2027',
   tagline: 'A Shift in Perspective',
   organizer: "ISTE Students' Chapter",
   host: 'NSS College of Engineering',
   venue: 'NSSCE Campus',
   city: 'Palakkad, Kerala',
   timezone: 'Asia/Kolkata',
-  startsAt: '2026-03-20T09:00:00Z',
-  endsAt: '2026-03-21T18:00:00Z',
-  registrationOpensAt: '2026-02-01T00:00:00Z',
-  registrationClosesAt: '2026-03-19T23:59:59Z',
+  startsAt: '2027-01-08T09:00:00+05:30',
+  endsAt: '2027-01-09T18:00:00+05:30',
+  registrationOpensAt: '2026-11-15T00:00:00+05:30',
+  registrationClosesAt: '2026-11-30T23:59:59+05:30',
   status: 'published',
   contactEmail: 'iste@nssce.ac.in',
   branding: {},
@@ -62,7 +62,10 @@ export function SiteProvider({ children }) {
   const [nonce, setNonce] = useState(0);
 
   const editionRef = useRef(edition);
-  editionRef.current = edition;
+  // Keep the guard ref in sync after commit rather than mutating it in render.
+  useEffect(() => {
+    editionRef.current = edition;
+  }, [edition]);
 
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
 

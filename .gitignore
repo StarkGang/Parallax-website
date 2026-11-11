@@ -108,3 +108,5 @@ tmp/
 .claude/skills/
 /.claude
 /.claude/skills
+.agents/skills/
+skills-lock.json

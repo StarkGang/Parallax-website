@@ -230,11 +230,11 @@ npm test             # Node test runner (no frontend tests included yet)
 2. `main.jsx` mounts React, `BrowserRouter`, and providers for theme, edition/site data, and authentication, and imports both global stylesheets.
 3. `App.jsx` picks the page for the current route, loads shared navigation and footer, and applies participant/staff route gates.
 4. `pages/Public.jsx`, `Portal.jsx`, `Admin.jsx`, and `Login.jsx` render the visitor, participant, staff, and sign-in interfaces. `components/ui.jsx` supplies shared elements.
-5. Pages call shared functions from the absent `src/lib/` modules (API clients, auth/site/theme providers, date/currency formatters). Their implementation is unavailable in this checkout.
+5. Pages call shared functions from `src/lib/` (API clients, auth/site/theme providers, date/currency formatters).
 6. The backend mounts its routers under `/api/v1`. Public reads live under `/public`; auth, current-user, participant, admin, and webhook endpoints are separated by responsibility.
 7. In development Vite proxies API calls to FastAPI. In production the frontend and API are intended to be served from the configured deployment origin.
 
-`App.jsx` also mounts a shared theme customizer on all routes. It comes from the missing `src/lib/theme.jsx`, so its exact controls cannot be confirmed here.
+`App.jsx` also mounts a shared theme customizer on all routes.
 
 **Route table**
 
@@ -299,6 +299,38 @@ Do not hard-code a displayed price or policy in a page when it should come from 
 - **Payments** are disabled by default locally (`PAYMENTS_ENABLED=false`). The API reports when an order uses the mock path and provides a development mock-payment action to exercise pass/registration flows. It never contacts a payment provider or moves money. Real Razorpay processing needs configured credentials and webhook setup. Never use production credentials locally.
 - **Verification** can be configured for institution email or document review. Email delivery and remote storage are optional and depend on backend settings. The local demo may use local storage and development-only login.
 - Do not treat a seeded account, verification status, payment, or ticket as evidence of real-world eligibility or successful payment.
+
+### Registration profile, lock, pricing, and verification
+
+- Registration is locked until the UTC instant stored in `system_settings` as `registration_unlock_at`. The default is 15 Nov 2026, 00:00 IST. `REGISTRATION_UNLOCK_AT` is only used to seed the setting once; staff can edit it under **Manage → Settings**. The server enforces the lock for all registration and order endpoints.
+- Registration prices are centrally stored in `system_settings` in paise: ISTE ₹499, non-ISTE ₹599, Polytechnic ₹299. Polytechnic takes precedence for a Polytechnic ISTE member. Staff can edit the three values under **Manage → Settings**.
+- The participant profile collects education level, year, branch, college, membership, accommodation, privacy consent, college ID, and (for ISTE members) membership proof. Branch and college names are normalized and reused. Profile edits are blocked after payment.
+- Set `VERIFICATION_MODE=manual`, `api`, or `both`. The API mode currently uses an explicit unsupported ISTE provider adapter stub: no ISTE ID verification provider/API has been confirmed or integrated. `both` records that unavailable result and leaves manual review enabled. Manual verification is under **Manage → Verifications**. Rejections marked fake/invalid request idempotent refunds for paid orders.
+- Student documents are private, limited to 5 MB, checked by MIME and file signature, and images are re-encoded. The current retention policy is 365 days. Participants may request account deletion from Profile; staff can fulfill deletion requests in **Manage → Users**.
+
+### Database migrations
+
+The app no longer creates production tables at startup. On a fresh database, run `cd backend` then `uv run python -m alembic upgrade head` before starting the app (use `python -m alembic` rather than the bare `alembic` entry point, which uv cannot launch on Windows). The initial migration creates the complete schema; when applied to the prior `create_all` schema, it adopts existing tables and adds the registration, pricing, profile, and refund-idempotency changes. Back up production before applying schema migrations. Local development still creates tables automatically for convenience.
+
+### Razorpay test checklist
+
+Configure the matching `RAZORPAY_MODE=test`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`; use test-mode keys only. Set `PAYMENTS_ENABLED=true` only when all keys are present. The frontend receives only the key ID. Razorpay Web Standard Checkout expects the server-created order ID, amount in paise, and INR; only the signed webhook settles payment status.
+
+1. Set an unlock time in the past through **Manage → Settings**, complete the participant profile, and start a pass checkout. Confirm the order amount is the profile rate and the browser gets only a Razorpay order ID/key ID.
+2. In test checkout, simulate a success with the Dashboard's test card flow (e.g. domestic Visa `4100 2800 0000 1007`, any future expiry and random CVV) or UPI `success@razorpay`. Confirm the payment becomes paid only after `payment.captured` reaches `/api/v1/webhooks/razorpay`.
+3. Use `failure@razorpay` or the Checkout failure control; confirm the order remains unpaid and retry is possible. Close Checkout, then complete a test payment from another device/tab; confirm the webhook still updates the order.
+4. Replay the same signed webhook and confirm one payment/registration. Tamper with the body/signature and confirm HTTP 400. Use a tunnel such as ngrok for a local webhook URL, or configure the staging endpoint in Razorpay Dashboard Test Mode; subscribe to `payment.captured`, `payment.failed`, and `refund.processed`.
+5. Reject an uploaded proof as fake/invalid, replay the admin action, and verify only one refund request. Confirm the final refund status updates from `refund.processed`.
+
+Test cards and webhook controls are governed by the Razorpay Dashboard and official [integration guide](https://razorpay.com/docs/payments/server-integration/python/integration-steps/) and [webhook testing guide](https://axisbank-docs.razorpay.com/webhooks/test/). This repository has not been connected to merchant test credentials, so the live Checkout and Dashboard steps remain to be run by the deployment owner.
+
+### Admin guide
+
+- **Settings:** change the global registration unlock instant and three registration rates.
+- **Verifications:** open the submitted proof and college ID, approve or reject with a reason. To auto-refund, mark the rejection as fake/invalid.
+- **Payments:** inspect order/refund state. Pending refunds remain pending until Razorpay confirms them by webhook.
+- **Users:** inspect account status. Participants can request deletion; **Fulfill deletion request** deletes their profile and documents and anonymizes account identity while preserving financial audit records.
+- **Check-in:** use the camera QR scanner on supported devices, or enter a ticket token manually.
 
 ---
 

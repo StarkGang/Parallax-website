@@ -50,30 +50,27 @@ export function formatEggText(egg) {
 export function useMascotEasterEgg(tapsNeeded = 4) {
   const [message, setMessage] = useState(null);
   const taps = useRef(0);
-  const timer = useRef(null);
+
+  // One effect owns the auto-dismiss timer for every source (taps and the
+  // global event), so the allocation and its cleanup live together and a
+  // re-render can never strand a pending timer.
+  useEffect(() => {
+    if (!message) return undefined;
+    const timer = setTimeout(() => setMessage(null), 8000);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   const onMascotTap = useCallback(() => {
     taps.current += 1;
     if (taps.current < tapsNeeded) return;
     taps.current = 0;
-
     setMessage(pickEasterEgg());
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setMessage(null), 8000);
   }, [tapsNeeded]);
 
   useEffect(() => {
-    const onEgg = () => {
-      setMessage(pickEasterEgg());
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setMessage(null), 8000);
-    };
-
+    const onEgg = () => setMessage(pickEasterEgg());
     window.addEventListener(MASCOT_EGG_EVENT, onEgg);
-    return () => {
-      window.removeEventListener(MASCOT_EGG_EVENT, onEgg);
-      if (timer.current) clearTimeout(timer.current);
-    };
+    return () => window.removeEventListener(MASCOT_EGG_EVENT, onEgg);
   }, []);
 
   return { message, onMascotTap };

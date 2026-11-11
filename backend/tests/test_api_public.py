@@ -32,7 +32,8 @@ async def test_current_edition_and_catalogue(client: AsyncClient):
     edition = resp.json()["data"]
     assert edition["slug"] == "parallax-2026"
     assert edition["name"] == "Parallax 2026"
-    assert edition["policy"]["passPricePaise"] == 35000
+    # Registration is locked by default, so the public payload withholds the price.
+    assert edition["policy"]["passPricePaise"] is None
 
     # Categories
     cat_resp = await client.get("/api/v1/public/editions/parallax-2026/categories")
@@ -48,6 +49,25 @@ async def test_current_edition_and_catalogue(client: AsyncClient):
     slugs = [e["slug"] for e in events]
     assert "hackathon" in slugs
     assert "coding-competition" in slugs
+
+
+@pytest.mark.asyncio
+async def test_public_price_appears_after_unlock(client: AsyncClient, db_session):
+    """The price is only published once the stored unlock instant has passed."""
+    from datetime import datetime
+
+    from support import lock_registration, open_registration
+
+    await open_registration(db_session)
+    try:
+        resp = await client.get("/api/v1/public/editions/current")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["policy"]["passPricePaise"] == 59900
+    finally:
+        # Leave the suite on the documented IST unlock instant.
+        await lock_registration(
+            db_session, datetime.fromisoformat("2026-11-15T00:00:00+05:30")
+        )
 
 
 @pytest.mark.asyncio

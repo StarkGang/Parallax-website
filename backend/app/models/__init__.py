@@ -36,14 +36,17 @@ from app.models.user import (
     MfaCredential,
     MfaRecoveryCode,
     ParticipantProfile,
+    ProfileChoice,
     Session,
     StaffInvite,
     User,
 )
+from app.models.settings import SystemSetting
 
 __all__ = [
     "User",
     "ParticipantProfile",
+    "ProfileChoice",
     "Session",
     "MfaCredential",
     "MfaRecoveryCode",
@@ -77,4 +80,5 @@ __all__ = [
     "EmailOutbox",
     "AuditLog",
     "RateLimitCounter",
+    "SystemSetting",
 ]

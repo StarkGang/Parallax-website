@@ -168,6 +168,10 @@ class MembershipGrant(CamelModel):
     )
 
 
+class ProfileChoiceMerge(CamelModel):
+    target_id: uuid.UUID
+
+
 class UserStatusUpdate(CamelModel):
     status: str = Field(pattern="^(active|suspended)$")
     reason: str | None = None
@@ -191,6 +195,7 @@ class VerificationRow(CamelModel):
 class VerificationDecision(CamelModel):
     decision: str = Field(pattern="^(verified|rejected)$")
     reason: str | None = None
+    fake_or_invalid: bool = False
 
 
 class PaymentRow(CamelModel):
@@ -210,6 +215,7 @@ class RefundCreate(CamelModel):
     amount_paise: int
     reason_code: str
     reason_note: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class RefundRow(CamelModel):
@@ -307,6 +313,10 @@ class EditionUpdate(CamelModel):
     ends_at: datetime | None = None
     registration_opens_at: datetime | None = None
     registration_closes_at: datetime | None = None
+    registration_unlock_at: datetime | None = None
+    registration_price_iste_member_paise: int | None = Field(default=None, ge=1)
+    registration_price_non_iste_paise: int | None = Field(default=None, ge=1)
+    registration_price_polytechnic_paise: int | None = Field(default=None, ge=1)
     status: str | None = Field(default=None, pattern="^(draft|published|archived)$")
     contact_email: str | None = None
     allowed_email_domains: list[str] | None = None

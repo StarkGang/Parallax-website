@@ -220,8 +220,10 @@ export class MascotBrain {
 
   walkTo(spot, facing, onArrive, durationOverride) {
     const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
+    // The cap has to stay generous: clamping a long crossing to a short duration
+    // outruns the Walk clip and the feet skate instead of stepping.
     const duration =
-      durationOverride ?? clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 360, 2600);
+      durationOverride ?? clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 420, 9000);
 
     this.clearLater(this.moveTimer);
     this.applyPose(spot, this.reducedMotion ? 0 : duration, facing);
@@ -448,7 +450,7 @@ export class MascotBrain {
       return true;
     }
 
-    const duration = clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 380, 2600);
+    const duration = clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 420, 9000);
     this.setState(MASCOT_STATES.WALKING);
     this.walkTo(spot, facing, () => this.beginGuide(entry, message, spot), duration);
     return true;
@@ -747,7 +749,7 @@ export class MascotBrain {
 
     // Tours walk slower than ordinary guidance: the reader is following a story.
     const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    const duration = clamp((distance / (WALK_SPEED_PX_PER_SEC * 0.7)) * 1000, 520, 3200);
+    const duration = clamp((distance / (WALK_SPEED_PX_PER_SEC * 0.7)) * 1000, 520, 10000);
     this.setState(MASCOT_STATES.WALKING);
     this.walkTo(spot, this.facingFor(spot, rect), speak, duration);
   }
@@ -1032,13 +1034,13 @@ export class MascotBrain {
             this.setState(MASCOT_STATES.IDLE);
           }
         }, MASCOT_TIMING.pointHighlightMs || 2600);
-      } else if (roll < 0.78) {
+      } else if (roll < 0.6) {
         this.setState(MASCOT_STATES.IDLE);
         this.onGesture?.('wave');
         this.say(this.narrate(), 'ambient');
       } else {
+        // Most arrivals just settle. Constant waving and hopping reads as noise.
         this.setState(MASCOT_STATES.IDLE);
-        this.onGesture?.('jump');
       }
 
       this.scheduleAmbient();

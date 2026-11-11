@@ -15,7 +15,8 @@ from app.models.commerce import (
     PaymentOrder,
     Registration,
 )
-from app.models.edition import ConventionEdition, EditionPolicy, Event
+from app.models.edition import ConventionEdition, EditionPolicy, EligibilityVerification, Event
+from app.models.user import ParticipantProfile
 from app.schemas.participant import SelectedEvent, SelectionState
 from app.services.editions import aware, registration_open
 
@@ -234,7 +235,7 @@ async def set_selections(
                     select(Registration.event_id).where(
                         Registration.user_id == user_pass.user_id,
                         Registration.event_id.in_(unique_ids),
-                        Registration.status.in_(["confirmed", "reserved"]),
+                        Registration.status.in_(["confirmed", "reserved", "pending_verification"]),
                     )
                 )
             ).scalars()
@@ -302,6 +303,14 @@ async def sync_included_registrations(
         ).scalars()
     )
     by_event = {row.event_id: row for row in existing}
+    is_verified = await db.scalar(
+        select(EligibilityVerification.id).where(
+            EligibilityVerification.user_id == user_pass.user_id,
+            EligibilityVerification.edition_id == user_pass.edition_id,
+            EligibilityVerification.status == "verified",
+        )
+    ) is not None
+    registration_status = "confirmed" if is_verified else "pending_verification"
 
     for event_id, row in by_event.items():
         if event_id not in keep and row.status != "cancelled":
@@ -313,9 +322,14 @@ async def sync_included_registrations(
         row = by_event.get(eid)
         if row is not None:
             if row.status == "cancelled":
-                row.status = "confirmed"
+                row.status = registration_status
                 row.cancelled_at = None
-            await issue_for_registration(db, row)
+            elif row.status in {"confirmed", "pending_verification"}:
+                row.status = registration_status
+            if is_verified:
+                await issue_for_registration(db, row)
+            else:
+                await revoke_for_registration(db, row.id)
             continue
         reg = Registration(
             edition_id=user_pass.edition_id,
@@ -323,12 +337,13 @@ async def sync_included_registrations(
             event_id=eid,
             kind="included",
             fee_paise=0,
-            status="confirmed",
+            status=registration_status,
             registration_number=f"INC-{uuid.uuid4().hex[:8].upper()}",
         )
         db.add(reg)
         await db.flush()
-        await issue_for_registration(db, reg)
+        if is_verified:
+            await issue_for_registration(db, reg)
     await db.flush()
 
 
@@ -341,6 +356,19 @@ async def create_pass_order(
     if not registration_open(edition):
         raise Conflict("Registration for this convention is not open right now.")
 
+    from app.services.system_settings import price_for
+
+    profile = await db.scalar(
+        select(ParticipantProfile).where(ParticipantProfile.user_id == user_id)
+    )
+    if profile is None or not profile.education_level:
+        raise Conflict("Complete your participant profile before payment.")
+    amount_paise = await price_for(
+        db,
+        is_iste_member=profile.iste_member,
+        education_level=profile.education_level,
+    )
+
     existing = await get_pass(db, user_id, edition.id)
     if existing and existing.status == "active":
         raise Conflict("You already have an active pass for this edition.")
@@ -350,7 +378,7 @@ async def create_pass_order(
             edition_id=edition.id,
             user_id=user_id,
             policy_version=policy.version,
-            price_paise=policy.pass_price_paise,
+            price_paise=amount_paise,
             lunch_days=policy.lunch_included_days or [],
             status="pending",
         )
@@ -359,7 +387,7 @@ async def create_pass_order(
     else:
         # A cancelled or refunded pass can be bought again at the current price.
         existing.status = "pending"
-        existing.price_paise = policy.pass_price_paise
+        existing.price_paise = amount_paise
         existing.policy_version = policy.version
         existing.lunch_days = policy.lunch_included_days or []
 
@@ -373,7 +401,8 @@ async def create_pass_order(
                 .where(
                     PaymentOrder.purpose == "pass",
                     PaymentOrder.linked_record_id == existing.id,
-                    PaymentOrder.status.in_(["created", "failed"]),
+                    PaymentOrder.status == "created",
+                    PaymentOrder.amount_paise == amount_paise,
                 )
                 .order_by(PaymentOrder.created_at.desc())
                 .limit(1)
@@ -383,7 +412,6 @@ async def create_pass_order(
         .first()
     )
     if open_order is not None:
-        open_order.amount_paise = policy.pass_price_paise
         await attach_gateway_order(db, open_order)
         await db.flush()
         return existing, open_order
@@ -392,7 +420,7 @@ async def create_pass_order(
         edition_id=edition.id,
         user_id=user_id,
         purpose="pass",
-        amount_paise=policy.pass_price_paise,
+        amount_paise=amount_paise,
         status="created",
         linked_record_id=existing.id,
     )

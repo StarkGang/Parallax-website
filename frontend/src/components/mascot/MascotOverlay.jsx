@@ -52,8 +52,10 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
   const pathnameRef = useRef(pathname);
   const lastRouteRef = useRef(null);
 
-  settingsRef.current = settings;
-  pathnameRef.current = pathname;
+  useEffect(() => {
+    settingsRef.current = settings;
+    pathnameRef.current = pathname;
+  }, [settings, pathname]);
 
   useEffect(() => {
     const registry = new TargetRegistry({
