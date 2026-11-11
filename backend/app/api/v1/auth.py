@@ -42,7 +42,9 @@ from app.core.csrf import csrf_token_for
 
 from app.core.errors import AppError, Forbidden, NotFound, RateLimited, StepUpRequired, Unauthenticated
 
-from app.core.logging import security_event
+from app.core.logging import get_logger, security_event
+
+logger = get_logger("auth")
 
 from app.core.permissions import requires_mfa
 
@@ -214,11 +216,13 @@ def _unsign(value: str | None) -> dict | None:
 
 
 
-def _fail_redirect(message: str = "signin_failed") -> RedirectResponse:
+def _fail_redirect(message: str = "signin_failed", origin: str | None = None) -> RedirectResponse:
 
     settings = get_settings()
 
-    response = RedirectResponse(f"{settings.frontend_origin}/login?error={message}", status_code=302)
+    base = origin or settings.frontend_origin
+
+    response = RedirectResponse(f"{base}/login?error={message}", status_code=302)
 
     response.delete_cookie(settings.oauth_cookie, path="/")
 
@@ -282,11 +286,16 @@ async def google_login(request: Request, next: str = Query("/portal")) -> Respon
 
     redirect_uri = resolve_google_redirect_uri(request)
 
+    req_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    req_proto = request.headers.get("x-forwarded-proto") or "https"
+    current_origin = f"{req_proto}://{req_host}" if req_host else settings.frontend_origin
+
     state_payload = {
         "nonce": nonce,
         "verifier": verifier,
         "redirect_uri": redirect_uri,
         "next": valid_next(next),
+        "origin": current_origin,
         "issued": int(datetime.now(UTC).timestamp()),
     }
     state_token = _sign(state_payload)
@@ -396,9 +405,10 @@ async def google_callback(
         user, _created = await user_service.upsert_google_user(db, claims=claims, request=request)
         await user_service.apply_bootstrap_and_invites(db, user, request=request)
     except Exception as exc:
-        security_event("signin_failed", error=type(exc).__name__)
+        logger.error(f"Google OAuth signin failed: {exc}", exc_info=True)
+        security_event("signin_failed", error=type(exc).__name__, detail=str(exc))
         await db.rollback()
-        return _fail_redirect()
+        return _fail_redirect("signin_failed", origin=data.get("origin") if data else None)
 
     roles = await user_service_roles(db, user.id)
     is_staff = any(role != "participant" for role in roles)
@@ -414,7 +424,8 @@ async def google_callback(
     if is_staff and target == "/portal":
         target = "/manage"
 
-    redirect = RedirectResponse(f"{settings.frontend_origin}{target}", status_code=302)
+    origin = data.get("origin") or settings.frontend_origin
+    redirect = RedirectResponse(f"{origin}{target}", status_code=302)
 
     set_session_cookie(redirect, token, is_staff=is_staff)
 

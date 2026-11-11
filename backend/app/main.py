@@ -63,8 +63,7 @@ async def _bootstrap_database() -> None:
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/api/"):
-            await ensure_db_initialized()
+        await ensure_db_initialized()
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         request_id_ctx.set(request_id)
         response: Response = await call_next(request)
