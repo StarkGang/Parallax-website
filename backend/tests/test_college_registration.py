@@ -542,7 +542,6 @@ async def test_admin_configuration_persists_and_is_audited(client: AsyncClient):
         assert entry["before"]["feePaise"] == 60000
         assert entry["after"]["feePaise"] == 65000
     finally:
-        # Restore shared seed state for any later suite.
         restore = await client.patch(
             f"/api/v1/editions/{edition_id}/admin/registration/config",
             json={

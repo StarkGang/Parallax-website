@@ -674,11 +674,31 @@ function useParallaxScroll() {
 }
 
 function PassHighlightSection({ policy }) {
-  const { edition } = useSite();
+  const { edition, slug } = useSite();
+  const tiers = useAsync(() => publicApi.registrationCategories(slug), [slug], {
+    enabled: Boolean(slug),
+  });
+  const registrationTiers = tiers.data?.data || [];
+  const tierFor = (code) => registrationTiers.find((tier) => tier.code === code);
+  const isteTier = tierFor('iste_member');
+  const nonIsteTier = tierFor('non_iste');
+  const polytechnicTier = tierFor('polytechnic');
+  const cheapestTier = registrationTiers.reduce(
+    (cheapest, tier) => (!cheapest || tier.feePaise < cheapest.feePaise ? tier : cheapest),
+    null,
+  );
+  const fromPrice = cheapestTier ? money(cheapestTier.feePaise) : '';
+  const btechPerks = [
+    isteTier ? `B.Tech ISTE ${money(isteTier.feePaise)}` : null,
+    nonIsteTier ? `B.Tech Non-ISTE ${money(nonIsteTier.feePaise)}` : null,
+  ].filter(Boolean);
+  const tierPerks = [
+    polytechnicTier ? `Polytechnic ${money(polytechnicTier.feePaise)}` : null,
+    btechPerks.length ? btechPerks.join(' · ') : null,
+  ].filter(Boolean);
   const tiltRef = useCardTilt({ maxTilt: 2.5, scale: 1.01 });
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
-  const priceRupees = Math.round((policy?.passPricePaise || 50000) / 100);
   const valueCap = money(policy?.includedValueCapPaise || 45000);
   const sceneRef = useRef(null);
 
@@ -715,12 +735,12 @@ function PassHighlightSection({ policy }) {
       <div className="pass-scene-floor" aria-hidden="true" />
       <div className="pass-scene-card">
         <HolographicTicket
-          stubText="FROM ₹299"
+          stubText={fromPrice ? `FROM ${fromPrice}` : 'GET PASS'}
           dates={dateRange(edition?.startsAt, edition?.endsAt).toUpperCase()}
           city={edition?.city || 'Palakkad'}
           perks={[
             `Lunch on ${lunchDays === 2 ? 'both days' : 'selected day'}`,
-            `Tiered from ₹299 (Polytechnic) & ₹500 (B.Tech)`,
+            ...tierPerks,
             'Unrestricted access to all exhibitions & talks',
           ]}
         />
@@ -1393,37 +1413,41 @@ export function PassPage() {
               Tiered pricing for Polytechnic &amp; B.Tech students. Lunch &amp; kits included.
             </p>
 
-            {/* Clean Tier Matrix like modern SaaS / Conference pricing */}
-            <div
-              style={{
-                width: '100%',
-                background: 'rgba(255, 255, 255, 0.03)',
-                border: '1px solid rgba(255, 255, 255, 0.09)',
-                borderRadius: '12px',
-                padding: '14px 16px',
-                margin: '18px 0 20px',
-              }}
-            >
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', marginBottom: '10px' }}>
-                Pass Categories &amp; Pricing
+            {/* Prices are rendered from the live registration categories. */}
+            {registrationTiers.length ? (
+              <div
+                style={{
+                  width: '100%',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.09)',
+                  borderRadius: '12px',
+                  padding: '14px 16px',
+                  margin: '18px 0 20px',
+                }}
+              >
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', marginBottom: '10px' }}>
+                  Pass Categories &amp; Pricing
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {registrationTiers.map((tier) => (
+                    <div
+                      key={tier.id}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', gap: '12px' }}
+                    >
+                      <span style={{ color: '#f8fafc' }}>{tier.name}</span>
+                      <b style={{ color: '#38bdf8', whiteSpace: 'nowrap' }}>
+                        {money(tier.feePaise)}
+                        {tier.code === 'iste_member' ? (
+                          <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '4px', marginLeft: '6px' }}>
+                            ISTE PRICE
+                          </span>
+                        ) : null}
+                      </b>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>Polytechnic Student</span>
-                  <b style={{ color: '#38bdf8' }}>₹299</b>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>B.Tech (ISTE Member)</span>
-                  <b style={{ color: '#38bdf8' }}>
-                    ₹500 <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '4px', marginLeft: '4px' }}>ISTE DISCOUNT</span>
-                  </b>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>B.Tech (Non-ISTE)</span>
-                  <b style={{ color: '#38bdf8' }}>₹600</b>
-                </div>
-              </div>
-            </div>
+            ) : null}
 
             <div className="apple-pass-benefits" style={{ margin: '0 0 24px', width: '100%' }}>
               <div className="apple-benefit-row">
