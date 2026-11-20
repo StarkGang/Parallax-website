@@ -1,6 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Space+Grotesk:wght@500;600;700&display=swap');
 
-:root {
+:root,
+html {
+  color-scheme: dark;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: #f1f5f9;
   background: #08090d;
@@ -54,8 +56,35 @@ a {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+  color-scheme: dark;
+}
+
+select {
+  background-color: #0b0f19;
+  color: #f1f5f9;
+}
+
+select option,
+select optgroup {
+  background-color: #0b0f19 !important;
+  color: #f8fafc !important;
+}
+
+select option:hover,
+select option:focus,
+select option:checked {
+  background-color: #1e293b !important;
+  color: #38bdf8 !important;
+}
+
+::placeholder,
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8 !important;
+  opacity: 0.9 !important;
 }
 
 button,
@@ -342,13 +371,18 @@ summary:focus-visible {
 }
 
 .button.primary {
-  background: var(--cyan);
-  color: #08090d;
+  background: #f1f5f9 !important;
+  color: #08090d !important;
 }
 
-.button.primary:hover {
-  background: #0284c7;
-  color: #ffffff;
+.button.primary:hover:not(:disabled) {
+  background: #ffffff !important;
+  color: #08090d !important;
+}
+
+.button.primary span,
+.button.primary:hover span {
+  color: #08090d !important;
 }
 
 .button.ghost {
@@ -5546,24 +5580,86 @@ p {
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), background-color 0.2s ease;
+  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1), background-color 0.2s ease, color 0.2s ease;
   box-shadow: 0 4px 16px rgba(255, 255, 255, 0.15);
 }
 
-.apple-pass-btn:hover {
+.apple-pass-btn span {
+  color: #05070a !important;
+}
+
+.apple-pass-btn:hover,
+.apple-pass-btn:focus-visible {
   background: #f0f2f5 !important;
+  color: #05070a !important;
   transform: translateY(-2px);
+}
+
+.apple-pass-btn:hover span,
+.apple-pass-btn:focus-visible span {
+  color: #05070a !important;
 }
 
 .apple-btn-arrow {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.2s ease;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.08);
+  color: #05070a !important;
+  transition: transform 0.2s ease, background-color 0.2s ease;
 }
 
 .apple-pass-btn:hover .apple-btn-arrow {
   transform: translateX(3px);
+  background: rgba(0, 0, 0, 0.14);
+  color: #05070a !important;
+}
+
+.apple-registration-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  width: 100%;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.62);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+.apple-registration-strip:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.apple-registration-label {
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+}
+
+.apple-registration-prices {
+  flex: 1 1 180px;
+  line-height: 1.6;
+}
+
+.apple-registration-prices b {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.apple-registration-strip > svg {
+  flex: none;
+  color: var(--cyan);
 }
 
 .apple-instant-tag {
@@ -6525,9 +6621,16 @@ p {
 }
 
 .contact-topic-chip.is-active {
-  background: #ffffff;
-  border-color: #ffffff;
-  color: #0b0e14;
+  background: rgba(56, 189, 248, 0.16) !important;
+  border-color: rgba(56, 189, 248, 0.6) !important;
+  color: #38bdf8 !important;
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.22) !important;
+}
+
+.contact-input::placeholder,
+.contact-textarea::placeholder {
+  color: #94a3b8 !important;
+  opacity: 0.9 !important;
 }
 
 /* Form Inputs Grid */
@@ -6549,7 +6652,7 @@ p {
   width: 100%;
   box-sizing: border-box;
   background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
   padding: 13px 16px;
   font-size: 14px;
@@ -6578,14 +6681,16 @@ p {
   justify-content: space-between;
   gap: 20px;
   padding-top: 12px;
+  flex-wrap: wrap;
 }
 
 .contact-submit-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  padding: 14px 28px;
-  border-radius: 4px;
+  padding: 13px 26px;
+  border-radius: 8px;
   background: #38bdf8;
   color: #080b11;
   font-size: 14px;
@@ -6595,9 +6700,100 @@ p {
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.contact-submit-btn:hover {
+.contact-submit-btn:hover:not(:disabled) {
   background: #7dd3fc;
   transform: translateY(-2px);
+}
+
+.contact-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Razorpay Checkout Button & Alerts */
+.razorpay-checkout-wrap {
+  width: 100%;
+}
+
+.razorpay-checkout-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 13px 22px;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #f8fafc;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.25);
+  transition: all 0.18s ease;
+}
+
+.razorpay-checkout-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%);
+  border-color: rgba(56, 189, 248, 0.6);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(14, 165, 233, 0.35);
+}
+
+.razorpay-checkout-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.rzp-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7dd3fc;
+  flex-shrink: 0;
+}
+
+.rzp-btn-text {
+  letter-spacing: -0.01em;
+}
+
+.rzp-alert {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rzp-alert.is-success {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+.rzp-alert.is-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+/* Razorpay Checkout Modal Backdrop */
+.razorpay-backdrop,
+.razorpay-container {
+  background-color: rgba(5, 7, 10, 0.88) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  opacity: 1 !important;
+}
+
+iframe.razorpay-checkout-frame {
+  box-shadow: 0 24px 72px -16px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(56, 189, 248, 0.25) !important;
+  border-radius: 16px !important;
 }
 
 .contact-submit-btn:active {

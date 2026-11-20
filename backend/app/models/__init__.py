@@ -30,6 +30,14 @@ from app.models.edition import (
     RosterEntry,
     VerificationEmailCode,
 )
+from app.models.registration import (
+    CollegeRegistration,
+    RegistrationCategory,
+    RegistrationCategoryChange,
+    RegistrationDocument,
+    RegistrationNotification,
+    RegistrationSettings,
+)
 from app.models.user import (
     EditionMembership,
     EventCoordinatorAssignment,
@@ -77,4 +85,10 @@ __all__ = [
     "EmailOutbox",
     "AuditLog",
     "RateLimitCounter",
+    "RegistrationSettings",
+    "RegistrationCategory",
+    "CollegeRegistration",
+    "RegistrationDocument",
+    "RegistrationCategoryChange",
+    "RegistrationNotification",
 ]

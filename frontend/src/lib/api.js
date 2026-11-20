@@ -149,6 +149,8 @@ export const publicApi = {
   edition: () => api('/public/editions/current'),
   editionBySlug: (slug) => api(`/public/editions/${encodeURIComponent(slug)}`),
   categories: (slug) => api(`/public/editions/${encodeURIComponent(slug)}/categories`),
+  registrationCategories: (slug) =>
+    api(`/public/editions/${encodeURIComponent(slug)}/registration-categories`),
   events: (slug, params = {}) =>
     api(`/public/editions/${encodeURIComponent(slug)}/events${query(params)}`),
   event: (slug, eventSlug) =>
@@ -157,6 +159,11 @@ export const publicApi = {
   announcements: (slug, params = {}) =>
     api(`/public/editions/${encodeURIComponent(slug)}/announcements${query(params)}`),
   policy: (slug) => api(`/public/editions/${encodeURIComponent(slug)}/policy`),
+  submitInquiry: (payload) =>
+    api('/public/inquiries', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   iconUrl: (iconId) => `${API_BASE}/public/icons/${iconId}`,
   documentUrl: (relative) => (relative?.startsWith('http') ? relative : relative),
 };
@@ -204,7 +211,68 @@ export const portalApi = {
     api(`/editions/${editionId}/payments/${orderId}/mock`, { method: 'POST' }),
 };
 
+export const razorpayCheckoutApi = {
+  createOrder: (payload) => api('/create-order', { method: 'POST', body: payload }),
+  verifyPayment: (payload) => api('/verify-payment', { method: 'POST', body: payload }),
+};
+
+export const registrationApi = {
+  get: (editionId) => api(`/editions/${editionId}/registration`),
+  saveProfile: (editionId, payload) =>
+    api(`/editions/${editionId}/registration/profile`, { method: 'PUT', body: payload }),
+  uploadDocument: (editionId, docType, form) =>
+    api(`/editions/${editionId}/registration/documents/${docType}`, {
+      method: 'POST',
+      form,
+    }),
+  deleteDocument: (editionId, docType) =>
+    api(`/editions/${editionId}/registration/documents/${docType}`, {
+      method: 'DELETE',
+    }),
+  submit: (editionId) =>
+    api(`/editions/${editionId}/registration/submit`, { method: 'POST' }),
+  verifyPayment: (editionId, payload) =>
+    api(`/editions/${editionId}/registration/payment/verify`, {
+      method: 'POST',
+      body: payload,
+    }),
+  payment: (editionId, orderId) =>
+    api(`/editions/${editionId}/registration/payments/${orderId}`),
+  mockPay: (editionId, orderId) =>
+    api(`/editions/${editionId}/registration/payments/${orderId}/mock`, {
+      method: 'POST',
+    }),
+  resubmit: (editionId) =>
+    api(`/editions/${editionId}/registration/resubmit`, { method: 'POST' }),
+  requestCategoryChange: (editionId, payload) =>
+    api(`/editions/${editionId}/registration/category-change`, {
+      method: 'POST',
+      body: payload,
+    }),
+  categoryChangePayment: (editionId) =>
+    api(`/editions/${editionId}/registration/category-change/payment`),
+  markNotificationRead: (editionId, id) =>
+    api(`/editions/${editionId}/registration/notifications/${id}/read`, {
+      method: 'POST',
+    }),
+  documentUrl: (editionId, documentId, download = false) =>
+    `${API_BASE}/editions/${editionId}/registration/documents/${documentId}/content${
+      download ? '?download=true' : ''
+    }`,
+  fetchDocumentBlob: async (editionId, documentId) => {
+    const url = `${API_BASE}/editions/${editionId}/registration/documents/${documentId}/content`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error('Could not load document content');
+    return res.blob();
+  },
+  receiptUrl: (editionId) => `${API_BASE}/editions/${editionId}/registration/receipt`,
+  confirmationUrl: (editionId) =>
+    `${API_BASE}/editions/${editionId}/registration/confirmation`,
+};
+
 const adminBase = (editionId) => `/editions/${editionId}/admin`;
+
+const registrationAdminBase = (editionId) => `${adminBase(editionId)}/registration`;
 
 export const adminApi = {
   sync: (editionId) => api(`${adminBase(editionId)}/sync`, { method: 'POST' }),
@@ -272,4 +340,40 @@ export const adminApi = {
   checkin: (editionId, payload) =>
     api(`${adminBase(editionId)}/checkin`, { method: 'POST', body: payload }),
   recentCheckins: (editionId) => api(`${adminBase(editionId)}/recent-checkins`),
+  registrationConfig: (editionId) => api(`${registrationAdminBase(editionId)}/config`),
+  updateRegistrationConfig: (editionId, payload) =>
+    api(`${registrationAdminBase(editionId)}/config`, { method: 'PATCH', body: payload }),
+  collegeRegistrations: (editionId, params = {}) =>
+    api(`${registrationAdminBase(editionId)}${query(params)}`),
+  collegeRegistration: (editionId, id) =>
+    api(`${registrationAdminBase(editionId)}/${id}`),
+  addRegistrationNote: (editionId, id, note) =>
+    api(`${registrationAdminBase(editionId)}/${id}/notes`, {
+      method: 'POST',
+      body: { note },
+    }),
+  decideRegistration: (editionId, id, payload) =>
+    api(`${registrationAdminBase(editionId)}/${id}/decision`, {
+      method: 'POST',
+      body: payload,
+    }),
+  requestRegistrationDocuments: (editionId, id, payload) =>
+    api(`${registrationAdminBase(editionId)}/${id}/request-documents`, {
+      method: 'POST',
+      body: payload,
+    }),
+  refundRegistration: (editionId, id, payload) =>
+    api(`${registrationAdminBase(editionId)}/${id}/refund`, {
+      method: 'POST',
+      body: payload,
+    }),
+  decideRegistrationCategoryChange: (editionId, id, payload) =>
+    api(`${registrationAdminBase(editionId)}/${id}/category-change`, {
+      method: 'POST',
+      body: payload,
+    }),
+  registrationDocumentUrl: (editionId, registrationId, documentId, download = false) =>
+    `${API_BASE}/editions/${editionId}/admin/registration/${registrationId}/documents/${documentId}/content${
+      download ? '?download=true' : ''
+    }`,
 };

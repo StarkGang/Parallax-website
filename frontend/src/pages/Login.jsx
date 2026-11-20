@@ -80,7 +80,7 @@ export default function Login() {
     <section className="login-page">
       <aside className="login-art">
         <Link to="/" className="login-brand" aria-label="Parallax Home">
-          <img src={LOGO} alt={edition?.name || 'Parallax 2026'} />
+          <img src={LOGO} alt={edition?.name || 'Parallax 2027'} />
         </Link>
         <div>
           <Eyebrow>Attendee & Staff Portal</Eyebrow>

@@ -69,6 +69,7 @@ var/
 *.crt
 *.pfx
 *.p12
+!backend/certs/supabase-ca-bundle.pem
 id_rsa
 id_ecdsa
 id_ed25519
@@ -108,3 +109,4 @@ tmp/
 .claude/skills/
 /.claude
 /.claude/skills
+/.agents

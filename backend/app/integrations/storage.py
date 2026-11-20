@@ -19,12 +19,8 @@ logger = get_logger("storage")
 
 class Storage(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> str: ...
-    
-    async def delete(self, key: str) -> None:
-        clean_key = key.lstrip("/\\")
-        target = self.root / clean_key
-        if target.exists():
-            target.unlink()
+
+    async def delete(self, key: str) -> None: ...
 
     async def get(self, key: str) -> bytes: ...
     async def signed_url(self, key: str, ttl_seconds: int | None = None, expires_in: int | None = None) -> str: ...
@@ -98,11 +94,18 @@ class SupabaseStorage:
     def endpoint(self) -> str:
         return f"{self.base_url}/storage/v1"
 
-    def __init__(self, url: str | None = None, key: str | None = None, bucket: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        key: str | None = None,
+        bucket: str | None = None,
+        private: bool = False,
+    ) -> None:
         settings = get_settings()
         self.base_url = (url or settings.supabase_url or "").rstrip("/")
         self.api_key = key or settings.supabase_service_role_key or settings.supabase_key or ""
         self.bucket = bucket or settings.supabase_storage_bucket or "parallax"
+        self.private = private
         self._headers = {
             "Authorization": f"Bearer {self.api_key}",
             "apikey": self.api_key,
@@ -114,7 +117,7 @@ class SupabaseStorage:
             resp = await client.post(
                 f"{self.base_url}/storage/v1/bucket",
                 headers={**self._headers, "Content-Type": "application/json"},
-                json={"id": self.bucket, "name": self.bucket, "public": True},
+                json={"id": self.bucket, "name": self.bucket, "public": not self.private},
             )
             if resp.status_code in (200, 201, 409):
                 logger.info("supabase_bucket_ready", bucket=self.bucket)
@@ -142,6 +145,18 @@ class SupabaseStorage:
                     status_code=502,
                 )
         return clean_key
+
+    async def delete(self, key: str) -> None:
+        clean_key = key.lstrip("/")
+        endpoint = f"{self.base_url}/storage/v1/object/{self.bucket}/{clean_key}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.delete(endpoint, headers=self._headers)
+            if resp.status_code not in (200, 204, 404):
+                logger.warning(
+                    "supabase_storage_delete_error",
+                    status=resp.status_code,
+                    body=resp.text[:200],
+                )
 
     async def get(self, key: str) -> bytes:
         clean_key = key.lstrip("/")
@@ -217,6 +232,10 @@ class S3Storage:
             )
         return key
 
+    async def delete(self, key: str) -> None:
+        async with self._client() as client:
+            await client.delete_object(Bucket=self.bucket, Key=key)
+
     async def get(self, key: str) -> bytes:
         async with self._client() as client:
             response = await client.get_object(Bucket=self.bucket, Key=key)
@@ -260,6 +279,33 @@ def get_storage() -> Storage:
     if settings.storage_configured:
         return S3Storage()
     return LocalStorage()
+
+
+def get_document_storage() -> Storage:
+    """Storage for private participant documents (ID cards, ISTE cards).
+
+    Supabase uses a bucket that is created private and is only ever read through
+    authenticated API routes; local/S3 backends are private by construction.
+    """
+    settings = get_settings()
+    backend = (settings.storage_backend or "auto").lower()
+    if backend in {"supabase", "auto"} and settings.supabase_storage_configured:
+        return SupabaseStorage(bucket=settings.supabase_document_bucket, private=True)
+    if backend == "s3" and settings.storage_configured:
+        return S3Storage()
+    return LocalStorage()
+
+
+def registration_document_key(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    doc_type: str,
+    filename: str | None = None,
+) -> str:
+    suffix = ".bin"
+    if filename and "." in filename:
+        suffix = "." + filename.rsplit(".", 1)[-1].lower()[:5]
+    return f"registrations/{edition_id}/{registration_id}/{doc_type}-{uuid.uuid4().hex}{suffix}"
 
 
 def document_key(filename: str | None = None) -> str:

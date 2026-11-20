@@ -47,10 +47,18 @@ def _create_engine() -> AsyncEngine:
 
         # Supabase and cloud Postgres SSL
         if "supabase.co" in url or "pooler.supabase.com" in url or settings.db_ssl or "sslmode=" in url or "ssl=" in url:
-            ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-            connect_args["ssl"] = ssl_ctx
+            # Verify the database certificate and hostname. Disabling this turns
+            # every production DB connection into a MITM target.
+            ca_file = settings.database_ssl_ca_file
+            if not ca_file and "supabase" in url:
+                bundled = Path(__file__).resolve().parents[2] / "certs" / "supabase-ca-bundle.pem"
+                if bundled.exists():
+                    ca_file = str(bundled)
+            connect_args["ssl"] = (
+                ssl.create_default_context(cafile=ca_file)
+                if ca_file
+                else ssl.create_default_context()
+            )
 
         # Disable prepared statement caching on Supabase PgBouncer/Supavisor or in serverless lambdas
         if ":6543" in url or ":5432" in url or is_serverless or "supabase" in url:

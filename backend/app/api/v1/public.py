@@ -13,7 +13,10 @@ from app.integrations.storage import LocalStorage, verify_local_signature
 from app.schemas.common import paged
 from app.schemas.public import PublicConfig
 from app.services import announcements as announcement_service
+from app.services import college_registrations as registration_service
 from app.services import events as event_service
+from app.services.telegram import send_telegram_inquiry
+from pydantic import BaseModel, EmailStr, Field
 from app.services.editions import (
     current_edition,
     current_policy,
@@ -130,6 +133,25 @@ async def categories(slug: str, response: Response, db: AsyncSession = Depends(g
         ]
     }
     cache_set(f"public:categories:{slug}", data, ttl_seconds=60)
+    return data
+
+
+@router.get("/editions/{slug}/registration-categories")
+async def registration_categories(
+    slug: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Public fee tiers for the college registration funnel."""
+    response.headers.update(CACHE_EDGE)
+    cache_key = f"public:registration-categories:{slug}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
+    edition = await edition_by_slug(db, slug)
+    rows = await registration_service.categories_for(
+        db, edition.id, include_disabled=False
+    )
+    data = {"data": [registration_service.category_payload(row) for row in rows]}
+    cache_set(cache_key, data, ttl_seconds=60)
     return data
 
 
@@ -278,3 +300,33 @@ async def public_policy(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
             "selectionChangeDeadline": policy.selection_change_deadline,
         }
     }
+
+
+class ContactInquiryRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    category: str = Field(default="general", max_length=100)
+    message: str = Field(min_length=2, max_length=50000)
+
+
+@router.post("/inquiries")
+async def submit_inquiry(
+    body: ContactInquiryRequest,
+    request: Request,
+) -> dict:
+    ip = request.client.host if request.client else None
+    result = await send_telegram_inquiry(
+        name=body.name,
+        email=body.email,
+        category=body.category,
+        message=body.message,
+        ip=ip,
+    )
+    return {
+        "data": {
+            "sent": True,
+            "telegram": result,
+            "message": "Your message has been received. Our team will contact you shortly.",
+        }
+    }
+

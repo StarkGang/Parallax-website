@@ -16,6 +16,7 @@ from app.models.edition import (
     EventCategory,
     Icon,
 )
+from app.models.registration import RegistrationCategory, RegistrationSettings
 from app.models.user import EditionMembership, User
 from app.services import icons as icon_service
 
@@ -279,6 +280,115 @@ async def _refresh_demo_timeline(db: AsyncSession, edition: ConventionEdition) -
     await db.flush()
 
 
+REGISTRATION_CATEGORIES = (
+    (
+        "iste_member",
+        "B.Tech – ISTE Member",
+        "Any B.Tech college. ISTE membership card is mandatory and verified manually.",
+        50_000,
+        1,
+        [
+            {"type": "college_id", "label": "College / University ID card", "required": True},
+            {"type": "iste_card", "label": "ISTE Membership Card", "required": True},
+        ],
+    ),
+    (
+        "non_iste",
+        "B.Tech – Non-ISTE Member",
+        "Any B.Tech college. College ID card is mandatory; ISTE card is not required.",
+        60_000,
+        2,
+        [
+            {"type": "college_id", "label": "College / University ID card", "required": True},
+        ],
+    ),
+    (
+        "polytechnic",
+        "Polytechnic Student",
+        "Any polytechnic college. College / institution ID card is mandatory.",
+        29_900,
+        3,
+        [
+            {"type": "college_id", "label": "College / Institution ID card", "required": True},
+        ],
+    ),
+)
+
+
+async def ensure_registration_config(
+    db: AsyncSession, edition: ConventionEdition
+) -> None:
+    """Idempotently create the registration form configuration for an edition.
+
+    Prices and document requirements live in the database so administrators can
+    change them; nothing here is read from code at request time.
+    """
+    settings = (
+        await db.execute(
+            select(RegistrationSettings).where(
+                RegistrationSettings.edition_id == edition.id
+            )
+        )
+    ).scalar_one_or_none()
+    if settings is None:
+        settings = RegistrationSettings(
+            edition_id=edition.id,
+            registration_enabled=True,
+            opens_at=edition.registration_opens_at,
+            closes_at=edition.registration_closes_at,
+            accepted_formats=["pdf", "jpg", "jpeg", "png"],
+            max_upload_bytes=5_242_880,
+            allow_resubmission=True,
+            payment_instructions=(
+                "Pay the category fee shown on the registration page. Your seat is "
+                "confirmed only after the registration desk verifies your documents."
+            ),
+            refund_policy=(
+                "Rejected registrations may be refunded after review. Refunds are "
+                "tracked separately and are never marked complete before the payment "
+                "gateway or the finance desk confirms them."
+            ),
+            approval_message=(
+                "Your registration has been approved. Download your confirmation "
+                "from the participant portal."
+            ),
+            rejection_message=(
+                "Your registration could not be approved. Read the reason below and "
+                "resubmit corrected documents if allowed."
+            ),
+            notification_templates={},
+        )
+        db.add(settings)
+        await db.flush()
+
+    existing = {
+        row.code: row
+        for row in (
+            await db.execute(
+                select(RegistrationCategory).where(
+                    RegistrationCategory.edition_id == edition.id
+                )
+            )
+        ).scalars()
+    }
+    for code, name, description, fee, order, docs in REGISTRATION_CATEGORIES:
+        row = existing.get(code)
+        if row is None:
+            db.add(
+                RegistrationCategory(
+                    edition_id=edition.id,
+                    code=code,
+                    name=name,
+                    description=description,
+                    fee_paise=fee,
+                    enabled=True,
+                    display_order=order,
+                    required_documents=docs,
+                )
+            )
+    await db.flush()
+
+
 async def seed_if_empty(db: AsyncSession) -> None:
     ext = (
         await db.execute(
@@ -298,10 +408,10 @@ async def seed_if_empty(db: AsyncSession) -> None:
             host="NSS College of Engineering, Palakkad",
             venue="NSSCE Campus, Palakkad",
             city="Palakkad, Kerala",
-            starts_at=_at(1, 9, 0),
-            ends_at=_at(2, 18, 0),
-            registration_opens_at=_at(-30, 0, 0),
-            registration_closes_at=_at(1, 12, 0),
+            starts_at=datetime(2027, 1, 8, 3, 30, tzinfo=UTC),
+            ends_at=datetime(2027, 1, 9, 18, 0, tzinfo=UTC),
+            registration_opens_at=datetime(2026, 11, 1, 0, 0, tzinfo=UTC),
+            registration_closes_at=datetime(2027, 1, 8, 3, 30, tzinfo=UTC),
             status="published",
             contact_email="iste@nssce.ac.in",
             allowed_email_domains=["nssce.ac.in", "gmail.com"],
@@ -323,7 +433,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
             team_members_require_pass=True,
             team_fee_basis_default="per_participant",
             hold_minutes=15,
-            selection_change_deadline=_at(1, 10, 0),
+            selection_change_deadline=datetime(2027, 1, 8, 18, 0, tzinfo=UTC),
             refund_rules={"allowed": True, "deadlineHours": 48},
             gst_note="Inclusive of all applicable taxes",
             reason="Initial policy for Parallax 2026",
@@ -428,6 +538,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
     else:
         edition = ext
         await _refresh_demo_timeline(db, edition)
+
+    await ensure_registration_config(db, edition)
 
     # Seed administrator / owner (configurable via env BOOTSTRAP_OWNER_EMAIL or DEV_ADMIN_EMAIL)
     settings = get_settings()

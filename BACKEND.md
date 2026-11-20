@@ -537,7 +537,7 @@ migrating.
 | Item | Value |
 | --- | --- |
 | Edition | `parallax-2026`, published, dates relative to seed time |
-| Pass | ₹350 (`35000` paise) |
+| Pass | ₹500 (`50000` paise) |
 | Included | up to 3 events, base-value cap ₹450 (`45000`), cap inclusive |
 | Lunch | day 1 and day 2 |
 | Selection deadline | day 1, 10:00 |

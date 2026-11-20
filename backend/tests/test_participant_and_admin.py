@@ -22,7 +22,7 @@ async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient
     assert order_resp.status_code == 200
     order_data = order_resp.json()["data"]
     order_id = order_data["orderId"]
-    assert order_data["amountPaise"] == 35000
+    assert order_data["amountPaise"] == 50000
 
     # 3. Pay for order via mock
     pay_resp = await client.post(f"/api/v1/editions/{edition_id}/payments/{order_id}/mock")

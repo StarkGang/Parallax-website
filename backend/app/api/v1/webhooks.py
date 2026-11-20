@@ -6,7 +6,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.core.logging import get_logger, security_event
+from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.services.payments import process_webhook, verify_webhook_signature
 
@@ -14,7 +16,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = get_logger("webhooks")
 
 
-@router.post("/razorpay")
+@router.post("/razorpay", dependencies=[Depends(limiter("payment_webhook", 300, 60))])
 async def razorpay_webhook(
     request: Request,
     x_razorpay_signature: str = Header(..., alias="X-Razorpay-Signature"),
@@ -23,13 +25,22 @@ async def razorpay_webhook(
     settings = get_settings()
     body = await request.body()
 
-    if settings.razorpay_webhook_secret:
-        valid = verify_webhook_signature(
-            body, x_razorpay_signature, settings.razorpay_webhook_secret
+    # Never process an unverified event. If the secret is missing, payments are
+    # not configured and this endpoint must fail closed rather than accept any
+    # caller-supplied payload that could mark an order paid.
+    if not settings.razorpay_webhook_secret:
+        security_event("webhook_secret_missing")
+        raise AppError(
+            "Payment webhooks are not configured.",
+            code="WEBHOOK_NOT_CONFIGURED",
+            status_code=503,
         )
-        if not valid:
-            security_event("webhook_signature_invalid")
-            return JSONResponse({"status": "invalid signature"}, status_code=400)
+    valid = verify_webhook_signature(
+        body, x_razorpay_signature, settings.razorpay_webhook_secret
+    )
+    if not valid:
+        security_event("webhook_signature_invalid")
+        return JSONResponse({"status": "invalid signature"}, status_code=400)
 
     try:
         payload = json.loads(body)

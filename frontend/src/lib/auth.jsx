@@ -51,6 +51,16 @@ export function AuthProvider({ children }) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && typeof window.clarity === 'function' && user?.id) {
+      try {
+        window.clarity('identify', user.id, undefined, undefined, user.fullName || user.email);
+      } catch (err) {
+        // Ignore clarity tagging errors if blocked by adblock
+      }
+    }
+  }, [user]);
+
   const login = useCallback(
     async ({ email, role = 'participant', fullName }) => {
       await authApi.login({ email, role, full_name: fullName });

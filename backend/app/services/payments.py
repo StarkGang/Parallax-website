@@ -51,7 +51,13 @@ def _auth_header() -> dict[str, str]:
 async def create_gateway_order(order: PaymentOrder) -> str | None:
     settings = get_settings()
     if not settings.payments_enabled:
-        return f"mock_order_{order.id.hex[:12]}"
+        if settings.is_development:
+            return f"mock_order_{order.id.hex[:12]}"
+        raise AppError(
+            "Online payments are not configured.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             "https://api.razorpay.com/v1/orders",
@@ -90,7 +96,13 @@ async def attach_gateway_order(db: AsyncSession, order: PaymentOrder) -> Payment
 async def gateway_refund(payment_id: str, amount_paise: int) -> str | None:
     settings = get_settings()
     if not settings.payments_enabled:
-        return f"mock_rfnd_{uuid.uuid4().hex[:12]}"
+        if settings.is_development:
+            return f"mock_rfnd_{uuid.uuid4().hex[:12]}"
+        raise AppError(
+            "Refunds are not configured with a payment gateway.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"https://api.razorpay.com/v1/payments/{payment_id}/refund",
@@ -168,6 +180,16 @@ async def mark_order_paid(
             r.status = "confirmed"
             await issue_for_registration(db, r)
 
+    elif order.purpose == "college_registration":
+        from app.services.college_registrations import finalize_paid
+
+        await finalize_paid(db, order, transaction_id=transaction_id)
+
+    elif order.purpose == "college_registration_delta":
+        from app.services.college_registrations import apply_paid_category_change
+
+        await apply_paid_category_change(db, order)
+
     await db.flush()
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
@@ -180,6 +202,49 @@ async def expire_unpaid(db: AsyncSession) -> int:
 def verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def verify_checkout_signature(
+    gateway_order_id: str, payment_id: str, signature: str
+) -> bool:
+    """Razorpay checkout signature: HMAC-SHA256(order_id|payment_id, key_secret)."""
+    settings = get_settings()
+    if not settings.razorpay_key_secret or not gateway_order_id or not payment_id:
+        return False
+    expected = hmac.new(
+        settings.razorpay_key_secret.encode(),
+        f"{gateway_order_id}|{payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature or "")
+
+
+async def fetch_gateway_refund(refund_id: str) -> dict[str, Any]:
+    """Read the authoritative refund status from Razorpay."""
+    settings = get_settings()
+    if not settings.payments_enabled:
+        return {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            f"https://api.razorpay.com/v1/refunds/{refund_id}",
+            headers=_auth_header(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_gateway_payment(payment_id: str) -> dict[str, Any]:
+    """Read the authoritative payment from Razorpay before marking anything paid."""
+    settings = get_settings()
+    if not settings.payments_enabled:
+        return {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            f"https://api.razorpay.com/v1/payments/{payment_id}",
+            headers=_auth_header(),
+        )
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def process_webhook(
@@ -209,7 +274,7 @@ async def process_webhook(
     db.add(entry)
 
     event_type = event_payload.get("event")
-    if event_type == "payment.captured":
+    if event_type in {"payment.captured", "payment.authorized"}:
         pay_entity = event_payload.get("payload", {}).get("payment", {}).get("entity", {})
         order_id = pay_entity.get("order_id")
         if order_id:
@@ -219,7 +284,41 @@ async def process_webhook(
                 )
             ).scalar_one_or_none()
             if order:
-                await mark_order_paid(db, order, transaction_id=pay_entity.get("id"))
+                paid_amount = int(pay_entity.get("amount") or 0)
+                if paid_amount and paid_amount != order.amount_paise:
+                    # Never fulfil an order for an amount the server did not set.
+                    entry.processing_status = "failed"
+                    entry.error = (
+                        f"Amount mismatch: gateway {paid_amount} vs order {order.amount_paise}"
+                    )
+                    logger.error(
+                        "payment_amount_mismatch",
+                        order=str(order.id),
+                        expected=order.amount_paise,
+                        received=paid_amount,
+                    )
+                else:
+                    await mark_order_paid(db, order, transaction_id=pay_entity.get("id"))
+    elif event_type == "payment.failed":
+        pay_entity = event_payload.get("payload", {}).get("payment", {}).get("entity", {})
+        order_id = pay_entity.get("order_id")
+        if order_id:
+            order = (
+                await db.execute(
+                    select(PaymentOrder).where(PaymentOrder.gateway_order_id == order_id)
+                )
+            ).scalar_one_or_none()
+            if order is not None and order.status == "created":
+                order.status = "failed"
+    elif event_type in {"refund.processed", "refund.failed", "refund.created"}:
+        refund_entity = event_payload.get("payload", {}).get("refund", {}).get("entity", {})
+        gateway_refund_id = refund_entity.get("id")
+        if gateway_refund_id:
+            from app.services.college_registrations import sync_gateway_refund
+
+            await sync_gateway_refund(
+                db, gateway_refund_id, failed=event_type == "refund.failed"
+            )
 
     await db.flush()
 
@@ -336,6 +435,9 @@ __all__ = [
     "mark_order_paid",
     "expire_unpaid",
     "verify_webhook_signature",
+    "verify_checkout_signature",
+    "fetch_gateway_payment",
+    "fetch_gateway_refund",
     "process_webhook",
     "refund_order",
     "order_for",

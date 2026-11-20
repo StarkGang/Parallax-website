@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { publicApi } from './api.js';
 
 const SiteContext = createContext(null);
@@ -24,18 +32,18 @@ function setCached(key, value) {
 
 export const FALLBACK_EDITION = {
   id: '00000000-0000-0000-0000-000000000001',
-  slug: 'parallax-2026',
-  name: 'Parallax 2026',
+  slug: 'parallax-2027',
+  name: 'Parallax 2027',
   tagline: 'A Shift in Perspective',
   organizer: "ISTE Students' Chapter",
   host: 'NSS College of Engineering',
   venue: 'NSSCE Campus',
   city: 'Palakkad, Kerala',
   timezone: 'Asia/Kolkata',
-  startsAt: '2026-03-20T09:00:00Z',
-  endsAt: '2026-03-21T18:00:00Z',
-  registrationOpensAt: '2026-02-01T00:00:00Z',
-  registrationClosesAt: '2026-03-19T23:59:59Z',
+  startsAt: '2027-01-08T09:00:00Z',
+  endsAt: '2027-01-09T18:00:00Z',
+  registrationOpensAt: '2026-11-01T00:00:00Z',
+  registrationClosesAt: '2027-01-08T03:30:00Z',
   status: 'published',
   contactEmail: 'iste@nssce.ac.in',
   branding: {},
@@ -59,6 +67,8 @@ export function SiteProvider({ children }) {
   const [edition, setEdition] = useState(() => getCached(CACHE_EDITION_KEY) || FALLBACK_EDITION);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [editionVerified, setEditionVerified] = useState(false);
+  const [editionError, setEditionError] = useState(null);
   const [nonce, setNonce] = useState(0);
 
   const editionRef = useRef(edition);
@@ -69,6 +79,7 @@ export function SiteProvider({ children }) {
   useEffect(() => {
     let alive = true;
     setError(null);
+    setEditionError(null);
     if (!editionRef.current) setLoading(true);
 
     // The edition is required to render routes, so it gets one automatic retry.
@@ -82,6 +93,7 @@ export function SiteProvider({ children }) {
             setEdition(body.data);
             editionRef.current = body.data;
             setCached(CACHE_EDITION_KEY, body.data);
+            setEditionVerified(true);
           }
           setLoading(false);
           return;
@@ -92,6 +104,8 @@ export function SiteProvider({ children }) {
             continue;
           }
           setLoading(false);
+          setEditionVerified(false);
+          setEditionError(err);
           if (!editionRef.current) {
             setEdition(FALLBACK_EDITION);
             editionRef.current = FALLBACK_EDITION;
@@ -126,11 +140,13 @@ export function SiteProvider({ children }) {
       policy: edition?.policy || null,
       loading,
       error,
+      editionVerified,
+      editionError,
       refresh,
       slug: edition?.slug || null,
       editionId: edition?.id || null,
     }),
-    [config, edition, loading, error, refresh],
+    [config, edition, loading, error, editionVerified, editionError, refresh],
   );
 
   return <SiteContext.Provider value={value}>{children}</SiteContext.Provider>;

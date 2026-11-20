@@ -35,6 +35,13 @@ export const time = (iso) => (iso ? timeFmt.format(new Date(iso)) : '');
 export const weekday = (iso) => (iso ? weekdayFmt.format(new Date(iso)) : '');
 export const dateTime = (iso) => (iso ? `${date(iso)} · ${time(iso)}` : '-');
 
+export const fileSize = (bytes) => {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 export const dateRange = (start, end) => {
   if (!start) return 'Dates to be announced';
   const a = new Date(start);

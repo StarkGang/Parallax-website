@@ -86,7 +86,10 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
         headers = {}
         if exc.status_code == 429:
-            headers["Retry-After"] = "60"
+            retry_after = 60
+            if isinstance(exc.details, dict) and exc.details.get("retryAfter"):
+                retry_after = max(1, int(exc.details["retryAfter"]))
+            headers["Retry-After"] = str(retry_after)
         return JSONResponse(
             status_code=exc.status_code,
             content=payload(exc.code, exc.message, exc.details),

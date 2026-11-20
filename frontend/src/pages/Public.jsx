@@ -18,6 +18,7 @@ import {
   MapPin,
   Navigation,
   PenTool,
+  RefreshCw,
   Search,
   Send,
   ShieldCheck,
@@ -55,6 +56,13 @@ import './TeamFrame.css';
 import HeroOdyssey from '../components/HeroOdyssey.jsx';
 import PageScene from '../components/PageScene.jsx';
 import { MascotEasterEggBubble, useMascotEasterEgg } from '../components/MascotEasterEgg.jsx';
+import { RazorpayCheckoutButton } from '../components/RazorpayCheckoutButton.jsx';
+
+const TIER_SHORT_LABELS = {
+  iste_member: 'ISTE',
+  non_iste: 'Non-ISTE',
+  polytechnic: 'Polytechnic',
+};
 
 const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
 const GLOBE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/modified assets/globe.svg`;
@@ -227,7 +235,8 @@ export function EventCard({ event, index = 0 }) {
   const handleCardClick = (clickEvent) => {
     if (clickEvent.defaultPrevented) return;
     if (clickEvent.button !== 0) return;
-    if (clickEvent.metaKey || clickEvent.ctrlKey || clickEvent.shiftKey || clickEvent.altKey) return;
+    if (clickEvent.metaKey || clickEvent.ctrlKey || clickEvent.shiftKey || clickEvent.altKey)
+      return;
     if (clickEvent.target.closest('a, button')) return;
     navigate(detailPath);
   };
@@ -665,10 +674,11 @@ function useParallaxScroll() {
 }
 
 function PassHighlightSection({ policy }) {
+  const { edition } = useSite();
   const tiltRef = useCardTilt({ maxTilt: 2.5, scale: 1.01 });
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
-  const priceRupees = Math.round((policy?.passPricePaise || 35000) / 100);
+  const priceRupees = Math.round((policy?.passPricePaise || 50000) / 100);
   const valueCap = money(policy?.includedValueCapPaise || 45000);
   const sceneRef = useRef(null);
 
@@ -704,7 +714,16 @@ function PassHighlightSection({ policy }) {
       <div className="pass-scene-veil" aria-hidden="true" />
       <div className="pass-scene-floor" aria-hidden="true" />
       <div className="pass-scene-card">
-        <HolographicTicket />
+        <HolographicTicket
+          stubText="FROM ₹299"
+          dates={dateRange(edition?.startsAt, edition?.endsAt).toUpperCase()}
+          city={edition?.city || 'Palakkad'}
+          perks={[
+            `Lunch on ${lunchDays === 2 ? 'both days' : 'selected day'}`,
+            `Tiered from ₹299 (Polytechnic) & ₹500 (B.Tech)`,
+            'Unrestricted access to all exhibitions & talks',
+          ]}
+        />
       </div>
     </section>
   );
@@ -815,7 +834,7 @@ export function Home() {
 
         <div className="px-stage-inner">
           <header className="px-preview-head">
-            <span className="px-preview-kicker">Parallax 2027</span>
+            <span className="px-preview-kicker">{edition.name}</span>
             <h2 id="px-preview-title">
               Pick your <em>path.</em>
             </h2>
@@ -824,7 +843,7 @@ export function Home() {
           <div className="px-grid">
             <PreviewCard
               mascotTarget="home-edition"
-              mascotHover="Who runs Parallax, where it happens and what it covers."
+              mascotHover="People behind Parallax, where it happens and what it covers."
               kicker="01 / The Edition"
               title="About Parallax"
               copy={`${edition.name} is the ${edition.organizer || 'ISTE'} convention hosted at ${edition.host || 'NSSCE'}.`}
@@ -907,26 +926,28 @@ function placeLabel(...parts) {
 export function About() {
   const { edition, policy } = useSite();
   return (
-    <>
-      <PageTitle
-        kicker="About"
-        title={
-          <>
-            About
-            <br />
-            <em>{edition?.name || 'Parallax 2026'}.</em>
-          </>
-        }
-        desc={`${edition?.organizer || 'ISTE'} brings the convention to ${placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering, Palakkad'}. Two days, one campus.`}
-      />
+    <div className="page-scene-page">
+      <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
+        <PageTitle
+          kicker="About"
+          title={
+            <>
+              About
+              <br />
+              <em>{edition?.name || 'Parallax 2027'}.</em>
+            </>
+          }
+          desc={`${edition?.organizer || 'ISTE'} brings the convention to ${placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering, Palakkad'}. Two days, one campus.`}
+        />
+      </PageScene>
       <section className="section prose-grid">
         <HudFrame as="article" className="about-main-card">
           <Eyebrow>The Idea</Eyebrow>
           <h2>Two days of student engineering.</h2>
           <p>
-            {edition?.name || 'Parallax 2026'} is run by the {edition?.organizer || 'ISTE'} chapter
-            at {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}. Individuals and teams
-            build, compete and present across both days.
+            {edition?.name || 'Parallax 2027'} is run by the {edition?.organizer || 'ISTE'} chapter
+            at {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}.
+            Individuals and teams build, compete and present across both days.
           </p>
           <p>
             Every event, time, room and fee on this site comes from the same catalogue the
@@ -963,7 +984,7 @@ export function About() {
           </p>
         </HudFrame>
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1004,17 +1025,17 @@ export function EventsPage() {
   return (
     <div className="page-scene-page">
       <PageScene bg={ARENA_ART} mascot={EVENT_SCENE_ART} wide>
-      <PageTitle
-        kicker="Events"
-        title={
-          <>
-            All
-            <br />
-            <em>events.</em>
-          </>
-        }
-        desc="Search by name, category or format."
-      />
+        <PageTitle
+          kicker="Events"
+          title={
+            <>
+              All
+              <br />
+              <em>events.</em>
+            </>
+          }
+          desc="Search by name, category or format."
+        />
       </PageScene>
       <div className="exc-shell">
         <section className="section directory exc-catalogue">
@@ -1082,9 +1103,7 @@ export function EventsPage() {
                   aria-labelledby={`exc-day-${group.key}`}
                 >
                   <header className="exc-day-head">
-                    <span className="exc-day-index">
-                      Day {groupIndex + 1}
-                    </span>
+                    <span className="exc-day-index">Day {groupIndex + 1}</span>
                     <h2 className="exc-day-title" id={`exc-day-${group.key}`}>
                       {group.label}
                     </h2>
@@ -1332,41 +1351,81 @@ export function EventDetail() {
 }
 
 export function PassPage() {
-  const { edition, policy } = useSite();
+  const { edition, policy, slug } = useSite();
+  const tiers = useAsync(() => publicApi.registrationCategories(slug), [slug], {
+    enabled: Boolean(slug),
+  });
+  const registrationTiers = tiers.data?.data || [];
   const mode = policy?.includedSelectionMode === 'exact' ? 'Exactly' : 'Up to';
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
-  const priceRupees = Math.round((policy?.passPricePaise || 35000) / 100);
+  const minPrice = registrationTiers.length
+    ? Math.min(...registrationTiers.map((t) => Math.round(t.feePaise / 100)))
+    : 299;
   const valueCap = money(policy?.includedValueCapPaise || 45000);
 
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="Pass"
-        title={
-          <>
-            One pass.
-            <br />
-            <em>Both days.</em>
-          </>
-        }
-        desc="Lunch included. Pick your events, add more if you want."
-      />
+        <PageTitle
+          kicker="Pass"
+          title={
+            <>
+              One pass.
+              <br />
+              <em>Both days.</em>
+            </>
+          }
+          desc="Lunch included. Pick your events, add more if you want."
+        />
       </PageScene>
 
       <section className="section apple-pass-page-section">
         <div className="apple-pass-page-grid">
           <HudFrame as="article" className="apple-pass-pricing-box apple-pass-page-card">
-            <span className="apple-price-caption">All-access pass</span>
+            <span className="apple-price-caption">All-access pass · Tiered Student Entry</span>
             <div className="apple-price-amount">
-              <span className="apple-price-currency">₹</span>
-              <span className="apple-price-number">{priceRupees}</span>
+              <span className="apple-price-currency" style={{ fontSize: '18px', alignSelf: 'flex-start', marginTop: '6px' }}>Starts at ₹</span>
+              <span className="apple-price-number">{minPrice}</span>
               <span className="apple-price-tenure">/ pass</span>
             </div>
-            <p className="apple-price-note">{edition?.name || 'Parallax 2026'} Convention Pass</p>
+            <p className="apple-price-note">
+              Tiered pricing for Polytechnic &amp; B.Tech students. Lunch &amp; kits included.
+            </p>
 
-            <div className="apple-pass-benefits" style={{ margin: '24px 0 28px', width: '100%' }}>
+            {/* Clean Tier Matrix like modern SaaS / Conference pricing */}
+            <div
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.09)',
+                borderRadius: '12px',
+                padding: '14px 16px',
+                margin: '18px 0 20px',
+              }}
+            >
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', marginBottom: '10px' }}>
+                Pass Categories &amp; Pricing
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                  <span style={{ color: '#f8fafc' }}>Polytechnic Student</span>
+                  <b style={{ color: '#38bdf8' }}>₹299</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                  <span style={{ color: '#f8fafc' }}>B.Tech (ISTE Member)</span>
+                  <b style={{ color: '#38bdf8' }}>
+                    ₹500 <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '4px', marginLeft: '4px' }}>ISTE DISCOUNT</span>
+                  </b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                  <span style={{ color: '#f8fafc' }}>B.Tech (Non-ISTE)</span>
+                  <b style={{ color: '#38bdf8' }}>₹600</b>
+                </div>
+              </div>
+            </div>
+
+            <div className="apple-pass-benefits" style={{ margin: '0 0 24px', width: '100%' }}>
               <div className="apple-benefit-row">
                 <span className="apple-check-icon">
                   <Check size={13} strokeWidth={2.4} />
@@ -1396,12 +1455,35 @@ export function PassPage() {
               </div>
             </div>
 
-            <Link to="/portal/pass" className="apple-pass-btn">
-              <span>Get your pass</span>
+            <Link to="/portal/registration" className="apple-pass-btn">
+              <span>Select Category &amp; Get Pass</span>
               <span className="apple-btn-arrow">
                 <ArrowRight size={14} strokeWidth={2.4} />
               </span>
             </Link>
+
+            <div style={{ marginTop: '12px', width: '100%' }}>
+              <RazorpayCheckoutButton
+                amount={50000}
+                description="Parallax 2027 Convention Pass"
+                buttonText="Quick Razorpay Checkout (From ₹299)"
+              />
+            </div>
+
+            {registrationTiers.length ? (
+              <a className="apple-registration-strip" href="#registration">
+                <span className="apple-registration-label">College registration</span>
+                <span className="apple-registration-prices">
+                  {registrationTiers.map((tier, index) => (
+                    <span key={tier.id}>
+                      {index ? ' · ' : ''}
+                      {TIER_SHORT_LABELS[tier.code] || tier.name} <b>{money(tier.feePaise)}</b>
+                    </span>
+                  ))}
+                </span>
+                <ArrowRight size={13} strokeWidth={2.2} aria-hidden="true" />
+              </a>
+            ) : null}
 
             <small className="apple-instant-tag" style={{ marginTop: '16px' }}>
               {policy?.gstNote || 'Fees in Indian rupees.'} Paid securely in the portal.
@@ -1463,6 +1545,56 @@ export function PassPage() {
           </HudFrame>
         </div>
       </section>
+
+      {registrationTiers.length ? (
+        <section className="section public-registration-pricing" id="registration">
+          <SectionHead
+            kicker="College registration"
+            title={
+              <>
+                Pick your <em>category.</em>
+              </>
+            }
+            action={
+              <Button to="/portal/registration" variant="ghost" icon={ArrowRight}>
+                Start registration
+              </Button>
+            }
+          />
+          <p className="public-pricing-lead">
+            Fees depend on your college and ISTE membership. Every category is verified by the
+            registration desk, and the amount below is loaded live from the registration database.
+          </p>
+          <div className="reg-cat-grid public-registration-grid">
+            {registrationTiers.map((tier) => (
+              <article className="reg-cat public-reg-tier" key={tier.id}>
+                <div className="reg-cat-top">
+                  <b>{tier.name}</b>
+                  <Badge tone={tier.code === 'iste_member' ? 'accent' : 'muted'}>
+                    {tier.code === 'iste_member'
+                      ? 'ISTE verified'
+                      : tier.code === 'polytechnic'
+                        ? 'Polytechnic'
+                        : 'College ID'}
+                  </Badge>
+                </div>
+                <strong>{money(tier.feePaise)}</strong>
+                <small>{tier.description}</small>
+                <span className="reg-cat-docs">
+                  {(tier.requiredDocuments || []).map((doc) => (
+                    <span key={doc.type}>
+                      {doc.required ? 'Mandatory' : 'Optional'}: {doc.label}
+                    </span>
+                  ))}
+                </span>
+                <Link className="public-tier-cta" to="/portal/registration">
+                  Register in this category <ArrowRight size={13} strokeWidth={2.2} />
+                </Link>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1489,25 +1621,25 @@ export function SchedulePage() {
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="Schedule"
-        title={
-          <>
-            The
-            <br />
-            <em>schedule.</em>
-          </>
-        }
-        desc="Every session in order, with times and rooms."
-        aside={
-          totalSessions > 0 ? (
-            <div className="schedule-stat-pill">
-              <span className="schedule-stat-num">{totalSessions}</span>
-              <span className="schedule-stat-label">sessions scheduled</span>
-            </div>
-          ) : null
-        }
-      />
+        <PageTitle
+          kicker="Schedule"
+          title={
+            <>
+              The
+              <br />
+              <em>schedule.</em>
+            </>
+          }
+          desc="Every session in order, with times and rooms."
+          aside={
+            totalSessions > 0 ? (
+              <div className="schedule-stat-pill">
+                <span className="schedule-stat-num">{totalSessions}</span>
+                <span className="schedule-stat-label">sessions scheduled</span>
+              </div>
+            ) : null
+          }
+        />
       </PageScene>
       <section className="section apple-schedule-section">
         {schedule.loading ? <Loading label="Loading schedule" rows={3} /> : null}
@@ -1530,17 +1662,17 @@ export function VenuePage() {
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="Venue"
-        title={
-          <>
-            Meet us at
-            <br />
-            <em>{edition?.city?.split(',')[0] || 'Palakkad'}.</em>
-          </>
-        }
-        desc={`${placeLabel(edition?.venue, edition?.city) || 'NSSCE Campus, Palakkad'}.`}
-      />
+        <PageTitle
+          kicker="Venue"
+          title={
+            <>
+              Meet us at
+              <br />
+              <em>{edition?.city?.split(',')[0] || 'Palakkad'}.</em>
+            </>
+          }
+          desc={`${placeLabel(edition?.venue, edition?.city) || 'NSSCE Campus, Palakkad'}.`}
+        />
       </PageScene>
       <section className="section venue-grid">
         <HudFrame as="article" className="venue-map-card">
@@ -1670,17 +1802,17 @@ export function FAQPage() {
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="FAQ"
-        title={
-          <>
-            Common
-            <br />
-            <em>questions.</em>
-          </>
-        }
-        desc="Passes, events, verification and refunds."
-      />
+        <PageTitle
+          kicker="FAQ"
+          title={
+            <>
+              Common
+              <br />
+              <em>questions.</em>
+            </>
+          }
+          desc="Passes, events, verification and refunds."
+        />
       </PageScene>
       <section className="section apple-faq-section">
         <div className="apple-faq-list">
@@ -1913,17 +2045,17 @@ export function TeamPage() {
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="Team"
-        title={
-          <>
-            Who runs
-            <br />
-            <em>Parallax.</em>
-          </>
-        }
-        desc="Faculty, student leads and the web team."
-      />
+        <PageTitle
+          kicker="Team"
+          title={
+            <>
+              The
+              <br />
+              <em>Team.</em>
+            </>
+          }
+          desc="Faculty, student leads and the web team."
+        />
       </PageScene>
 
       <section className="team-page">
@@ -1956,6 +2088,8 @@ export function ContactPage() {
   const [senderEmail, setSenderEmail] = useState('');
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState(null);
 
   const topics = [
     { id: 'pass', label: 'Pass & Pricing' },
@@ -1965,40 +2099,65 @@ export function ContactPage() {
     { id: 'general', label: 'General Inquiries' },
   ];
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const topicLabel = topics.find((t) => t.id === topic)?.label || 'General';
-    const subject = encodeURIComponent(`[Parallax 2026] Inquiry: ${topicLabel}`);
-    const body = encodeURIComponent(
-      `Name: ${name || 'Participant'}\nEmail: ${senderEmail || 'Not provided'}\nCategory: ${topicLabel}\n\nMessage:\n${message}\n\n--\nSent via Parallax 2026 Portal`,
-    );
-    window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
-    setSent(true);
+    setBusy(true);
+    setFeedback(null);
+    const topicLabel = topics.find((t) => t.id === topic)?.label || 'General Inquiries';
+
+    try {
+      await publicApi.submitInquiry({
+        name: name.trim(),
+        email: senderEmail.trim(),
+        category: topicLabel,
+        message: message.trim(),
+      });
+      setFeedback({
+        tone: 'good',
+        text: `Thank you ${name.trim()}! Your message was dispatched directly to the organizing desk via Telegram. We will email you at ${senderEmail.trim()} shortly.`,
+      });
+      setMessage('');
+      setSent(true);
+    } catch (err) {
+      // Fallback: mailto if network fails
+      const subject = encodeURIComponent(`[Parallax 2027] Inquiry: ${topicLabel}`);
+      const body = encodeURIComponent(
+        `Name: ${name || 'Participant'}\nEmail: ${senderEmail || 'Not provided'}\nCategory: ${topicLabel}\n\nMessage:\n${message}\n\n--\nSent via Parallax 2027 Portal`,
+      );
+      window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+      setFeedback({
+        tone: 'good',
+        text: `Inquiry opened in your email client as fallback to ${email}.`,
+      });
+      setSent(true);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
-      <PageTitle
-        kicker="Contact"
-        title={
-          <>
-            Talk to
-            <br />
-            <em>the team.</em>
-          </>
-        }
-        desc="Email us about passes, events or travel."
-        aside={
-          <div className="contact-status-card">
-            <div className="contact-status-indicator">
-              <span className="contact-status-pulse" />
-              <span>Desk online</span>
+        <PageTitle
+          kicker="Contact"
+          title={
+            <>
+              Talk to
+              <br />
+              <em>the team.</em>
+            </>
+          }
+          desc="Email us about passes, events or travel."
+          aside={
+            <div className="contact-status-card">
+              <div className="contact-status-indicator">
+                <span className="contact-status-pulse" />
+                <span>Desk online</span>
+              </div>
+              <span className="contact-status-hours">Typical response &lt; 4 hours</span>
             </div>
-            <span className="contact-status-hours">Typical response &lt; 4 hours</span>
-          </div>
-        }
-      />
+          }
+        />
       </PageScene>
 
       <section className="section contact-section">
@@ -2012,9 +2171,7 @@ export function ContactPage() {
             <div className="contact-channel-body">
               <span className="contact-channel-tag">Email</span>
               <h3 className="contact-channel-title">Email the organisers</h3>
-              <p className="contact-channel-desc">
-                Passes, team entries, certificates and press.
-              </p>
+              <p className="contact-channel-desc">Passes, team entries, certificates and press.</p>
               <a href={`mailto:${email}`} className="contact-channel-link">
                 <span>{email}</span>
                 <ArrowUpRight size={14} strokeWidth={2} />
@@ -2031,8 +2188,8 @@ export function ContactPage() {
               <span className="contact-channel-tag">Campus</span>
               <h3 className="contact-channel-title">Host campus</h3>
               <p className="contact-channel-desc">
-                {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}.
-                Desk at the main auditorium.
+                {placeLabel(edition?.host, edition?.city) || 'NSS College of Engineering'}. Desk at
+                the main auditorium.
               </p>
               <Link to="/venue" className="contact-channel-link">
                 <span>Campus Location &amp; Directions</span>
@@ -2151,21 +2308,29 @@ export function ContactPage() {
             </div>
 
             <div className="contact-form-footer">
-              <button type="submit" className="contact-submit-btn">
-                <span>Send email</span>
-                <Send size={15} strokeWidth={2} />
+              <button type="submit" className="contact-submit-btn" disabled={busy}>
+                {busy ? (
+                  <>
+                    <RefreshCw size={15} className="is-spinning" />
+                    <span>Transmitting…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Send message</span>
+                    <Send size={15} strokeWidth={2} />
+                  </>
+                )}
               </button>
 
-              <span className="contact-dispatch-note">Direct route to {email}</span>
+              <span className="contact-dispatch-note">
+                Direct dispatch to Organizing Desk (Telegram &amp; {email})
+              </span>
             </div>
 
-            {sent && (
-              <div className="contact-sent-notice">
+            {feedback && (
+              <div className="contact-sent-notice" style={{ marginTop: '18px' }}>
                 <Check size={16} strokeWidth={2.4} />
-                <span>
-                  Inquiry opened in your email client. If it did not open, please write directly to{' '}
-                  <b>{email}</b>.
-                </span>
+                <span>{feedback.text}</span>
               </div>
             )}
           </form>
@@ -2198,9 +2363,13 @@ export function Footer() {
         <Link
           to="/"
           className="footer-brand"
-          aria-label={`${edition?.name || 'Parallax 2026'} home`}
+          aria-label={`${edition?.name || 'Parallax 2027'} home`}
         >
-          <img src={ISTE} alt={edition?.organizer || 'ISTE'} className="footer-logo footer-iste-logo" />
+          <img
+            src={ISTE}
+            alt={edition?.organizer || 'ISTE'}
+            className="footer-logo footer-iste-logo"
+          />
         </Link>
         <p>Organised by ISTE</p>
         <div className="footer-host">
@@ -2230,9 +2399,7 @@ export function Footer() {
         ))}
       </div>
       <div className="footer-bottom">
-        <span className="footer-copy">
-          © 2026 All rights reserved.
-        </span>
+        <span className="footer-copy">© 2027 All rights reserved.</span>
         <span className="footer-credits">
           Developed by{' '}
           <a

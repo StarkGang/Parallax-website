@@ -1,6 +1,7 @@
 """Student eligibility verification: roster, college email and document review."""
 
 import hashlib
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -176,7 +177,7 @@ async def submit(
                 details={"allowedDomains": allowed},
                 code="EMAIL_DOMAIN_NOT_ALLOWED",
             )
-        code = f"{int.from_bytes(new_token(4).encode()[:4], 'big') % 1000000:06d}"
+        code = f"{secrets.randbelow(1_000_000):06d}"
         db.add(
             VerificationEmailCode(
                 verification_id=verification.id,

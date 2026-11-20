@@ -14,6 +14,8 @@ from app.integrations.storage import get_storage
 from app.core.errors import AppError
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import permissions_for
+from app.core.rate_limit import limiter
+from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.models.commerce import (
     AttendanceRecord,
@@ -385,9 +387,7 @@ async def upload_banner(
     file: UploadFile = File(...),
     ctx: AuthContext = Depends(require_permission("events.write")),
 ) -> dict:
-    data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise AppError("Banner image must be 10 MB or smaller.", code="FILE_TOO_LARGE", status_code=413)
+    data = await read_upload_limited(file, 10 * 1024 * 1024, label="Banner image")
 
     ext = (file.filename or "").split(".")[-1].lower() if "." in (file.filename or "") else "jpg"
     if ext not in ("jpg", "jpeg", "png", "webp", "avif"):
@@ -411,7 +411,7 @@ async def upload_icon(
     ctx: AuthContext = Depends(require_permission("events.write")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    data = await file.read()
+    data = await read_upload_limited(file, 300 * 1024, label="Icon")
     icon = await icon_service.create_icon(
         db,
         request,
@@ -454,8 +454,8 @@ async def users(
     ctx: AuthContext = Depends(require_permission("users.read")),
     db: AsyncSession = Depends(get_db),
     q: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ) -> dict:
     rows, total = await user_service.list_users(
         db, edition_id, q=q, page=page, page_size=page_size
@@ -508,7 +508,7 @@ async def memberships(
     return {"data": rows}
 
 
-@router.post("/memberships")
+@router.post("/memberships", dependencies=[Depends(limiter("admin_membership", 30, 60))])
 async def grant_membership(
     edition_id: uuid.UUID,
     payload: MembershipGrant,
@@ -529,7 +529,7 @@ async def grant_membership(
     return {"data": {"granted": True, "role": m.role}}
 
 
-@router.post("/staff-invites")
+@router.post("/staff-invites", dependencies=[Depends(limiter("admin_staff_invite", 30, 60))])
 async def invite_staff(
     edition_id: uuid.UUID,
     payload: MembershipGrant,
@@ -556,8 +556,8 @@ async def payments_list(
     ctx: AuthContext = Depends(require_permission("finance.read")),
     db: AsyncSession = Depends(get_db),
     status: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ) -> dict:
     stmt = (
         select(PaymentOrder, User)
@@ -593,7 +593,7 @@ async def payments_list(
     }
 
 
-@router.post("/refunds")
+@router.post("/refunds", dependencies=[Depends(limiter("admin_refund", 30, 60))])
 async def create_refund(
     edition_id: uuid.UUID,
     payload: RefundCreate,
@@ -695,7 +695,10 @@ async def verification_document(
     return {"data": {"url": url}}
 
 
-@router.post("/verifications/{verification_id}/decide")
+@router.post(
+    "/verifications/{verification_id}/decide",
+    dependencies=[Depends(limiter("admin_verification_decision", 120, 60))],
+)
 async def decide_verification(
     edition_id: uuid.UUID,
     verification_id: uuid.UUID,
@@ -861,8 +864,8 @@ async def audit(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(require_permission("audit.read")),
     db: AsyncSession = Depends(get_db),
-    page: int = 1,
-    page_size: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ) -> dict:
     rows = list(
         (
@@ -921,7 +924,7 @@ async def attendance(
     }
 
 
-@router.post("/checkin")
+@router.post("/checkin", dependencies=[Depends(limiter("admin_checkin", 300, 60))])
 async def checkin(
     edition_id: uuid.UUID,
     payload: CheckinRequest,

@@ -324,7 +324,7 @@ export class AppErrorBoundary extends Component {
   }
 }
 
-export function Sheet({ open, title, onClose, children, wide = false }) {
+export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 'ADMIN ACTION' }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => event.key === 'Escape' && onClose();
@@ -353,7 +353,7 @@ export function Sheet({ open, title, onClose, children, wide = false }) {
       >
         <header className="sheet-head">
           <div>
-            <Eyebrow>ADMIN ACTION</Eyebrow>
+            <Eyebrow>{eyebrow}</Eyebrow>
             <h2>{title}</h2>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Close">

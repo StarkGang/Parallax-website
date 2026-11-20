@@ -49,14 +49,10 @@ import {
 } from '../components/ui.jsx';
 
 const PORTAL_NAV = [
-  ['Overview', '/portal', true],
-  ['Pass', '/portal/pass'],
-  ['Select events', '/portal/select-events'],
-  ['Registrations', '/portal/registrations'],
-  ['Tickets', '/portal/tickets'],
-  ['Teams', '/portal/teams'],
-  ['Verification', '/portal/verification'],
-  ['Profile', '/portal/profile'],
+  ['My Pass & Ticket', '/portal/registration'],
+  ['Select Events', '/portal/select-events'],
+  ['My Registrations & Teams', '/portal/registrations'],
+  ['Profile & Settings', '/portal/profile'],
 ];
 
 function loadRazorpay() {
@@ -73,16 +69,28 @@ function loadRazorpay() {
 
 async function openRazorpay(order, user) {
   const Razorpay = await loadRazorpay();
+  const logoUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/favicon.png`
+      : '';
   return new Promise((resolve, reject) => {
     const checkout = new Razorpay({
       key: order.razorpayKeyId,
       order_id: order.gatewayOrderId,
       amount: order.amountPaise,
       currency: 'INR',
-      name: 'Parallax',
+      name: 'Parallax 2026',
       description: 'Convention pass',
-      prefill: { email: user?.email, name: user?.fullName },
-      theme: { color: '#38bdf8' },
+      image: logoUrl,
+      prefill: {
+        email: user?.email || '',
+        name: user?.fullName || '',
+        contact: user?.phone || '',
+      },
+      theme: {
+        color: '#0284c7',
+        backdrop_color: 'rgba(5, 7, 10, 0.88)',
+      },
       handler: () => resolve(true),
       modal: { ondismiss: () => resolve(false) },
     });
@@ -109,7 +117,7 @@ export function PortalLayout() {
       <PageTitle
         kicker="Attendee Portal"
         title="Your Convention Passes & Bookings"
-        desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition?.name || 'Parallax 2026'}.`}
+        desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition?.name || 'Parallax 2027'}.`}
         aside={
           <div className="title-badges">
             {isStaff ? (
@@ -129,8 +137,27 @@ export function PortalLayout() {
         }
       />
 
-      {/* Swipeable Horizontal Tabs on Mobile */}
+      {/* Mobile Top User Bar & Swipeable Tabs */}
       <div className="section" style={{ paddingBottom: 0, paddingTop: 10 }}>
+        <div className="portal-mobile-user-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            <div className="avatar small" style={{ width: '32px', height: '32px', fontSize: '12px' }}>
+              {initials(user?.fullName)}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user?.fullName || 'Attendee'}
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user?.email}
+              </div>
+            </div>
+          </div>
+          <button className="text-link signout" onClick={signOut} style={{ fontSize: '12px', padding: '6px 10px', color: '#cbd5e1' }}>
+            <LogOut size={13} /> Sign out
+          </button>
+        </div>
+
         <nav className="portal-mobile-tabs" aria-label="Participant portal modules">
           {PORTAL_NAV.map(([label, to, end]) => (
             <NavLink

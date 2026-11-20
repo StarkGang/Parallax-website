@@ -280,7 +280,7 @@ The seeded edition slug is `parallax-2026`. Seed data includes categories (Compu
 
 The seed policy sets:
 
-- a ₹350 pass
+- a ₹500 pass
 - a lunch entitlement for both days
 - up to three included events, subject to an inclusive ₹450 base-value cap
 - a 15-minute hold window

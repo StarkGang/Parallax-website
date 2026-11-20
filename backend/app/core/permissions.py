@@ -115,6 +115,7 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
         "user.read_pii",
         "verification.review",
         "registration.read",
+        "registration.write",
         "report.read",
     },
     Role.EVENT_COORDINATOR: {

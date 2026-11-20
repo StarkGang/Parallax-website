@@ -6,15 +6,45 @@
 
 .page-scene-page {
   position: relative;
+  background: radial-gradient(
+    ellipse 130% 90% at 50% 0%,
+    rgba(14, 23, 40, 0.95) 0%,
+    rgba(8, 13, 24, 0.98) 45%,
+    #06080e 100%
+  );
+}
+
+.page-scene-page > .section:first-of-type {
+  position: relative;
+  padding-top: 48px;
+}
+
+.page-scene-page > .section:first-of-type::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(84%, 1200px);
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(56, 189, 248, 0.15) 20%,
+    rgba(56, 189, 248, 0.5) 50%,
+    rgba(56, 189, 248, 0.15) 80%,
+    transparent 100%
+  );
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
 }
 
 .page-scene-hero {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  min-height: clamp(600px, 92svh, 960px);
-  background: #070b12;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: clamp(580px, 88svh, 920px);
+  background: #06080e;
+  border-bottom: 0 !important;
 }
 
 .page-scene {
@@ -64,7 +94,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(112px, 15vh, 180px) 6% clamp(170px, 30vh, 320px);
+  padding: clamp(140px, 18vh, 210px) 6% clamp(140px, 20vh, 240px);
   pointer-events: none;
   will-change: transform;
 }
@@ -124,18 +154,57 @@
 
 /* The app pins heading sizes with !important, so the hero claims its own. */
 .page-scene-title-layer .page-title h1 {
-  font-size: clamp(46px, 10.4vw, 148px) !important;
-  line-height: 0.96;
-  letter-spacing: -0.045em;
+  font-size: clamp(40px, 8.5vw, 100px) !important;
+  line-height: 1.02;
+  letter-spacing: -0.04em;
   color: #ffffff;
-  text-shadow: 0 22px 60px rgba(0, 0, 0, 0.62);
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.88), 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
-.page-scene-title-layer .page-title > p {
-  margin: 0;
-  max-width: 54ch;
-  color: rgba(226, 236, 246, 0.9);
-  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+.page-scene-title-layer .eyebrow {
+  color: #38bdf8 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
+  margin-bottom: 4px;
+}
+
+.page-scene-title-layer .page-title-desc,
+.page-scene-title-layer .page-title p,
+.page-scene-title-layer .page-title-text p {
+  margin: 8px auto 0 !important;
+  max-width: 58ch !important;
+  font-size: clamp(15px, 1.25vw, 18px) !important;
+  line-height: 1.6 !important;
+  color: #f1f5f9 !important;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95), 0 1px 4px rgba(0, 0, 0, 0.95);
+  font-weight: 450 !important;
+}
+
+.page-scene-title-layer .page-title-aside {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.page-scene-title-layer .contact-status-card {
+  align-items: center;
+}
+
+.page-scene-title-layer .contact-status-indicator {
+  background: rgba(10, 15, 26, 0.82) !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+  color: #f8fafc !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.page-scene-title-layer .contact-status-hours {
+  color: #cbd5e1 !important;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9) !important;
 }
 
 .page-scene-title-layer .page-title .mono-note,
@@ -175,9 +244,16 @@
   position: absolute;
   z-index: 4;
   inset: auto 0 0;
-  height: 18%;
+  height: 38%;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(5, 8, 15, 0) 0%, #05080f 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(6, 8, 14, 0) 0%,
+    rgba(7, 10, 18, 0.25) 30%,
+    rgba(8, 12, 22, 0.65) 60%,
+    rgba(10, 16, 28, 0.92) 85%,
+    rgba(14, 23, 40, 0.95) 100%
+  );
 }
 
 @media (max-width: 900px) {

@@ -9,6 +9,7 @@ import {
   ClipboardCheck,
   CreditCard,
   FileText,
+  IdCard,
   Image,
   LogOut,
   Megaphone,
@@ -62,13 +63,16 @@ import {
   AdminErrorBoundary,
 } from '../components/ui.jsx';
 
-const LOGO = String(import.meta.env.BASE_URL) + 'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp';
+const LOGO =
+  String(import.meta.env.BASE_URL) +
+  'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp';
 
 const NAV = [
   ['Overview', '/manage', LayoutDashboard, true],
   ['Events', '/manage/events', CalendarDays],
   ['Policy', '/manage/policy', ShieldCheck],
   ['Registrations', '/manage/registrations', Ticket],
+  ['Registration desk', '/manage/registration', IdCard],
   ['Users', '/manage/users', Users],
   ['Verifications', '/manage/verifications', BadgeCheck],
   ['Payments', '/manage/payments', Wallet],
@@ -76,6 +80,7 @@ const NAV = [
   ['Announcements', '/manage/announcements', Megaphone],
   ['Attendance', '/manage/attendance', FileText],
   ['Audit log', '/manage/audit', FileText],
+  ['Registration config', '/manage/registration-settings', Settings],
   ['Settings', '/manage/settings', Settings],
 ];
 
@@ -134,8 +139,27 @@ export function AdminLayout() {
   };
 
   if (loading) return <Loading label="Verifying staff credentials…" rows={0} />;
-  if (!user) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
+  if (!user)
+    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   if (!isStaff) return <Navigate to="/portal" replace />;
+
+  // Never let admin modules call the API with the placeholder edition UUID.
+  // The public edition lookup has to resolve the real database row first.
+  if (!site.editionVerified) {
+    return (
+      <div className="admin-gate">
+        {site.editionError ? (
+          <ErrorBox
+            error={site.editionError}
+            title="Could not load the convention edition"
+            onRetry={site.refresh}
+          />
+        ) : (
+          <Loading label="Resolving convention edition…" rows={0} />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="admin-shell">
@@ -193,7 +217,11 @@ export function AdminLayout() {
             aria-label={mobileNavOpen ? 'Close staff menu' : 'Open staff menu'}
             aria-expanded={mobileNavOpen}
           >
-            {mobileNavOpen ? <X size={18} strokeWidth={1.8} /> : <Menu size={18} strokeWidth={1.8} />}
+            {mobileNavOpen ? (
+              <X size={18} strokeWidth={1.8} />
+            ) : (
+              <Menu size={18} strokeWidth={1.8} />
+            )}
           </button>
         </nav>
       </header>
@@ -222,7 +250,12 @@ export function AdminLayout() {
 
       {/* Mobile Drawer (Accessible full list) */}
       {mobileNavOpen ? (
-        <div className="admin-mobile-drawer" role="dialog" aria-modal="true" aria-label="Staff modules">
+        <div
+          className="admin-mobile-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Staff modules"
+        >
           <div className="admin-drawer-header">
             <span>Staff Console Modules</span>
             <button
@@ -264,7 +297,7 @@ export function AdminLayout() {
         <aside className="admin-desktop-sidebar">
           <div className="admin-sidebar-header">
             <span className="admin-sidebar-heading">Operations</span>
-            <span className="admin-sidebar-meta">12 modules</span>
+            <span className="admin-sidebar-meta">{NAV.length} modules</span>
           </div>
           <nav className="admin-desktop-nav" aria-label="Staff navigation">
             {NAV.map(([label, to, Icon, end]) => (
@@ -298,12 +331,26 @@ export function AdminLayout() {
 }
 
 export function AdminOverview() {
-  const { editionId } = useSite();
-  const stats = useAsync(() => adminApi.overview(editionId), [editionId], { enabled: Boolean(editionId) });
+  const site = useSite();
+  const { editionId, editionVerified } = site;
+  const stats = useAsync(() => adminApi.overview(editionId), [editionId], {
+    enabled: Boolean(editionId) && editionVerified,
+  });
   const data = stats.data?.data;
 
+  if (!editionVerified) return <Loading label="Resolving convention edition…" rows={0} />;
   if (stats.loading) return <Loading label="Loading operational telemetry" rows={3} />;
-  if (stats.error) return <ErrorBox error={stats.error} onRetry={stats.reload} />;
+  if (stats.error) {
+    return (
+      <ErrorBox
+        error={stats.error}
+        onRetry={() => {
+          stats.reload();
+          site.refresh();
+        }}
+      />
+    );
+  }
 
   const recent = data?.recentRegistrations || [];
 
@@ -321,8 +368,16 @@ export function AdminOverview() {
       </div>
 
       <div className="stat-grid">
-        <Stat label="PASSES SOLD" value={data?.passesSold ?? 0} note={`${data?.passesPending ?? 0} pending`} />
-        <Stat label="REVENUE" value={money(data?.revenuePaise || 0)} note={`${money(data?.refundedPaise || 0)} refunded`} />
+        <Stat
+          label="PASSES SOLD"
+          value={data?.passesSold ?? 0}
+          note={`${data?.passesPending ?? 0} pending`}
+        />
+        <Stat
+          label="REVENUE"
+          value={money(data?.revenuePaise || 0)}
+          note={`${money(data?.refundedPaise || 0)} refunded`}
+        />
         <Stat
           label="REGISTRATIONS"
           value={data?.registrationsConfirmed ?? 0}
@@ -334,7 +389,11 @@ export function AdminOverview() {
           value={`${data?.eventsPublished ?? 0} / ${data?.eventsTotal ?? 0}`}
           note="Published / total catalogue"
         />
-        <Stat label="SEATS TAKEN" value={`${data?.seatsTaken ?? 0} / ${data?.seatsCapacity ?? 0}`} note="Taken / capacity" />
+        <Stat
+          label="SEATS TAKEN"
+          value={`${data?.seatsTaken ?? 0} / ${data?.seatsCapacity ?? 0}`}
+          note="Taken / capacity"
+        />
         <Stat
           label="VERIFICATIONS"
           value={data?.verificationsPending ?? 0}
@@ -343,7 +402,9 @@ export function AdminOverview() {
         />
         <Stat
           label="LATEST DAY SALES"
-          value={(data?.salesByDay || []).length ? money((data.salesByDay.at(-1)?.amountPaise) || 0) : '₹0'}
+          value={
+            (data?.salesByDay || []).length ? money(data.salesByDay.at(-1)?.amountPaise || 0) : '₹0'
+          }
           note="Recorded on latest day"
         />
       </div>
@@ -359,7 +420,10 @@ export function AdminOverview() {
           {recent.length ? (
             <div className="registration-list">
               {recent.slice(0, 8).map((row, index) => (
-                <div className="registration-row" key={`${row.id || row.registrationNumber || index}`}>
+                <div
+                  className="registration-row"
+                  key={`${row.id || row.registrationNumber || index}`}
+                >
                   <span className="event-dot" />
                   <div>
                     <b>{row.userName || row.participantName || row.name || 'Participant'}</b>
@@ -485,9 +549,12 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
 
   useEffect(() => {
     if (editionId) {
-      adminApi.icons(editionId).then((res) => {
-        setIconsList(res.data || []);
-      }).catch(() => {});
+      adminApi
+        .icons(editionId)
+        .then((res) => {
+          setIconsList(res.data || []);
+        })
+        .catch(() => {});
     }
   }, [editionId]);
 
@@ -569,8 +636,10 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
         startsAt: fromLocalInput(form.startsAt),
         endsAt: fromLocalInput(form.endsAt),
         venueRoom: form.venueRoom?.trim() || '',
-        registrationOpensAt: fromLocalInput(form.registrationOpensAt) || fromLocalInput(form.startsAt),
-        registrationClosesAt: fromLocalInput(form.registrationClosesAt) || fromLocalInput(form.startsAt),
+        registrationOpensAt:
+          fromLocalInput(form.registrationOpensAt) || fromLocalInput(form.startsAt),
+        registrationClosesAt:
+          fromLocalInput(form.registrationClosesAt) || fromLocalInput(form.startsAt),
         requiresApproval: form.requiresApproval,
         iconId: form.iconId || null,
         bannerUrl: form.bannerUrl?.trim() || null,
@@ -599,7 +668,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
     <form className="admin-form" onSubmit={submit}>
       <FieldGrid>
         <Field label="Title">
-          <input value={form.title} onChange={(event) => set('title', event.target.value)} required />
+          <input
+            value={form.title}
+            onChange={(event) => set('title', event.target.value)}
+            required
+          />
         </Field>
         <Field label="Slug" hint="lowercase-with-hyphens">
           <input
@@ -610,7 +683,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           />
         </Field>
         <Field label="Category">
-          <select value={form.categoryId} onChange={(event) => set('categoryId', event.target.value)} required>
+          <select
+            value={form.categoryId}
+            onChange={(event) => set('categoryId', event.target.value)}
+            required
+          >
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category?.name || 'Category'}
@@ -618,7 +695,10 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
             ))}
           </select>
         </Field>
-        <Field label="Event Banner (Supabase Storage or Custom URL)" hint="Upload image or paste image link (16:9 recommended)">
+        <Field
+          label="Event Banner (Supabase Storage or Custom URL)"
+          hint="Upload image or paste image link (16:9 recommended)"
+        >
           <div className="banner-input-wrap">
             <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
               <input
@@ -628,7 +708,24 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
                 onChange={(e) => set('bannerUrl', e.target.value)}
                 style={{ flex: 1 }}
               />
-              <label className="btn-upload-file" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '0 14px', height: '40px', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '6px', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              <label
+                className="btn-upload-file"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '0 14px',
+                  height: '40px',
+                  background: 'rgba(56,189,248,0.12)',
+                  border: '1px solid rgba(56,189,248,0.35)',
+                  borderRadius: '6px',
+                  color: '#38bdf8',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 <Upload size={14} />
                 <span>{uploadingBanner ? 'Uploading...' : 'Upload Banner'}</span>
                 <input
@@ -641,12 +738,38 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
               </label>
             </div>
             {form.bannerUrl ? (
-              <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', maxHeight: '120px' }}>
-                <img src={form.bannerUrl} alt="Banner preview" style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }} onError={(e) => { e.target.style.display = 'none'; }} />
+              <div
+                style={{
+                  position: 'relative',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  maxHeight: '120px',
+                }}
+              >
+                <img
+                  src={form.bannerUrl}
+                  alt="Banner preview"
+                  style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }}
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                  }}
+                />
                 <button
                   type="button"
                   className="btn-clear-icon"
-                  style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(0,0,0,0.75)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                  style={{
+                    position: 'absolute',
+                    top: '8px',
+                    right: '8px',
+                    background: 'rgba(0,0,0,0.75)',
+                    color: '#fff',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    padding: '4px 10px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                  }}
                   onClick={() => set('bannerUrl', '')}
                 >
                   Remove banner
@@ -678,7 +801,10 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           />
         </Field>
         <Field label="Venue room">
-          <input value={form.venueRoom} onChange={(event) => set('venueRoom', event.target.value)} />
+          <input
+            value={form.venueRoom}
+            onChange={(event) => set('venueRoom', event.target.value)}
+          />
         </Field>
         <Field label="Accent">
           <select value={form.accent} onChange={(event) => set('accent', event.target.value)}>
@@ -689,7 +815,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
             ))}
           </select>
         </Field>
-        <Field label="Event Icon / Artwork" hint="Select from catalog or upload an image file" className="full-span">
+        <Field
+          label="Event Icon / Artwork"
+          hint="Select from catalog or upload an image file"
+          className="full-span"
+        >
           <div className="icon-selector-wrap">
             <div className="icon-preview-box">
               {form.iconId ? (
@@ -759,13 +889,19 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           />
         </Field>
         <Field label="Add-on charge basis">
-          <select value={form.addonChargeBasis} onChange={(event) => set('addonChargeBasis', event.target.value)}>
+          <select
+            value={form.addonChargeBasis}
+            onChange={(event) => set('addonChargeBasis', event.target.value)}
+          >
             <option value="per_participant">Per participant</option>
             <option value="per_team">Per team</option>
           </select>
         </Field>
         <Field label="Team fee basis">
-          <select value={form.teamFeeBasis} onChange={(event) => set('teamFeeBasis', event.target.value)}>
+          <select
+            value={form.teamFeeBasis}
+            onChange={(event) => set('teamFeeBasis', event.target.value)}
+          >
             <option value="per_participant">Per participant</option>
             <option value="per_team">Per team</option>
           </select>
@@ -795,7 +931,10 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           />
         </Field>
         <Field label="Capacity unit">
-          <select value={form.capacityUnit} onChange={(event) => set('capacityUnit', event.target.value)}>
+          <select
+            value={form.capacityUnit}
+            onChange={(event) => set('capacityUnit', event.target.value)}
+          >
             <option value="participants">Participants</option>
             <option value="entries">Entries</option>
           </select>
@@ -840,7 +979,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           required
         />
       </Field>
-      <Field label="Description (Markdown)" className="full-span" hint="Detailed agenda, eligibility, and instructions">
+      <Field
+        label="Description (Markdown)"
+        className="full-span"
+        hint="Detailed agenda, eligibility, and instructions"
+      >
         <textarea
           rows="4"
           value={form.descriptionMd}
@@ -848,7 +991,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           placeholder="Write in Markdown. Detailed breakdown of the event, schedule, and guidelines..."
         />
       </Field>
-      <Field label="Rules (Markdown)" className="full-span" hint="Code of conduct and evaluation criteria">
+      <Field
+        label="Rules (Markdown)"
+        className="full-span"
+        hint="Code of conduct and evaluation criteria"
+      >
         <textarea
           rows="3"
           value={form.rulesMd}
@@ -856,7 +1003,11 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           placeholder="1. General guidelines&#10;2. Round structure and timing&#10;3. Judging criteria..."
         />
       </Field>
-      <Field label="Prizes (Markdown)" className="full-span" hint="Cash rewards, certificates, or perks">
+      <Field
+        label="Prizes (Markdown)"
+        className="full-span"
+        hint="Cash rewards, certificates, or perks"
+      >
         <textarea
           rows="2"
           value={form.prizesMd}
@@ -967,17 +1118,29 @@ function CategoryManager({ editionId, categories, onChanged }) {
               setForm({
                 ...form,
                 name: event.target.value,
-                slug: editId ? form.slug : event.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+                slug: editId
+                  ? form.slug
+                  : event.target.value
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, '-')
+                      .replace(/^-|-$/g, ''),
               })
             }
             required
           />
         </Field>
         <Field label="Slug">
-          <input value={form.slug} onChange={(event) => setForm({ ...form, slug: event.target.value })} required />
+          <input
+            value={form.slug}
+            onChange={(event) => setForm({ ...form, slug: event.target.value })}
+            required
+          />
         </Field>
         <Field label="Accent">
-          <select value={form.accent} onChange={(event) => setForm({ ...form, accent: event.target.value })}>
+          <select
+            value={form.accent}
+            onChange={(event) => setForm({ ...form, accent: event.target.value })}
+          >
             {ACCENTS.map((accent) => (
               <option key={accent} value={accent}>
                 {accent}
@@ -1060,7 +1223,14 @@ export function AdminEvents() {
                   <img
                     src={row.bannerUrl}
                     alt=""
-                    style={{ width: '44px', height: '28px', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}
+                    style={{
+                      width: '44px',
+                      height: '28px',
+                      objectFit: 'cover',
+                      borderRadius: '4px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      flexShrink: 0,
+                    }}
                   />
                 ) : null}
                 <div>
@@ -1070,7 +1240,9 @@ export function AdminEvents() {
               </div>
             </td>
             <td>{row.categoryName}</td>
-            <td>{row.format === 'team' ? `Team ${row.teamMinSize}-${row.teamMaxSize}` : 'Individual'}</td>
+            <td>
+              {row.format === 'team' ? `Team ${row.teamMinSize}-${row.teamMaxSize}` : 'Individual'}
+            </td>
             <td>
               {money(row.baseValuePaise)}
               <div className="table-sub">{money(row.addonPricePaise)} add-on</div>
@@ -1091,7 +1263,11 @@ export function AdminEvents() {
                 >
                   View
                 </a>
-                <button className="table-action" onClick={() => openEdit(row)} disabled={busyId === row.id}>
+                <button
+                  className="table-action"
+                  onClick={() => openEdit(row)}
+                  disabled={busyId === row.id}
+                >
                   {busyId === row.id ? 'Loading' : 'Edit'}
                 </button>
               </div>
@@ -1135,7 +1311,9 @@ export function AdminEvents() {
 
 export function AdminPolicy() {
   const { editionId } = useSite();
-  const policies = useAsync(() => adminApi.policies(editionId), [editionId], { enabled: Boolean(editionId) });
+  const policies = useAsync(() => adminApi.policies(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
   const rows = policies.data?.data || [];
   const current = rows.find((row) => row.isCurrent) || rows[0];
   const [form, setForm] = useState(null);
@@ -1147,7 +1325,7 @@ export function AdminPolicy() {
     if (!current) {
       if (!policies.loading && rows.length === 0) {
         setForm({
-          passPrice: '350',
+          passPrice: '500',
           includedEventCount: 3,
           mode: 'up_to',
           cap: '450',
@@ -1276,7 +1454,13 @@ export function AdminPolicy() {
         </div>
         <FieldGrid>
           <Field label="Pass price (₹)">
-            <input type="number" min="0" step="50" value={form.passPrice} onChange={(event) => set('passPrice', event.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="50"
+              value={form.passPrice}
+              onChange={(event) => set('passPrice', event.target.value)}
+            />
           </Field>
           <Field label="Included event count">
             <input
@@ -1294,7 +1478,13 @@ export function AdminPolicy() {
             </select>
           </Field>
           <Field label="Included value cap (₹)">
-            <input type="number" min="0" step="50" value={form.cap} onChange={(event) => set('cap', event.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="50"
+              value={form.cap}
+              onChange={(event) => set('cap', event.target.value)}
+            />
           </Field>
           <Field label="Hold window (minutes)">
             <input
@@ -1306,7 +1496,11 @@ export function AdminPolicy() {
             />
           </Field>
           <Field label="Selection deadline">
-            <input type="datetime-local" value={form.deadline} onChange={(event) => set('deadline', event.target.value)} />
+            <input
+              type="datetime-local"
+              value={form.deadline}
+              onChange={(event) => set('deadline', event.target.value)}
+            />
           </Field>
           <Field label="Default team fee basis">
             <select
@@ -1321,11 +1515,19 @@ export function AdminPolicy() {
             <input value={form.gstNote} onChange={(event) => set('gstNote', event.target.value)} />
           </Field>
           <Field label="Reason for change" className="full-span">
-            <input value={form.reason} onChange={(event) => set('reason', event.target.value)} placeholder="Explain this version" />
+            <input
+              value={form.reason}
+              onChange={(event) => set('reason', event.target.value)}
+              placeholder="Explain this version"
+            />
           </Field>
         </FieldGrid>
         <div className="toggle-row">
-          <Toggle checked={form.capInclusive} onChange={(value) => set('capInclusive', value)} label="Cap is inclusive" />
+          <Toggle
+            checked={form.capInclusive}
+            onChange={(value) => set('capInclusive', value)}
+            label="Cap is inclusive"
+          />
           <Toggle
             checked={form.addonRequiresPass}
             onChange={(value) => set('addonRequiresPass', value)}
@@ -1341,7 +1543,10 @@ export function AdminPolicy() {
               key={day}
               checked={form.lunchDays.includes(day)}
               onChange={(value) =>
-                set('lunchDays', value ? [...form.lunchDays, day] : form.lunchDays.filter((item) => item !== day))
+                set(
+                  'lunchDays',
+                  value ? [...form.lunchDays, day] : form.lunchDays.filter((item) => item !== day),
+                )
               }
               label={`Lunch on ${day === 'day1' ? 'day one' : 'day two'}`}
             />
@@ -1391,7 +1596,7 @@ export function AdminRegistrations() {
         page_size: 50,
       }),
     [editionId, status, debounced, page],
-    { enabled: Boolean(editionId) }
+    { enabled: Boolean(editionId) },
   );
   const list = rows.data?.data || [];
   const total = rows.data?.total ?? list.length;
@@ -1495,9 +1700,13 @@ export function AdminUsers() {
   const { editionId } = useSite();
   const [query, setQuery] = useState('');
   const debounced = useDebounced(query);
-  const users = useAsync(() => adminApi.users(editionId, { q: debounced }), [editionId, debounced], {
-    enabled: Boolean(editionId),
-  });
+  const users = useAsync(
+    () => adminApi.users(editionId, { q: debounced }),
+    [editionId, debounced],
+    {
+      enabled: Boolean(editionId),
+    },
+  );
   const [target, setTarget] = useState(null);
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState(null);
@@ -1526,7 +1735,11 @@ export function AdminUsers() {
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       <div className="table-filters">
         <Field label="Search">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or email" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Name or email"
+          />
         </Field>
       </div>
       {users.loading ? <Loading label="Loading users" rows={2} /> : null}
@@ -1542,7 +1755,10 @@ export function AdminUsers() {
               <div className="table-sub">{row.email}</div>
             </td>
             <td>{row.collegeName || '-'}</td>
-            <td>{(row.roles || []).map((role) => ROLE_LABELS[role] || role).join(', ') || 'Participant'}</td>
+            <td>
+              {(row.roles || []).map((role) => ROLE_LABELS[role] || role).join(', ') ||
+                'Participant'}
+            </td>
             <td>{row.passStatus ? <StatusBadge status={row.passStatus} /> : '-'}</td>
             <td>
               <StatusBadge status={row.verificationStatus} />
@@ -1560,11 +1776,15 @@ export function AdminUsers() {
       </DataTable>
       <Sheet open={Boolean(target)} title="Change account status" onClose={() => setTarget(null)}>
         <p className="muted">
-          {target?.status === 'active' ? 'Suspend' : 'Reactivate'} <b>{target?.fullName}</b>? Suspended
-          accounts cannot sign in or register.
+          {target?.status === 'active' ? 'Suspend' : 'Reactivate'} <b>{target?.fullName}</b>?
+          Suspended accounts cannot sign in or register.
         </p>
         <Field label="Reason">
-          <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Shown in the audit log" />
+          <input
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Shown in the audit log"
+          />
         </Field>
         <div className="sheet-actions">
           <Button variant="ghost" onClick={() => setTarget(null)}>
@@ -1703,14 +1923,21 @@ export function AdminVerifications() {
             <option value="rejected">Reject</option>
           </select>
         </Field>
-        <Field label="Reason" hint={decision === 'rejected' ? 'Required for a rejection.' : 'Optional note.'}>
+        <Field
+          label="Reason"
+          hint={decision === 'rejected' ? 'Required for a rejection.' : 'Optional note.'}
+        >
           <input value={reason} onChange={(event) => setReason(event.target.value)} />
         </Field>
         <div className="sheet-actions">
           <Button variant="ghost" onClick={() => setTarget(null)}>
             Cancel
           </Button>
-          <Button onClick={decide} disabled={decision === 'rejected' && !reason.trim()} icon={BadgeCheck}>
+          <Button
+            onClick={decide}
+            disabled={decision === 'rejected' && !reason.trim()}
+            icon={BadgeCheck}
+          >
             Save decision
           </Button>
         </div>
@@ -1721,10 +1948,18 @@ export function AdminVerifications() {
 
 export function AdminPayments() {
   const { editionId } = useSite();
-  const payments = useAsync(() => adminApi.payments(editionId), [editionId], { enabled: Boolean(editionId) });
-  const refunds = useAsync(() => adminApi.refunds(editionId), [editionId], { enabled: Boolean(editionId) });
+  const payments = useAsync(() => adminApi.payments(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const refunds = useAsync(() => adminApi.refunds(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
   const [target, setTarget] = useState(null);
-  const [form, setForm] = useState({ amount: '', reasonCode: 'requested_by_participant', note: '' });
+  const [form, setForm] = useState({
+    amount: '',
+    reasonCode: 'requested_by_participant',
+    note: '',
+  });
   const [message, setMessage] = useState(null);
   const list = payments.data?.data || [];
   const refundRows = refunds.data?.data || [];
@@ -1826,8 +2061,17 @@ export function AdminPayments() {
             />
           </Field>
           <Field label="Reason code">
-            <select value={form.reasonCode} onChange={(event) => setForm({ ...form, reasonCode: event.target.value })}>
-              {['requested_by_participant', 'duplicate', 'event_cancelled', 'payment_failed', 'other'].map((code) => (
+            <select
+              value={form.reasonCode}
+              onChange={(event) => setForm({ ...form, reasonCode: event.target.value })}
+            >
+              {[
+                'requested_by_participant',
+                'duplicate',
+                'event_cancelled',
+                'payment_failed',
+                'other',
+              ].map((code) => (
                 <option key={code} value={code}>
                   {code}
                 </option>
@@ -1836,13 +2080,20 @@ export function AdminPayments() {
           </Field>
         </FieldGrid>
         <Field label="Note">
-          <input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+          <input
+            value={form.note}
+            onChange={(event) => setForm({ ...form, note: event.target.value })}
+          />
         </Field>
         <div className="sheet-actions">
           <Button variant="ghost" onClick={() => setTarget(null)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!form.amount || Number(form.amount) <= 0} icon={CreditCard}>
+          <Button
+            onClick={submit}
+            disabled={!form.amount || Number(form.amount) <= 0}
+            icon={CreditCard}
+          >
             Request refund
           </Button>
         </div>
@@ -1891,7 +2142,10 @@ export function AdminCheckin() {
       <SectionHead kicker="DOOR DESK" title="Check-in" />
       <Panel className="checkin-panel">
         <form onSubmit={scan} className="checkin-form">
-          <Field label="Ticket token" hint="Scan the QR, or type the PX-… token from the participant portal.">
+          <Field
+            label="Ticket token"
+            hint="Scan the QR, or type the PX-… token from the participant portal."
+          >
             <input
               value={token}
               onChange={(event) => setToken(event.target.value)}
@@ -1910,7 +2164,14 @@ export function AdminCheckin() {
         {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
         {result ? (
           <div className={`checkin-result ${result.result}`}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 8,
+              }}
+            >
               <span>{result.result}</span>
               <button
                 type="button"
@@ -1923,7 +2184,8 @@ export function AdminCheckin() {
             </div>
             <h3>{result.participantName}</h3>
             <p>
-              {result.eventTitle || 'Convention pass'} · {result.registrationNumber || 'no registration number'} ·{' '}
+              {result.eventTitle || 'Convention pass'} ·{' '}
+              {result.registrationNumber || 'no registration number'} ·{' '}
               {dateTime(result.checkedInAt)}
             </p>
             {result.message ? <p className="muted">{result.message}</p> : null}
@@ -2061,10 +2323,18 @@ export function AdminAnnouncements() {
         ))}
       </DataTable>
 
-      <Sheet open={Boolean(sheet)} title={sheet?.id ? 'Edit announcement' : 'New announcement'} onClose={() => setSheet(null)}>
+      <Sheet
+        open={Boolean(sheet)}
+        title={sheet?.id ? 'Edit announcement' : 'New announcement'}
+        onClose={() => setSheet(null)}
+      >
         <form className="admin-form" onSubmit={save}>
           <Field label="Title">
-            <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
+            <input
+              value={form.title}
+              onChange={(event) => setForm({ ...form, title: event.target.value })}
+              required
+            />
           </Field>
           <Field label="Body (Markdown)">
             <textarea
@@ -2076,7 +2346,10 @@ export function AdminAnnouncements() {
           </Field>
           <FieldGrid>
             <Field label="Audience">
-              <select value={form.audience} onChange={(event) => setForm({ ...form, audience: event.target.value })}>
+              <select
+                value={form.audience}
+                onChange={(event) => setForm({ ...form, audience: event.target.value })}
+              >
                 {['public', 'participants', 'staff'].map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -2085,7 +2358,10 @@ export function AdminAnnouncements() {
               </select>
             </Field>
             <Field label="Status">
-              <select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+              <select
+                value={form.status}
+                onChange={(event) => setForm({ ...form, status: event.target.value })}
+              >
                 <option value="draft">Draft</option>
                 <option value="published">Published</option>
               </select>
@@ -2165,7 +2441,9 @@ export function AdminAttendance() {
 
 export function AdminAudit() {
   const { editionId } = useSite();
-  const rows = useAsync(() => adminApi.audit(editionId), [editionId], { enabled: Boolean(editionId) });
+  const rows = useAsync(() => adminApi.audit(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
   const list = rows.data?.data || [];
 
   return (
@@ -2210,11 +2488,15 @@ export function AdminAudit() {
 
 export function AdminSettings() {
   const { editionId, refresh } = useSite();
-  const settings = useAsync(() => adminApi.settings(editionId), [editionId], { enabled: Boolean(editionId) });
+  const settings = useAsync(() => adminApi.settings(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
   const memberships = useAsync(() => adminApi.memberships(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
-  const icons = useAsync(() => adminApi.icons(editionId), [editionId], { enabled: Boolean(editionId) });
+  const icons = useAsync(() => adminApi.icons(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
   const [form, setForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
@@ -2341,10 +2623,17 @@ export function AdminSettings() {
         <form className="admin-form" onSubmit={save}>
           <FieldGrid>
             <Field label="Edition name">
-              <input value={form.name} onChange={(event) => set('name', event.target.value)} required />
+              <input
+                value={form.name}
+                onChange={(event) => set('name', event.target.value)}
+                required
+              />
             </Field>
             <Field label="Tagline">
-              <input value={form.tagline} onChange={(event) => set('tagline', event.target.value)} />
+              <input
+                value={form.tagline}
+                onChange={(event) => set('tagline', event.target.value)}
+              />
             </Field>
             <Field label="Venue">
               <input value={form.venue} onChange={(event) => set('venue', event.target.value)} />
@@ -2353,10 +2642,18 @@ export function AdminSettings() {
               <input value={form.city} onChange={(event) => set('city', event.target.value)} />
             </Field>
             <Field label="Starts at">
-              <input type="datetime-local" value={form.startsAt} onChange={(event) => set('startsAt', event.target.value)} />
+              <input
+                type="datetime-local"
+                value={form.startsAt}
+                onChange={(event) => set('startsAt', event.target.value)}
+              />
             </Field>
             <Field label="Ends at">
-              <input type="datetime-local" value={form.endsAt} onChange={(event) => set('endsAt', event.target.value)} />
+              <input
+                type="datetime-local"
+                value={form.endsAt}
+                onChange={(event) => set('endsAt', event.target.value)}
+              />
             </Field>
             <Field label="Registration opens">
               <input
@@ -2382,7 +2679,11 @@ export function AdminSettings() {
               </select>
             </Field>
             <Field label="Contact email">
-              <input type="email" value={form.contactEmail} onChange={(event) => set('contactEmail', event.target.value)} />
+              <input
+                type="email"
+                value={form.contactEmail}
+                onChange={(event) => set('contactEmail', event.target.value)}
+              />
             </Field>
             <Field label="Allowed email domains" hint="Comma separated." className="full-span">
               <input
@@ -2433,7 +2734,11 @@ export function AdminSettings() {
           <div className="host-rule" />
           <Eyebrow>INVITE BY EMAIL</Eyebrow>
           <Field label="Invite email">
-            <input type="email" value={invite} onChange={(event) => setInvite(event.target.value)} />
+            <input
+              type="email"
+              value={invite}
+              onChange={(event) => setInvite(event.target.value)}
+            />
           </Field>
           <Button onClick={sendInvite} disabled={busy === 'invite' || !invite} variant="ghost">
             Create invite link
@@ -2461,13 +2766,18 @@ export function AdminSettings() {
       <Panel>
         <form className="inline-form" onSubmit={uploadIcon}>
           <Field label="Icon name">
-            <input value={iconForm.name} onChange={(event) => setIconForm({ ...iconForm, name: event.target.value })} />
+            <input
+              value={iconForm.name}
+              onChange={(event) => setIconForm({ ...iconForm, name: event.target.value })}
+            />
           </Field>
           <Field label="SVG or PNG">
             <input
               type="file"
               accept="image/svg+xml,image/png"
-              onChange={(event) => setIconForm({ ...iconForm, file: event.target.files?.[0] || null })}
+              onChange={(event) =>
+                setIconForm({ ...iconForm, file: event.target.files?.[0] || null })
+              }
             />
           </Field>
           <Toggle
@@ -2475,7 +2785,12 @@ export function AdminSettings() {
             onChange={(value) => setIconForm({ ...iconForm, recolorable: value })}
             label="Recolorable"
           />
-          <Button type="submit" disabled={busy === 'icon' || !iconForm.file} variant="ghost" icon={Image}>
+          <Button
+            type="submit"
+            disabled={busy === 'icon' || !iconForm.file}
+            variant="ghost"
+            icon={Image}
+          >
             Upload
           </Button>
         </form>

@@ -31,6 +31,7 @@ import {
   PortalTickets,
   PortalVerification,
 } from './pages/Portal.jsx';
+import { PortalRegistration } from './pages/PortalRegistration.jsx';
 import {
   AdminAnnouncements,
   AdminAttendance,
@@ -46,6 +47,10 @@ import {
   AdminUsers,
   AdminVerifications,
 } from './pages/Admin.jsx';
+import {
+  AdminCollegeRegistrations,
+  AdminRegistrationSettings,
+} from './pages/AdminRegistration.jsx';
 import Login from './pages/Login.jsx';
 
 const PUBLIC_NAV = [
@@ -149,6 +154,19 @@ function NavStrip({ className = 'nav-strip' }) {
         <path d="M0 0h7v6h27v8H7v8H0z" fill="currentColor" />
       </svg>
     </span>
+  );
+}
+
+function GoogleCallback() {
+  useEffect(() => {
+    // Forward Google auth code and state to the FastAPI backend callback route
+    window.location.replace(`/api/v1/auth/google/callback${window.location.search}`);
+  }, []);
+
+  return (
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', textAlign: 'center' }}>
+      <Loading label="Completing Google sign in..." />
+    </div>
   );
 }
 
@@ -256,9 +274,9 @@ export default function App() {
           <Link
             to="/"
             className="nav-logo"
-            aria-label={`${site.edition?.name || 'Parallax 2026'} home`}
+            aria-label={`${site.edition?.name || 'Parallax 2027'} home`}
           >
-            <img src={LOGO} alt={site.edition?.name || 'Parallax 2026'} />
+            <img src={LOGO} alt={site.edition?.name || 'Parallax 2027'} />
           </Link>
 
           <nav className="nav-bar" aria-label="Main navigation">
@@ -316,8 +334,8 @@ export default function App() {
       {!chromeHidden ? (
         <div className="nav-overlay" id="nav-overlay" hidden={!menu}>
           <div className="nav-overlay-head">
-            <Link to="/" className="nav-logo" aria-label="Parallax 2026 home">
-              <img src={LOGO} alt={site.edition?.name || 'Parallax 2026'} />
+            <Link to="/" className="nav-logo" aria-label="Parallax 2027 home">
+              <img src={LOGO} alt={site.edition?.name || 'Parallax 2027'} />
             </Link>
             <button
               type="button"
@@ -377,6 +395,7 @@ export default function App() {
           <Route path="/team" element={<TeamPage />} />
 
           <Route path="/login" element={<Login />} />
+          <Route path="/google/callback" element={<GoogleCallback />} />
 
           <Route
             path="/portal"
@@ -387,6 +406,7 @@ export default function App() {
             }
           >
             <Route index element={<PortalOverview />} />
+            <Route path="registration" element={<PortalRegistration />} />
             <Route path="pass" element={<PortalPass />} />
             <Route path="select-events" element={<PortalSelectEvents />} />
             <Route path="registrations" element={<PortalRegistrations />} />
@@ -407,6 +427,8 @@ export default function App() {
             <Route index element={<AdminOverview />} />
             <Route path="events" element={<AdminEvents />} />
             <Route path="registrations" element={<AdminRegistrations />} />
+            <Route path="registration" element={<AdminCollegeRegistrations />} />
+            <Route path="registration-settings" element={<AdminRegistrationSettings />} />
             <Route path="attendance" element={<AdminAttendance />} />
             <Route path="check-in" element={<AdminCheckin />} />
             <Route path="checkin" element={<AdminCheckin />} />

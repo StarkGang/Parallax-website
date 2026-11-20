@@ -35,8 +35,17 @@ async def ensure_origin(request: Request) -> None:
     if settings.is_test:
         return
     origin = request.headers.get("origin")
-    if origin and origin != settings.frontend_origin:
-        raise Forbidden("Cross-origin request rejected.", code="ORIGIN_REJECTED")
+    if origin:
+        origin_clean = origin.rstrip("/")
+        if (
+            origin_clean != settings.frontend_origin
+            and origin_clean not in settings.allowed_origins
+            and not origin_clean.startswith("http://localhost:")
+            and not origin_clean.startswith("http://127.0.0.1:")
+            and not origin_clean.startswith("https://localhost:")
+            and not origin_clean.startswith("https://127.0.0.1:")
+        ):
+            raise Forbidden("Cross-origin request rejected.", code="ORIGIN_REJECTED")
 
 
 __all__ = ["SAFE_METHODS", "csrf_token_for", "enforce_csrf", "ensure_origin", "AsyncSession"]

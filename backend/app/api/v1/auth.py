@@ -6,6 +6,8 @@ import base64
 
 import hashlib
 
+import hmac
+
 import json
 
 import secrets
@@ -46,7 +48,7 @@ from app.core.logging import security_event
 
 from app.core.permissions import requires_mfa
 
-from app.core.rate_limit import consume, limiter
+from app.core.rate_limit import consume, limiter, login_limiter
 
 from app.core.security import (
 
@@ -172,11 +174,9 @@ def _sign(payload: dict) -> str:
 
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
-    signature = hashlib.sha256(
-
-        f"{settings.server_secret_key}:{encoded}".encode()
-
-    ).hexdigest()[:32]
+    signature = hmac.new(
+        settings.server_secret_key.encode(), encoded.encode(), hashlib.sha256
+    ).hexdigest()
 
     return f"{encoded}.{signature}"
 
@@ -194,7 +194,9 @@ def _unsign(value: str | None) -> dict | None:
 
     settings = get_settings()
 
-    expected = hashlib.sha256(f"{settings.server_secret_key}:{encoded}".encode()).hexdigest()[:32]
+    expected = hmac.new(
+        settings.server_secret_key.encode(), encoded.encode(), hashlib.sha256
+    ).hexdigest()
 
     if not constant_compare(signature, expected):
 
@@ -403,7 +405,10 @@ async def google_callback(
     roles = await user_service_roles(db, user.id)
     is_staff = any(role != "participant" for role in roles)
     session, token = await create_session(db, user, request, is_staff=is_staff)
-    if is_staff or not settings.mfa_enforced:
+    # A staff session is only MFA-complete when MFA is not enforced. When it is
+    # enforced, leave auth_level at "basic" until /mfa/verify or
+    # /mfa/challenge succeeds; otherwise the permission layer would be bypassed.
+    if not settings.mfa_enforced:
         session.auth_level = "staff_mfa" if is_staff else "basic"
         session.mfa_verified_at = datetime.now(UTC)
     await db.commit()
@@ -454,7 +459,7 @@ async def user_service_roles(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
 
 
 
-@router.get("/dev/login")
+@router.get("/dev/login", dependencies=[Depends(limiter("auth_dev_login", 20, 60))])
 async def dev_login(
     request: Request,
     role: str = Query("participant", pattern="^(participant|admin)$"),
@@ -667,7 +672,11 @@ async def _staff_credential(db: AsyncSession, user_id: uuid.UUID) -> MfaCredenti
 
 
 
-@router.post("/mfa/setup", response_model=MfaSetupResponse)
+@router.post(
+    "/mfa/setup",
+    response_model=MfaSetupResponse,
+    dependencies=[Depends(limiter("mfa_setup", 10, 300))],
+)
 
 async def mfa_setup(
 
@@ -759,7 +768,11 @@ async def _check_recovery(db: AsyncSession, user_id: uuid.UUID, code: str) -> bo
 
 
 
-@router.post("/mfa/verify", response_model=RecoveryCodesResponse)
+@router.post(
+    "/mfa/verify",
+    response_model=RecoveryCodesResponse,
+    dependencies=[Depends(limiter("mfa_verify", 10, 300))],
+)
 
 async def mfa_verify(
 
@@ -815,7 +828,10 @@ async def mfa_verify(
 
 
 
-@router.post("/mfa/challenge")
+@router.post(
+    "/mfa/challenge",
+    dependencies=[Depends(limiter("mfa_challenge", 20, 300))],
+)
 
 async def mfa_challenge(
 
@@ -897,7 +913,10 @@ async def mfa_challenge(
 
 
 
-@router.post("/mfa/step-up")
+@router.post(
+    "/mfa/step-up",
+    dependencies=[Depends(limiter("mfa_step_up", 20, 300))],
+)
 
 async def mfa_step_up(
 
@@ -962,7 +981,7 @@ class DirectLoginRequest(BaseModel):
     role: str = "participant"
     full_name: str | None = None
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(login_limiter)])
 async def direct_login(
     payload: DirectLoginRequest,
     request: Request,
@@ -991,7 +1010,7 @@ async def direct_login(
     roles = await user_service_roles(db, user.id)
     is_staff = any(r != "participant" for r in roles)
     session, token = await create_session(db, user, request, is_staff=is_staff)
-    if is_staff or not settings.mfa_enforced:
+    if not settings.mfa_enforced:
         session.auth_level = "staff_mfa" if is_staff else "basic"
         session.mfa_verified_at = datetime.now(UTC)
     await db.commit()

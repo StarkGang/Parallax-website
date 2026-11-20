@@ -61,3 +61,11 @@ def plain_text(source: str | None, *, limit: int = 200) -> str:
     cleaned = nh3.clean(source, tags=set(), attributes={})
     return " ".join(cleaned.split())[:limit]
 
+
+def safe_filename(value: str | None, *, fallback: str = "document.bin") -> str:
+    """Strip characters that can break or inject into Content-Disposition."""
+    cleaned = "".join(
+        ch for ch in (value or "") if ch.isprintable() and ch not in '";\\/\r\n'
+    ).strip()
+    return (cleaned or fallback)[:160]
+

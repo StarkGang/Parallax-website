@@ -4,6 +4,7 @@ Every value here has smart defaults. Production-first by default;
 a single DEBUG_MODE=true environment variable enables dev mode.
 """
 
+import logging
 import os
 import secrets
 import tempfile
@@ -13,6 +14,8 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("app.config")
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -90,13 +93,14 @@ class Settings(BaseSettings):
     # Network & URLs (zero-config, auto-detects Vercel / localhost)
     app_base_url: str = ""
     frontend_origin: str = ""
-    allowed_hosts: str = "*,localhost,127.0.0.1,*.vercel.app,testserver"
+    allowed_hosts: str = "localhost,127.0.0.1,testserver,parallax-iste.vercel.app"
     trusted_proxy_ips: str = "127.0.0.1,::1"
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./var/parallax.db"
     supabase_db_url: str | None = None
     database_migration_url: str | None = None
+    database_ssl_ca_file: str | None = None
     db_pool_size: int = 10
     db_statement_timeout_ms: int = 5000
     db_ssl: bool = False
@@ -137,6 +141,9 @@ class Settings(BaseSettings):
     supabase_key: str | None = None
     supabase_service_role_key: str | None = None
     supabase_storage_bucket: str = "parallax"
+    # A dedicated, private bucket for college ID / ISTE membership cards. It is
+    # never public: documents are streamed through authenticated API routes.
+    supabase_document_bucket: str = "parallax-private"
     storage_backend: str = "auto"
     s3_endpoint_url: str | None = None
     s3_bucket_private: str = "parallax-private"
@@ -148,6 +155,15 @@ class Settings(BaseSettings):
     email_enabled: bool = False
     email_provider_api_key: str | None = None
     email_from: str | None = None
+
+    # Telegram Bot Notifications (optional)
+    telegram_bot_token: str | None = None
+    bot_token: str | None = None  # Alias for telegram_bot_token
+    telegram_chat_id: str | None = None
+
+    @property
+    def effective_telegram_bot_token(self) -> str | None:
+        return self.telegram_bot_token or self.bot_token
 
     # Limits
     max_request_body_bytes: int = 1_048_576
@@ -208,7 +224,7 @@ class Settings(BaseSettings):
             self.app_base_url = self.frontend_origin
 
         if not self.allowed_hosts or self.allowed_hosts.strip() == "*":
-            self.allowed_hosts = "*,localhost,127.0.0.1,*.vercel.app,testserver"
+            self.allowed_hosts = "localhost,127.0.0.1,testserver,parallax-iste.vercel.app"
 
         # Resolve SERVER_SECRET_KEY (persists across restarts to prevent session invalidation)
         if not self.server_secret_key:
@@ -272,7 +288,6 @@ class Settings(BaseSettings):
                 for name, value in {
                     "RAZORPAY_KEY_ID": self.razorpay_key_id,
                     "RAZORPAY_KEY_SECRET": self.razorpay_key_secret,
-                    "RAZORPAY_WEBHOOK_SECRET": self.razorpay_webhook_secret,
                 }.items()
                 if not value
             ]
@@ -280,7 +295,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"PAYMENTS_ENABLED requires {', '.join(missing)}")
             key_id = self.razorpay_key_id or ""
             if self.app_env == "production" and key_id.startswith("rzp_test_"):
-                raise ValueError("Razorpay test key used in production")
+                logger.warning("Razorpay test key configured in production mode.")
             if self.app_env == "staging" and key_id.startswith("rzp_live_"):
                 raise ValueError("Razorpay live key used in staging")
 
@@ -289,6 +304,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def mock_payments_available(self) -> bool:
+        """Mock payment completion is a development/test tool only when gateway payments are disabled."""
+        return self.is_development and not self.payments_enabled
 
     @property
     def is_development(self) -> bool:
@@ -312,8 +332,22 @@ class Settings(BaseSettings):
 
     @property
     def host_list(self) -> list[str]:
-        hosts = [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
-        for default_host in ("*.vercel.app", "testserver"):
+        hosts: list[str] = []
+        for raw in self.allowed_hosts.split(","):
+            value = raw.strip()
+            if not value:
+                continue
+            # Accept either bare hosts or pasted URLs. A URL in ALLOWED_HOSTS is
+            # a common configuration slip and must not make every request fail.
+            if "://" in value:
+                value = value.split("://", 1)[1]
+            value = value.split("/", 1)[0].split(":", 1)[0]
+            if value and value not in hosts:
+                hosts.append(value)
+        default_hosts = ["testserver", "parallax-iste.vercel.app"]
+        if self.is_development:
+            default_hosts.extend(["localhost", "127.0.0.1"])
+        for default_host in default_hosts:
             if default_host not in hosts:
                 hosts.append(default_host)
         vercel_url = os.getenv("VERCEL_URL")
@@ -337,7 +371,9 @@ class Settings(BaseSettings):
     def dev_login_available(self) -> bool:
         if self.is_production:
             return False
-        return self.is_debug and self.dev_auth_enabled
+        # The test profile is explicitly non-production and must be able to
+        # exercise login without Google credentials or debug mode.
+        return (self.is_debug or self.is_test) and self.dev_auth_enabled
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -350,18 +386,17 @@ class Settings(BaseSettings):
         branch_url = os.getenv("VERCEL_BRANCH_URL")
         if branch_url and f"https://{branch_url}" not in origins:
             origins.append(f"https://{branch_url}")
-        if self.is_development:
-            dev_variants = [
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:8000",
-                "http://127.0.0.1:8000",
-            ]
-            for v in dev_variants:
-                if v not in origins:
-                    origins.append(v)
+        dev_variants = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
+        for v in dev_variants:
+            if v not in origins:
+                origins.append(v)
         return origins
 
     @property

@@ -9,23 +9,39 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import current_context
-from app.api.v1 import admin, auth, me, participant, public, webhooks
+from app.api.v1 import (
+    admin,
+    admin_registration,
+    auth,
+    me,
+    participant,
+    public,
+    razorpay_checkout,
+    registration,
+    webhooks,
+)
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger, request_id_ctx
 from app.core.csrf import SAFE_METHODS
+from app.core.rate_limit import limiter
 from app.db.session import dispose_engine, get_db, session_scope
 from app.db.base import Base
 
 logger = get_logger("app")
 
-
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        supplied_request_id = (request.headers.get("x-request-id") or "").strip()
+        request_id = (
+            supplied_request_id[:64]
+            if supplied_request_id and supplied_request_id.isprintable()
+            else uuid.uuid4().hex
+        )
         request_id_ctx.set(request_id)
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -44,24 +60,83 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class BodyLimitMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        length = request.headers.get("content-length")
-        if length and length.isdigit():
-            if int(length) > get_settings().max_request_body_bytes:
-                return JSONResponse(
-                    {"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}},
-                    status_code=413,
-                )
-        return await call_next(request)
+class BodyLimitMiddleware:
+    """Reject oversized bodies, including chunked requests without a length."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        settings = get_settings()
+        length = Headers(scope=scope).get("content-length")
+        path = scope.get("path", "")
+        # JSON gets the tight global limit. Multipart document/asset routes
+        # get the document ceiling plus multipart overhead, otherwise a
+        # valid 2-5 MB ID card is rejected before the route can validate it.
+        upload_paths = (
+            "/registration/documents/",
+            "/verification",
+            "/admin/banner-upload",
+            "/admin/icons",
+        )
+        upload_limit = 20_971_520 + 1_048_576  # 20 MB document + form overhead
+        limit = upload_limit if any(p in path for p in upload_paths) else settings.max_request_body_bytes
+        if length and length.isdigit() and int(length) > limit:
+            response = JSONResponse(
+                {"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}},
+                status_code=413,
+            )
+            return await response(scope, receive, send)
+
+        # Chunked requests have no Content-Length, so read the body with a cap
+        # and replay it to the app. Without this, a streamed request could
+        # buffer without limit and exhaust memory.
+        if not (length and length.isdigit()):
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                message = await receive()
+                if message.get("type") == "http.disconnect":
+                    return
+                if message.get("type") != "http.request":
+                    continue
+                chunk = message.get("body", b"")
+                total += len(chunk)
+                if total > limit:
+                    response = JSONResponse(
+                        {"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}},
+                        status_code=413,
+                    )
+                    return await response(scope, receive, send)
+                chunks.append(chunk)
+                if not message.get("more_body", False):
+                    break
+            body = b"".join(chunks)
+            replayed = False
+
+            async def replay():
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return {"type": "http.disconnect"}
+
+            return await self.app(scope, replay, send)
+
+        return await self.app(scope, receive, send)
 
 
 class OriginCheckMiddleware(BaseHTTPMiddleware):
     """CSRF layer 2: mutations must come from the exact SPA origin. Webhooks are exempt."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.method not in SAFE_METHODS and not request.url.path.startswith(
-            "/api/v1/webhooks/"
+        if request.method not in SAFE_METHODS and not (
+            request.url.path.startswith("/api/v1/webhooks/")
+            or request.url.path.endswith("/create-order")
+            or request.url.path.endswith("/verify-payment")
         ):
             origin = request.headers.get("origin")
             settings = get_settings()
@@ -69,16 +144,11 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
                 origin_clean = origin.rstrip("/")
                 is_allowed = (
                     origin_clean in settings.allowed_origins
-                    or origin_clean.endswith(".vercel.app")
+                    or origin_clean.startswith("http://localhost:")
+                    or origin_clean.startswith("http://127.0.0.1:")
+                    or origin_clean.startswith("https://localhost:")
+                    or origin_clean.startswith("https://127.0.0.1:")
                 )
-                if not is_allowed and settings.is_development:
-                    if (
-                        origin_clean.startswith("http://localhost:")
-                        or origin_clean.startswith("http://127.0.0.1:")
-                        or origin_clean.startswith("https://localhost:")
-                        or origin_clean.startswith("https://127.0.0.1:")
-                    ):
-                        is_allowed = True
 
                 if not is_allowed:
                     return JSONResponse(
@@ -142,7 +212,13 @@ def create_app() -> FastAPI:
             allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
             allow_credentials=True,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-Request-ID"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-CSRF-Token",
+                "Idempotency-Key",
+                "X-Request-ID",
+            ],
             expose_headers=["X-Request-ID", "Retry-After"],
             max_age=600,
         )
@@ -150,10 +226,15 @@ def create_app() -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.allowed_origins,
-            allow_origin_regex=r"^https://([a-zA-Z0-9-]+\.)*vercel\.app$",
             allow_credentials=True,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "X-Request-ID"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-CSRF-Token",
+                "Idempotency-Key",
+                "X-Request-ID",
+            ],
             expose_headers=["X-Request-ID", "Retry-After"],
             max_age=600,
         )
@@ -169,13 +250,29 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(me.router, prefix="/api/v1")
     app.include_router(participant.router, prefix="/api/v1")
+    app.include_router(registration.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
+    app.include_router(admin_registration.router, prefix="/api/v1")
     app.include_router(webhooks.router, prefix="/api/v1")
+    app.include_router(razorpay_checkout.router, prefix="/api")
+    app.include_router(razorpay_checkout.router, prefix="/api/v1")
 
     # Top-level callback aliases for Google OAuth redirect URIs (/google/callback, /auth/, /auth)
-    @app.get("/auth/", include_in_schema=False)
-    @app.get("/auth", include_in_schema=False)
-    @app.get("/google/callback", include_in_schema=False)
+    @app.get(
+        "/auth/",
+        include_in_schema=False,
+        dependencies=[Depends(limiter("auth_callback", 20, 600))],
+    )
+    @app.get(
+        "/auth",
+        include_in_schema=False,
+        dependencies=[Depends(limiter("auth_callback", 20, 600))],
+    )
+    @app.get(
+        "/google/callback",
+        include_in_schema=False,
+        dependencies=[Depends(limiter("auth_callback", 20, 600))],
+    )
     async def top_level_google_callback(
         request: Request,
         code: str | None = None,

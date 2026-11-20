@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, ValidationFailed
+from app.core.rate_limit import limiter
+from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.models.commerce import ConventionPass, PaymentOrder, Registration, Ticket
 from app.models.edition import ConventionEdition
@@ -74,7 +76,7 @@ async def get_pass(
     return {"data": view.model_dump(by_alias=True)}
 
 
-@router.post("/pass/order")
+@router.post("/pass/order", dependencies=[Depends(limiter("pass_order", 10, 60))])
 async def create_pass_order(
     edition_id: uuid.UUID,
     request: Request,
@@ -84,6 +86,13 @@ async def create_pass_order(
 ) -> dict:
     edition = await _edition(db, edition_id)
     policy = await edition_service.current_policy(db, edition.id)
+    settings = get_settings()
+    if not settings.payments_enabled and not settings.is_development:
+        raise AppError(
+            "Online payments are not configured. Contact the organisers.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
 
     replayed = await idempotency_service.replay(
         db, ctx.user.id, request.url.path, idempotency_key, {}
@@ -95,14 +104,13 @@ async def create_pass_order(
     user_pass, order = await pass_service.create_pass_order(
         db, ctx.user.id, edition, policy
     )
-    settings = get_settings()
     out = {
         "data": {
             "orderId": str(order.id),
             "amountPaise": order.amount_paise,
             "gatewayOrderId": order.gateway_order_id,
             "razorpayKeyId": settings.razorpay_key_id,
-            "mock": not settings.payments_enabled,
+            "mock": settings.mock_payments_available,
         }
     }
     await idempotency_service.store(
@@ -112,7 +120,7 @@ async def create_pass_order(
     return out
 
 
-@router.put("/pass/selections")
+@router.put("/pass/selections", dependencies=[Depends(limiter("pass_selections", 60, 60))])
 async def update_selections(
     edition_id: uuid.UUID,
     payload: SelectionUpdate,
@@ -132,7 +140,7 @@ async def update_selections(
     return {"data": sel.model_dump(by_alias=True)}
 
 
-@router.post("/registrations")
+@router.post("/registrations", dependencies=[Depends(limiter("addon_create", 20, 60))])
 async def create_registrations(
     edition_id: uuid.UUID,
     payload: AddonRequest,
@@ -142,11 +150,19 @@ async def create_registrations(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    settings = get_settings()
     regs, order = await reg_service.create_addon_registrations(
         db, request, ctx.user.id, edition, payload.event_ids
     )
+    # Included selections can still be claimed for free; only a newly created
+    # paid order is blocked when the gateway is not configured.
+    if order is not None and not settings.payments_enabled and not settings.is_development:
+        raise AppError(
+            "Online payments are not configured. Contact the organisers.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
     views = await reg_service.serialize_registrations(db, regs)
-    settings = get_settings()
     out = {
         "data": {
             "registrations": [v.model_dump(by_alias=True) for v in views],
@@ -155,7 +171,7 @@ async def create_registrations(
                 "amountPaise": order.amount_paise,
                 "gatewayOrderId": order.gateway_order_id,
                 "razorpayKeyId": settings.razorpay_key_id,
-                "mock": not settings.payments_enabled,
+                "mock": settings.mock_payments_available,
             }
             if order
             else None,
@@ -176,7 +192,10 @@ async def my_registrations(
     return {"data": [v.model_dump(by_alias=True) for v in views]}
 
 
-@router.delete("/registrations/{registration_id}")
+@router.delete(
+    "/registrations/{registration_id}",
+    dependencies=[Depends(limiter("registration_cancel", 20, 60))],
+)
 async def cancel_registration(
     edition_id: uuid.UUID,
     registration_id: uuid.UUID,
@@ -200,7 +219,7 @@ async def my_teams(
     return {"data": [v.model_dump(by_alias=True) for v in views]}
 
 
-@router.post("/teams")
+@router.post("/teams", dependencies=[Depends(limiter("team_create", 10, 60))])
 async def create_team(
     edition_id: uuid.UUID,
     payload: TeamCreate,
@@ -217,7 +236,7 @@ async def create_team(
     return {"data": views[0].model_dump(by_alias=True)}
 
 
-@router.post("/teams/join")
+@router.post("/teams/join", dependencies=[Depends(limiter("team_join", 10, 60))])
 async def join_team(
     edition_id: uuid.UUID,
     payload: TeamJoin,
@@ -246,7 +265,10 @@ async def leave_team(
     return {"data": {"left": True}}
 
 
-@router.post("/teams/{team_id}/rotate-invite")
+@router.post(
+    "/teams/{team_id}/rotate-invite",
+    dependencies=[Depends(limiter("team_rotate_invite", 5, 60))],
+)
 async def rotate_invite(
     edition_id: uuid.UUID,
     team_id: uuid.UUID,
@@ -271,7 +293,7 @@ async def verification_status(
     return {"data": status}
 
 
-@router.post("/verification")
+@router.post("/verification", dependencies=[Depends(limiter("verification_submit", 5, 300))])
 async def submit_verification(
     edition_id: uuid.UUID,
     request: Request,
@@ -282,7 +304,15 @@ async def submit_verification(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
-    file_bytes = await file.read() if file else None
+    file_bytes = (
+        await read_upload_limited(
+            file,
+            get_settings().max_upload_bytes_document,
+            label="Verification document",
+        )
+        if file
+        else None
+    )
     res = await verif_service.submit(
         db,
         request,
@@ -297,7 +327,10 @@ async def submit_verification(
     return {"data": res}
 
 
-@router.post("/verification/confirm")
+@router.post(
+    "/verification/confirm",
+    dependencies=[Depends(limiter("verification_confirm", 10, 300))],
+)
 async def confirm_verification_email(
     edition_id: uuid.UUID,
     payload: EmailConfirm,
@@ -378,8 +411,8 @@ async def mock_pay(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     settings = get_settings()
-    if settings.payments_enabled:
-        raise AppError("Mock payment is not available in this environment.", status_code=400)
+    if not settings.mock_payments_available:
+        raise NotFound("Mock payment is not available in this environment.")
     order = await payment_service.order_for(db, order_id)
     if order.user_id != ctx.user.id:
         raise NotFound("Order not found.")
