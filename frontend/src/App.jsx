@@ -302,7 +302,7 @@ export default function App() {
 
           <Link
             className="nav-cta nav-cta-signin"
-            to={user ? (isStaff ? '/manage' : '/portal') : '/login'}
+            to={user ? (isStaff ? '/manage' : '/portal/registration') : '/login'}
           >
             <LogIn size={16} strokeWidth={1.8} aria-hidden="true" />
             <span>
@@ -405,14 +405,14 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route index element={<PortalOverview />} />
+            <Route index element={<Navigate to="/portal/registration" replace />} />
             <Route path="registration" element={<PortalRegistration />} />
-            <Route path="pass" element={<PortalPass />} />
+            <Route path="pass" element={<Navigate to="/portal/registration" replace />} />
+            <Route path="verification" element={<Navigate to="/portal/registration" replace />} />
             <Route path="select-events" element={<PortalSelectEvents />} />
             <Route path="registrations" element={<PortalRegistrations />} />
             <Route path="tickets" element={<PortalTickets />} />
             <Route path="teams" element={<PortalTeams />} />
-            <Route path="verification" element={<PortalVerification />} />
             <Route path="profile" element={<PortalProfile />} />
           </Route>
 

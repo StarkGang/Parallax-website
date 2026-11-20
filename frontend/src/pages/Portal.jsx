@@ -123,9 +123,7 @@ export function PortalLayout() {
             {isStaff ? (
               <Badge tone="accent">Staff Access</Badge>
             ) : (
-              <Badge tone={user?.studentVerified ? 'good' : 'muted'}>
-                {user?.studentVerified ? 'Student verified' : 'Verification open'}
-              </Badge>
+              <Badge tone="accent">Parallax 2027 Attendee</Badge>
             )}
             {user?.profileComplete ? <Badge tone="accent">Profile complete</Badge> : null}
             {isStaff ? (
@@ -187,7 +185,9 @@ export function PortalLayout() {
               Staff Administrator
             </span>
           ) : (
-            <span className="pill">{user?.studentVerified ? 'Verified student' : 'Student check pending'}</span>
+            <span className="pill" style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: 'var(--cyan)' }}>
+              Attendee Portal
+            </span>
           )}
           <nav aria-label="Participant portal">
             {PORTAL_NAV.map(([label, to, end]) => (

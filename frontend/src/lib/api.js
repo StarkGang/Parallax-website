@@ -162,7 +162,7 @@ export const publicApi = {
   submitInquiry: (payload) =>
     api('/public/inquiries', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: payload,
     }),
   iconUrl: (iconId) => `${API_BASE}/public/icons/${iconId}`,
   documentUrl: (relative) => (relative?.startsWith('http') ? relative : relative),

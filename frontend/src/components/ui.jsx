@@ -48,6 +48,8 @@ export function Button({
   href,
   variant = 'primary',
   icon: Icon,
+  loading = false,
+  disabled,
   children,
   className = '',
   type = 'button',
@@ -55,15 +57,20 @@ export function Button({
 }) {
   const inner = (
     <>
+      {loading ? (
+        <span className="btn-ico" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <LoaderCircle size={14} className="is-spinning" strokeWidth={2.2} aria-hidden="true" style={{ animation: 'spin 0.8s linear infinite' }} />
+        </span>
+      ) : null}
       <span>{children}</span>
-      {Icon ? (
+      {!loading && Icon ? (
         <span className="btn-ico">
           <Icon size={14} strokeWidth={1.6} aria-hidden="true" />
         </span>
       ) : null}
     </>
   );
-  const cls = `button ${variant} ${className}`.trim();
+  const cls = `button ${variant} ${loading ? 'is-loading' : ''} ${className}`.trim();
   if (to) {
     return (
       <Link to={to} className={cls} {...rest}>
@@ -79,7 +86,7 @@ export function Button({
     );
   }
   return (
-    <button type={type} className={cls} {...rest}>
+    <button type={type} className={cls} disabled={disabled || loading} {...rest}>
       {inner}
     </button>
   );

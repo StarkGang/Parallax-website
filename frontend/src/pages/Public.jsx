@@ -979,7 +979,7 @@ export function About() {
           <p>{edition?.city || 'Palakkad, Kerala'}</p>
           <div className="host-rule" />
           <p>
-            Pass: {money(policy?.passPricePaise)}, lunch included on{' '}
+            Get your Pass Now!, lunch included on{' '}
             {policy?.lunchIncludedDays?.length || 0} days.
           </p>
         </HudFrame>

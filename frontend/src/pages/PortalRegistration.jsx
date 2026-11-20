@@ -1116,16 +1116,21 @@ export function PortalRegistration() {
               <div className="portal-nav-actions" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '28px' }}>
                 <Button
                   onClick={async () => {
+                    setBusy('saving-tier');
                     try {
                       await ensureProfileSaved(form.categoryId);
-                    } catch (e) {}
+                    } catch (e) {
+                    } finally {
+                      setBusy('');
+                    }
                     setStep(2);
                   }}
-                  disabled={!form.categoryId}
+                  loading={busy === 'saving-tier'}
+                  disabled={!form.categoryId || busy === 'saving-tier'}
                   icon={ArrowRight}
                   style={{ padding: '12px 24px', fontSize: '15px' }}
                 >
-                  Continue to Details & ID Upload
+                  {busy === 'saving-tier' ? 'Saving pass tier…' : 'Continue to Details & ID Upload'}
                 </Button>
               </div>
             </Panel>
@@ -1264,16 +1269,21 @@ export function PortalRegistration() {
 
                   <Button
                     onClick={async () => {
+                      setBusy('saving-details');
                       try {
                         await ensureProfileSaved();
-                      } catch (e) {}
+                      } catch (e) {
+                      } finally {
+                        setBusy('');
+                      }
                       setStep(3);
                     }}
-                    disabled={missingCount > 0 || !isFormComplete}
+                    loading={busy === 'saving-details'}
+                    disabled={missingCount > 0 || !isFormComplete || busy === 'saving-details'}
                     icon={ArrowRight}
                     style={{ padding: '12px 24px', fontSize: '15px' }}
                   >
-                    Proceed to Payment ({money(fee)})
+                    {busy === 'saving-details' ? 'Saving details…' : `Proceed to Payment (${money(fee)})`}
                   </Button>
                 </div>
               </div>

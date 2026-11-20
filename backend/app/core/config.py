@@ -160,10 +160,15 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     bot_token: str | None = None  # Alias for telegram_bot_token
     telegram_chat_id: str | None = None
+    chat_id: str | None = None  # Alias for telegram_chat_id
 
     @property
     def effective_telegram_bot_token(self) -> str | None:
-        return self.telegram_bot_token or self.bot_token
+        return (self.telegram_bot_token or self.bot_token or "").strip() or None
+
+    @property
+    def effective_telegram_chat_id(self) -> str | None:
+        return (self.telegram_chat_id or self.chat_id or "").strip() or None
 
     # Limits
     max_request_body_bytes: int = 1_048_576

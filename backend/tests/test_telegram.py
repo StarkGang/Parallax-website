@@ -4,7 +4,11 @@ from app.services.telegram import send_telegram_inquiry
 
 
 @pytest.mark.asyncio
-async def test_telegram_skipped_when_not_configured():
+async def test_telegram_skipped_when_not_configured(monkeypatch):
+    monkeypatch.setattr("app.services.telegram.get_settings", lambda: type("Settings", (), {
+        "effective_telegram_bot_token": None,
+        "effective_telegram_chat_id": None,
+    })())
     res = await send_telegram_inquiry(
         name="Test Student",
         email="student@test.local",

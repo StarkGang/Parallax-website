@@ -102,7 +102,12 @@ async def settings_for(
         from app.seed import ensure_registration_config
 
         if edition is None:
-            raise NotFound("Edition not found.")
+            from app.services.editions import current_edition
+            try:
+                edition = await current_edition(db)
+                edition_id = edition.id
+            except Exception:
+                raise NotFound("Edition not found.")
         await ensure_registration_config(db, edition)
         row = (
             await db.execute(
@@ -1158,6 +1163,24 @@ async def verify_checkout_payment(
         resource_id=str(refreshed.id),
         after={"transactionId": payment_id, "amountPaise": order.amount_paise},
     )
+
+    try:
+        from app.services.telegram import send_telegram_registration
+        category = await db.get(RegistrationCategory, row.category_id)
+        asyncio.create_task(
+            send_telegram_registration(
+                full_name=row.full_name or user.full_name or "Attendee",
+                email=row.email or user.email or "",
+                phone=row.phone or "",
+                college=row.college_name or "College Student",
+                tier_name=category.name if category else "Pass Tier",
+                amount_paid=f"₹{order.amount_paise / 100:.2f}",
+                reference=row.reference_number,
+            )
+        )
+    except Exception:
+        pass
+
     return refreshed
 
 

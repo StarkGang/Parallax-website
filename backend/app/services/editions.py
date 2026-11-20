@@ -64,7 +64,12 @@ async def edition_by_slug(db: AsyncSession, slug: str) -> ConventionEdition:
 async def edition_by_id(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition:
     row = await db.get(ConventionEdition, edition_id)
     if row is None:
-        raise NotFound("Convention edition not found.")
+        # Graceful fallback: if client passed a fallback/placeholder UUID (e.g. 00000000-0000-0000-0000-000000000001)
+        # or an edition that was updated/re-seeded, resolve to the current active edition.
+        try:
+            return await current_edition(db)
+        except Exception:
+            raise NotFound("Convention edition not found.")
     return row
 
 

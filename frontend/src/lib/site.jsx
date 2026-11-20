@@ -16,7 +16,14 @@ const CACHE_EDITION_KEY = 'px_cached_edition';
 function getCached(key) {
   try {
     const raw = sessionStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    // Discard any legacy dummy/stale placeholder edition IDs that cause 404s
+    if (key === CACHE_EDITION_KEY && (data?.id === '00000000-0000-0000-0000-000000000001' || !data?.id)) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return data;
   } catch {
     return null;
   }
@@ -24,6 +31,10 @@ function getCached(key) {
 
 function setCached(key, value) {
   try {
+    // Never persist a dummy fallback ID into cache
+    if (key === CACHE_EDITION_KEY && value?.id === '00000000-0000-0000-0000-000000000001') {
+      return;
+    }
     sessionStorage.setItem(key, JSON.stringify(value));
   } catch {
     /* Storage can be full or blocked; the in-memory state still works. */
@@ -31,7 +42,7 @@ function setCached(key, value) {
 }
 
 export const FALLBACK_EDITION = {
-  id: '00000000-0000-0000-0000-000000000001',
+  id: '678a694c-f27d-4e5e-94c8-f5c74d5b01cf',
   slug: 'parallax-2027',
   name: 'Parallax 2027',
   tagline: 'A Shift in Perspective',

@@ -5357,7 +5357,7 @@ p {
 .page-title {
   position: relative;
   overflow: hidden;
-  padding: 88px 7.2% 40px !important;
+  padding: clamp(125px, 11vw, 150px) 7.2% 40px !important;
   background: #090c12 !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
 }

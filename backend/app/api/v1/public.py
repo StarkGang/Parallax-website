@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_get, cache_set
 from app.core.config import get_settings
-from app.core.errors import Forbidden, NotFound
+from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.integrations.storage import LocalStorage, verify_local_signature
 from app.schemas.common import paged
 from app.schemas.public import PublicConfig
@@ -303,23 +303,42 @@ async def public_policy(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
 
 
 class ContactInquiryRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    email: EmailStr
+    name: str = Field(default="Inquirer", max_length=200)
+    email: str = Field(default="", max_length=254)
     category: str = Field(default="general", max_length=100)
-    message: str = Field(min_length=2, max_length=50000)
+    message: str = Field(default="", max_length=50000)
 
 
 @router.post("/inquiries")
 async def submit_inquiry(
-    body: ContactInquiryRequest,
     request: Request,
 ) -> dict:
+    import json
+    raw = await request.body()
+    data: dict = {}
+    try:
+        parsed = json.loads(raw.decode("utf-8") if raw else "{}")
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+        if isinstance(parsed, dict):
+            data = parsed
+    except Exception:
+        data = {}
+
+    name = str(data.get("name") or "").strip() or "Inquirer"
+    email = str(data.get("email") or "").strip()
+    category = str(data.get("category") or "General").strip()
+    message = str(data.get("message") or "").strip()
+
+    if not message:
+        raise ValidationFailed("Message cannot be empty.")
+
     ip = request.client.host if request.client else None
     result = await send_telegram_inquiry(
-        name=body.name,
-        email=body.email,
-        category=body.category,
-        message=body.message,
+        name=name,
+        email=email,
+        category=category,
+        message=message,
         ip=ip,
     )
     return {
