@@ -38,6 +38,10 @@ from app.services.tickets import (
 
 logger = logging.getLogger(__name__)
 
+# Bound how long a checkout click can wait on the payment provider. A stalled
+# gateway must fail fast instead of leaving the browser without feedback.
+GATEWAY_TIMEOUT = httpx.Timeout(8.0, connect=4.0, read=6.0)
+
 
 def _auth_header() -> dict[str, str]:
     settings = get_settings()
@@ -58,7 +62,7 @@ async def create_gateway_order(order: PaymentOrder) -> str | None:
             code="PAYMENTS_NOT_CONFIGURED",
             status_code=503,
         )
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
         resp = await client.post(
             "https://api.razorpay.com/v1/orders",
             headers=_auth_header(),
@@ -103,7 +107,7 @@ async def gateway_refund(payment_id: str, amount_paise: int) -> str | None:
             code="PAYMENTS_NOT_CONFIGURED",
             status_code=503,
         )
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
         resp = await client.post(
             f"https://api.razorpay.com/v1/payments/{payment_id}/refund",
             headers=_auth_header(),
@@ -224,7 +228,7 @@ async def fetch_gateway_refund(refund_id: str) -> dict[str, Any]:
     settings = get_settings()
     if not settings.payments_enabled:
         return {}
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
         resp = await client.get(
             f"https://api.razorpay.com/v1/refunds/{refund_id}",
             headers=_auth_header(),
@@ -238,7 +242,7 @@ async def fetch_gateway_payment(payment_id: str) -> dict[str, Any]:
     settings = get_settings()
     if not settings.payments_enabled:
         return {}
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
         resp = await client.get(
             f"https://api.razorpay.com/v1/payments/{payment_id}",
             headers=_auth_header(),

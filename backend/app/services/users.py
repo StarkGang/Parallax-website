@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role, STAFF_ROLES
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
+from app.core.sessions import revoke_all_sessions
 from app.models.commerce import ConventionPass, Registration
 from app.models.edition import ConventionEdition, EligibilityVerification
 from app.models.user import (
@@ -243,6 +244,35 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
         )
     ).scalar_one_or_none()
 
+    # The convention pass form is the primary place attendees enter their college
+    # details. Fall back to their latest registration so an existing profile view
+    # is never blank just because they bought a pass first.
+    if profile is None or not any(
+        [profile.college_name, profile.course, profile.branch, profile.year_of_study]
+    ):
+        from app.models.registration import CollegeRegistration
+
+        registration = (
+            await db.execute(
+                select(CollegeRegistration)
+                .where(CollegeRegistration.user_id == user.id)
+                .order_by(CollegeRegistration.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if registration is not None:
+            if profile is None:
+                profile = ParticipantProfile(user_id=user.id)
+                db.add(profile)
+            profile.college_name = profile.college_name or registration.college_name
+            profile.course = profile.course or registration.course
+            profile.branch = profile.branch or registration.branch
+            if profile.year_of_study is None and registration.year_of_study:
+                try:
+                    profile.year_of_study = int(str(registration.year_of_study).strip()[:1])
+                except (TypeError, ValueError):
+                    pass
+
     identifier = None
     if profile and profile.student_identifier_enc:
         try:
@@ -416,8 +446,6 @@ async def set_status(
         raise NotFound("User not found.")
     user.status = status
     if status == "suspended":
-        from app.core.sessions import revoke_all_sessions
-
         await revoke_all_sessions(db, user_id)
     await record(
         db,

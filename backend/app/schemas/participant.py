@@ -83,6 +83,10 @@ class RegistrationView(CamelModel):
     team_name: str | None = None
     reservation_expires_at: datetime | None = None
     order_id: uuid.UUID | None = None
+    event_starts_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: str | None = None
+    cancellation_reason: str | None = None
 
 
 class TeamMemberView(CamelModel):

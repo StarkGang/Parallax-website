@@ -391,17 +391,20 @@ class Settings(BaseSettings):
         branch_url = os.getenv("VERCEL_BRANCH_URL")
         if branch_url and f"https://{branch_url}" not in origins:
             origins.append(f"https://{branch_url}")
-        dev_variants = [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:8000",
-            "http://127.0.0.1:8000",
-        ]
-        for v in dev_variants:
-            if v not in origins:
-                origins.append(v)
+        # Localhost origins are only trusted outside production; a deployed
+        # site must not accept credentialed calls from a developer machine.
+        if not self.is_production:
+            dev_variants = [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:8000",
+                "http://127.0.0.1:8000",
+            ]
+            for v in dev_variants:
+                if v not in origins:
+                    origins.append(v)
         return origins
 
     @property

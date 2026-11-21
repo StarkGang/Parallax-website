@@ -128,6 +128,8 @@ class Registration(Base, UUIDPrimaryKey, Timestamps):
     registration_number: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("payment_orders.id", ondelete="SET NULL"))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_by: Mapped[str | None] = mapped_column(String(20), default=None)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class PaymentOrder(Base, UUIDPrimaryKey, Timestamps):

@@ -10,6 +10,7 @@ gateway confirmation or an explicit finance-desk reference.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 import uuid
@@ -42,12 +43,27 @@ from app.models.user import User
 from app.services.audit import record
 from app.services.editions import aware
 
+logger = logging.getLogger(__name__)
+
 DOC_DEFINITIONS = {
+    "photo": "Passport-size photo",
     "college_id": "College / University ID card",
     "iste_card": "ISTE Membership Card",
 }
 
+PHOTO_MAX_BYTES = 102_400  # 100 KB ceiling for the printed pass photo
+PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
+PHOTO_REQUIREMENT = {
+    "type": "photo",
+    "label": "Passport-size photo",
+    "required": True,
+}
+
 REJECTION_REASONS = {
+    "fake_id": "Fake ID / Unverifiable Student Credentials",
+    "wrong_category": "Wrong Category (e.g. Non-ISTE registered as ISTE)",
+    "unclear_proof": "Unclear / Illegible Document Proof",
+    "duplicate": "Duplicate Registration",
     "invalid_college_id": "Invalid college ID card",
     "invalid_iste_card": "Invalid ISTE membership card",
     "iste_without_proof": "User selected ISTE membership without valid proof",
@@ -150,7 +166,10 @@ def category_payload(row: RegistrationCategory) -> dict:
         "feePaise": row.fee_paise,
         "enabled": row.enabled,
         "displayOrder": row.display_order,
-        "requiredDocuments": row.required_documents or [],
+        # Every category carries the printed-pass photo requirement, even if the
+        # stored category row predates it. The participant form reads this list,
+        # so the photo upload must appear here or it can never be provided.
+        "requiredDocuments": _required_docs(row),
     }
 
 
@@ -162,6 +181,7 @@ def settings_payload(row: RegistrationSettings) -> dict:
         "acceptedFormats": row.accepted_formats or [],
         "maxUploadBytes": row.max_upload_bytes,
         "allowResubmission": row.allow_resubmission,
+        "helpdeskPhone": getattr(row, "helpdesk_phone", "+91 94460 00000") or "+91 94460 00000",
         "paymentInstructions": row.payment_instructions,
         "refundPolicy": row.refund_policy,
         "approvalMessage": row.approval_message,
@@ -207,6 +227,7 @@ def registration_config_payload(settings: RegistrationSettings | None) -> dict:
             "acceptedFormats": ["pdf", "jpg", "jpeg", "png"],
             "maxUploadBytes": 5_242_880,
             "allowResubmission": True,
+            "helpdeskPhone": "+91 94460 00000",
             "paymentInstructions": "",
             "refundPolicy": "",
             "approvalMessage": "",
@@ -451,7 +472,13 @@ def overall_state(row: CollegeRegistration) -> str:
 
 
 def _required_docs(row: RegistrationCategory) -> list[dict]:
-    return [doc for doc in (row.required_documents or []) if doc.get("type")]
+    docs = [doc for doc in (row.required_documents or []) if doc.get("type")]
+    # The printed pass always carries a photo. Categories configured before the
+    # photo requirement existed still get it, so a pass cannot be issued without
+    # one.
+    if not any(doc.get("type") == "photo" for doc in docs):
+        docs.insert(0, dict(PHOTO_REQUIREMENT))
+    return docs
 
 
 def _missing_documents(
@@ -786,6 +813,20 @@ async def save_document(
             code="DOCUMENTS_LOCKED",
         )
     mime, ext, digest = validate_document(data, filename, db_settings)
+    if doc_type == "photo":
+        if len(data) > PHOTO_MAX_BYTES:
+            raise AppError(
+                "The passport photo must be 100 KB or smaller.",
+                code="PHOTO_TOO_LARGE",
+                status_code=413,
+                details={"maxBytes": PHOTO_MAX_BYTES, "sizeBytes": len(data)},
+            )
+        if mime not in PHOTO_TYPES:
+            raise AppError(
+                "Upload the passport photo as a JPG, PNG or WEBP image.",
+                code="PHOTO_TYPE_INVALID",
+                status_code=415,
+            )
     storage = get_document_storage()
     key = registration_document_key(edition.id, row.id, doc_type, filename)
     await storage.put(key, data, mime)
@@ -901,7 +942,9 @@ async def delete_document(
         try:
             await storage.delete(existing.storage_key)
         except Exception as exc:
-            logger.warning("storage_delete_failed", key=existing.storage_key, error=str(exc))
+            logger.warning(
+                "storage_delete_failed key=%s error=%s", existing.storage_key, exc
+            )
         before = {
             "docType": existing.doc_type,
             "sha256": existing.sha256,
@@ -1065,6 +1108,58 @@ async def finalize_paid(
         row.registration_number = await _unique_registration_number(db)
     row.verification_status = "pending_verification"
     row.submitted_at = row.submitted_at or datetime.now(UTC)
+
+    # The college registration IS the attendee's convention pass. Mirror the paid
+    # registration into the pass/ticket tables so event selection, the entry
+    # ticket and team registration unlock without a second purchase. A failure
+    # here must never undo a confirmed payment, so it is logged and swallowed.
+    try:
+        from app.services.editions import current_policy
+        from app.services.passes import activate_pass_for_registration
+
+        policy = await current_policy(db, row.edition_id)
+        await activate_pass_for_registration(
+            db, row.user_id, row.edition_id, policy, row.fee_paise
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "pass_activation_failed registration=%s error=%s", row.id, exc
+        )
+
+    # The purchase form is the single place an attendee fills these details, so
+    # mirror them into the account profile instead of leaving the profile empty.
+    try:
+        from app.models.user import ParticipantProfile
+
+        user = await db.get(User, row.user_id)
+        if user is not None:
+            if row.full_name and row.full_name != user.full_name:
+                user.full_name = row.full_name
+            if row.phone:
+                user.phone_e164 = row.phone
+            profile = (
+                await db.execute(
+                    select(ParticipantProfile).where(
+                        ParticipantProfile.user_id == row.user_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if profile is None:
+                profile = ParticipantProfile(user_id=row.user_id)
+                db.add(profile)
+            profile.college_name = row.college_name or profile.college_name
+            profile.course = row.course or profile.course
+            profile.branch = row.branch or profile.branch
+            if row.year_of_study:
+                try:
+                    profile.year_of_study = int(str(row.year_of_study).strip()[:1])
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "profile_sync_failed registration=%s error=%s", row.id, exc
+        )
+
     await db.flush()
     await notify(
         db,
@@ -1449,11 +1544,49 @@ async def reject(
     for document in documents:
         document.status = "rejected"
     await db.flush()
+
+    # Void convention pass and revoke ticket
+    from app.models.commerce import ConventionPass, Registration, PaymentOrder
+    from app.services.tickets import revoke_for_pass
+    user_pass = (
+        await db.execute(
+            select(ConventionPass)
+            .where(
+                ConventionPass.user_id == row.user_id,
+                ConventionPass.edition_id == row.edition_id,
+            )
+            .order_by(ConventionPass.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if user_pass is not None:
+        user_pass.status = "cancelled"
+        await revoke_for_pass(db, user_pass.id)
+
+    # Free event seats by cancelling all event registrations for this participant
+    event_regs = list(
+        (
+            await db.execute(
+                select(Registration).where(
+                    Registration.user_id == row.user_id,
+                    Registration.edition_id == row.edition_id,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalars()
+    )
+    addon_orders = []
+    for reg in event_regs:
+        reg.status = "cancelled"
+        reg.cancelled_at = datetime.now(UTC)
+        if reg.order_id and reg.fee_paise > 0:
+            addon_orders.append((reg.order_id, reg.fee_paise))
+
     await notify(
         db,
         row,
         "rejected",
-        title="Registration rejected",
+        title="Registration cancelled",
         values={"reason": full_reason, "category": row.category_name},
     )
     if initiate_refund_workflow and row.payment_status == "paid":
@@ -1464,11 +1597,11 @@ async def reject(
                 row,
                 actor,
                 actor_role,
-                amount_paise=row.fee_paise,
-                note=f"Automatic refund request after rejection: {full_reason}",
+                amount_paise=row.fee_paise + row.additional_paid_paise,
+                note=f"Automatic refund on cancellation: {full_reason}",
             )
         except Exception as exc:
-            # A gateway outage must not roll back the rejection itself. The
+            # A gateway outage must not roll back the cancellation itself. The
             # refund is recorded as failed and stays visible for follow-up.
             row.refund_status = "failed"
             await db.flush()
@@ -1479,6 +1612,24 @@ async def reject(
                 title="Refund could not be started",
                 values={"reason": str(exc)[:200]},
             )
+
+        # Also refund any separate paid add-on event orders
+        if addon_orders:
+            from app.services.payments import refund_order
+            for addon_order_id, addon_paise in addon_orders:
+                try:
+                    addon_order = await db.get(PaymentOrder, addon_order_id)
+                    if addon_order and addon_order.status == "paid":
+                        await refund_order(
+                            db,
+                            addon_order,
+                            amount_paise=min(addon_paise, addon_order.amount_paise),
+                            reason_code=code,
+                            reason_note=f"Automatic event refund on pass cancellation: {full_reason}",
+                            requested_by_id=actor.id if actor else None,
+                        )
+                except Exception:
+                    pass
     await record(
         db,
         request,
@@ -1644,6 +1795,29 @@ async def initiate_refund(
     return refund
 
 
+async def _revoke_pass_for_registration(
+    db: AsyncSession, row: CollegeRegistration
+) -> None:
+    """Remove the pass entitlement when a registration is fully refunded."""
+    from app.models.commerce import ConventionPass
+    from app.services.tickets import revoke_for_pass
+
+    user_pass = (
+        await db.execute(
+            select(ConventionPass)
+            .where(
+                ConventionPass.user_id == row.user_id,
+                ConventionPass.edition_id == row.edition_id,
+            )
+            .order_by(ConventionPass.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if user_pass is not None and user_pass.status == "active":
+        user_pass.status = "refunded"
+        await revoke_for_pass(db, user_pass.id)
+
+
 async def refund_action(
     db: AsyncSession,
     request: Request,
@@ -1711,6 +1885,7 @@ async def refund_action(
             order = await db.get(PaymentOrder, row.order_id) if row.order_id else None
             if order is not None and order.status == "paid":
                 order.status = "refunded"
+            await _revoke_pass_for_registration(db, row)
         await notify(
             db,
             row,
@@ -1780,6 +1955,7 @@ async def sync_gateway_refund(
         row.refund_status = "completed"
         if refund.amount_paise >= row.fee_paise + row.additional_paid_paise:
             row.payment_status = "refunded"
+            await _revoke_pass_for_registration(db, row)
         await notify(
             db,
             row,
@@ -2131,6 +2307,7 @@ async def update_config(
             "accepted_formats": "accepted_formats",
             "max_upload_bytes": "max_upload_bytes",
             "allow_resubmission": "allow_resubmission",
+            "helpdesk_phone": "helpdesk_phone",
             "payment_instructions": "payment_instructions",
             "refund_policy": "refund_policy",
             "approval_message": "approval_message",

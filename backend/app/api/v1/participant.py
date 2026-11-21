@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, ValidationFailed
-from app.core.rate_limit import limiter
+from app.core.rate_limit import limiter, memory_limiter
 from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.models.commerce import ConventionPass, PaymentOrder, Registration, Ticket
@@ -31,6 +31,7 @@ from app.schemas.participant import (
     TicketView,
     VerificationView,
 )
+from app.schemas.registration import PaymentVerification
 from app.services import (
     editions as edition_service,
     idempotency as idempotency_service,
@@ -49,7 +50,10 @@ async def _edition(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition
     return await edition_service.edition_by_id(db, edition_id)
 
 
-@router.get("/pass")
+@router.get(
+    "/pass",
+    dependencies=[Depends(memory_limiter("pass_read", 180, 60))],
+)
 async def get_pass(
     edition_id: uuid.UUID,
     request: Request,
@@ -181,7 +185,10 @@ async def create_registrations(
     return out
 
 
-@router.get("/registrations")
+@router.get(
+    "/registrations",
+    dependencies=[Depends(memory_limiter("registrations_read", 120, 60))],
+)
 async def my_registrations(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(current_context),
@@ -208,7 +215,10 @@ async def cancel_registration(
     return {"data": {"cancelled": True}}
 
 
-@router.get("/teams")
+@router.get(
+    "/teams",
+    dependencies=[Depends(memory_limiter("teams_read", 120, 60))],
+)
 async def my_teams(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(current_context),
@@ -283,7 +293,26 @@ async def rotate_invite(
     return {"data": {"inviteCode": code}}
 
 
-@router.get("/verification")
+@router.post(
+    "/teams/{team_id}/lock",
+    dependencies=[Depends(limiter("team_lock", 10, 60))],
+)
+async def toggle_lock(
+    edition_id: uuid.UUID,
+    team_id: uuid.UUID,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    team = await team_service.toggle_team_lock(db, ctx.user.id, team_id)
+    views = await team_service.serialize_teams(db, [team], ctx.user.id)
+    await db.commit()
+    return {"data": views[0].model_dump(by_alias=True)}
+
+
+@router.get(
+    "/verification",
+    dependencies=[Depends(memory_limiter("verification_read", 120, 60))],
+)
 async def verification_status(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(current_context),
@@ -343,7 +372,10 @@ async def confirm_verification_email(
     return {"data": {"verified": ok}}
 
 
-@router.get("/tickets")
+@router.get(
+    "/tickets",
+    dependencies=[Depends(memory_limiter("tickets_read", 180, 60))],
+)
 async def my_tickets(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(current_context),
@@ -365,23 +397,10 @@ async def my_tickets(
     return {"data": payloads}
 
 
-@router.get("/tickets/{ticket_id}/qr")
-async def ticket_qr(
-    edition_id: uuid.UUID,
-    ticket_id: uuid.UUID,
-    request: Request,
-    accent: str = Query(default="cyan", max_length=20),
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> Response:
-    t = await db.get(Ticket, ticket_id)
-    if t is None or t.user_id != ctx.user.id or t.edition_id != edition_id:
-        raise NotFound("Ticket not found.")
-    svg = ticket_service.qr_svg(ticket_service.ticket_token_for(t.id), accent=accent)
-    return Response(content=svg, media_type="image/svg+xml")
-
-
-@router.get("/payments/{order_id}")
+@router.get(
+    "/payments/{order_id}",
+    dependencies=[Depends(memory_limiter("payment_status_read", 120, 60))],
+)
 async def payment_status(
     edition_id: uuid.UUID,
     order_id: uuid.UUID,
@@ -418,6 +437,46 @@ async def mock_pay(
         raise NotFound("Order not found.")
     await payment_service.mark_order_paid(
         db, order, transaction_id=payment_service.mock_payment_id()
+    )
+    await db.commit()
+    return {"data": {"paid": True, "orderId": str(order.id)}}
+
+
+@router.post("/payments/verify")
+async def verify_payment(
+    edition_id: uuid.UUID,
+    payload: PaymentVerification,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    order = await payment_service.order_for(db, payload.order_id)
+    if order.user_id != ctx.user.id or order.edition_id != edition_id:
+        raise NotFound("Order not found.")
+
+    settings = get_settings()
+    if settings.payments_enabled:
+        if not payment_service.verify_checkout_signature(
+            order.gateway_order_id or "", payload.razorpay_payment_id, payload.razorpay_signature
+        ):
+            raise AppError(
+                "The payment signature could not be verified.",
+                code="PAYMENT_SIGNATURE_INVALID",
+                status_code=400,
+            )
+        gateway_payment = await payment_service.fetch_gateway_payment(payload.razorpay_payment_id)
+        if (
+            gateway_payment.get("order_id") != order.gateway_order_id
+            or int(gateway_payment.get("amount") or 0) != order.amount_paise
+            or gateway_payment.get("status") not in {"captured", "authorized"}
+        ):
+            raise AppError(
+                "The payment could not be confirmed with the gateway.",
+                code="PAYMENT_NOT_CONFIRMED",
+                status_code=409,
+            )
+
+    await payment_service.mark_order_paid(
+        db, order, transaction_id=payload.razorpay_payment_id
     )
     await db.commit()
     return {"data": {"paid": True, "orderId": str(order.id)}}

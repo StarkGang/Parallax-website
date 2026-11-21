@@ -5,7 +5,9 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
+  Calendar,
   Check,
+  CheckCircle2,
   CreditCard,
   Download,
   ExternalLink,
@@ -13,21 +15,28 @@ import {
   FileCheck2,
   FileText,
   IdCard,
+  MapPin,
+  Printer,
   QrCode,
   RefreshCw,
   ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
+  Utensils,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 
-import { portalApi, registrationApi } from '../lib/api.js';
+import { API_ORIGIN, portalApi, registrationApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { dateTime, fileSize, money } from '../lib/format.js';
 import { openCheckout } from '../lib/razorpay.js';
+import { ISTE, LOGO, NSSCE, PARALLAX_MARK } from './Public.jsx';
+import { BrandedQr } from '../components/BrandedQr.jsx';
+import { BarcodeSvg } from '../components/BarcodeSvg.jsx';
+import ParallaxIdCard from '../components/ParallaxIdCard.jsx';
 import {
   Badge,
   Button,
@@ -79,6 +88,74 @@ function StatusPill({ value, labels = STATE_LABELS }) {
     <span className={`badge ${statusTone(value)}`}>
       {labels[value] || String(value).replace(/_/g, ' ')}
     </span>
+  );
+}
+
+const PAY_STEPS = [
+  ['preparing', 'Payment order created'],
+  ['gateway', 'Paid in Razorpay'],
+  ['verifying', 'Signature verified'],
+];
+
+const PAY_COPY = {
+  preparing: {
+    title: 'Securing your payment',
+    detail: 'Creating a Razorpay order for your pass. This takes a couple of seconds.',
+  },
+  gateway: {
+    title: 'Complete payment in Razorpay',
+    detail: 'Finish the payment in the secure window. Do not refresh or close this page.',
+  },
+  verifying: {
+    title: 'Confirming your payment',
+    detail: 'Razorpay has accepted the payment. Verifying the signature with our server now.',
+  },
+  success: {
+    title: 'Payment successful',
+    detail: 'Generating your convention pass and QR entry ticket.',
+  },
+};
+
+function PaymentProgress({ stage, amount, slow }) {
+  if (!stage) return null;
+  const copy = PAY_COPY[stage];
+  const activeIndex = PAY_STEPS.findIndex(([key]) => key === stage);
+  return (
+    <div className="pay-progress" role="status" aria-live="polite">
+      <div className={`pay-progress-card ${stage === 'success' ? 'is-success' : ''}`}>
+        <div className="pay-progress-icon">
+          {stage === 'success' ? (
+            <Check size={26} strokeWidth={2.6} />
+          ) : (
+            <RefreshCw size={24} className="is-spinning" />
+          )}
+        </div>
+        <h3>{copy.title}</h3>
+        <p>{copy.detail}</p>
+        {amount ? <span className="pay-progress-amount">{money(amount)}</span> : null}
+        <ol className="pay-progress-steps">
+          {PAY_STEPS.map(([key, label], index) => {
+            const done = stage === 'success' || index < activeIndex;
+            const active = !done && index === activeIndex;
+            return (
+              <li key={key} className={done ? 'is-done' : active ? 'is-active' : ''}>
+                <span className="pay-progress-dot">
+                  {done ? <Check size={11} strokeWidth={3} /> : index + 1}
+                </span>
+                {label}
+                {active ? <RefreshCw size={11} className="is-spinning" /> : null}
+              </li>
+            );
+          })}
+        </ol>
+        {slow && stage !== 'success' ? (
+          <small className="pay-progress-hint">
+            Still waiting on Razorpay. Slow connections can take a few extra seconds — please keep this
+            page open.
+          </small>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -162,12 +239,12 @@ function DocumentPreview({ open, document, editionId, onClose }) {
             <span>Loading document...</span>
           </div>
         ) : isPdf && url ? (
-          <iframe title={document.label || 'PDF Preview'} src={url} style={{ width: '100%', height: '540px', border: 'none', borderRadius: '6px', background: '#fff' }} />
+          <iframe title={document.label || 'PDF Preview'} src={url} style={{ width: '100%', height: '70vh', maxHeight: '680px', border: 'none', borderRadius: '6px', background: '#fff' }} />
         ) : url ? (
           <img
             src={url}
             alt={document.label || 'Document Preview'}
-            style={{ maxWidth: '100%', maxHeight: '540px', transform: `scale(${zoom})`, transformOrigin: 'top center', transition: 'transform 150ms ease' }}
+            style={{ maxWidth: '100%', maxHeight: '70vh', transform: `scale(${zoom})`, transformOrigin: 'top center', transition: 'transform 150ms ease' }}
           />
         ) : (
           <p className="muted">Preview unavailable.</p>
@@ -199,6 +276,8 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
     fileName?.toLowerCase().endsWith('.pdf')
   );
   const isIste = req.type === 'iste_card';
+  const isPhoto = req.type === 'photo' || req.type === 'passport_photo';
+  const accept = isPhoto ? 'image/jpeg,image/png,image/webp' : 'image/*,.pdf';
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -221,7 +300,7 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
         type="file"
         ref={inputRef}
         id={`file-input-${req.type}`}
-        accept="image/*,.pdf"
+        accept={accept}
         disabled={isUploading || isRemoving}
         style={{ display: 'none' }}
         onChange={(e) => {
@@ -278,7 +357,7 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
               border: '1px solid rgba(255, 255, 255, 0.1)',
             }}
           >
-            {isIste ? <ShieldCheck size={22} /> : <IdCard size={22} />}
+            {isPhoto ? <FileCheck2 size={22} color="#38bdf8" /> : isIste ? <ShieldCheck size={22} /> : <IdCard size={22} />}
           </div>
         )}
 
@@ -300,9 +379,11 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
           </div>
 
           <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#94a3b8' }}>
-            {isIste
-              ? 'Upload your ISTE student membership card or receipt (under 500 KB).'
-              : 'Upload your physical or digital college ID card with photo (under 500 KB).'}
+            {isPhoto
+              ? 'Upload a recent passport-size photo with clear face visibility (JPG, PNG or WEBP under 100 KB).'
+              : isIste
+              ? 'Upload your ISTE student membership card or receipt (PDF or image under 500 KB).'
+              : 'Upload your physical or digital college ID card with photo (PDF or image under 500 KB).'}
           </p>
 
           {/* Dedicated File Chosen / Attached Strip */}
@@ -414,8 +495,28 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
   );
 }
 
+function formatEditionDates(edition) {
+  if (!edition?.startsAt) return '21–23 NOV 2026';
+  try {
+    const s = new Date(edition.startsAt);
+    const e = edition.endsAt ? new Date(edition.endsAt) : s;
+    const sM = s.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+    const eM = e.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+    const yr = s.getFullYear();
+    if (s.toDateString() === e.toDateString()) {
+      return `${s.getDate()} ${sM} ${yr}`;
+    }
+    if (sM === eM) {
+      return `${s.getDate()}–${e.getDate()} ${sM} ${yr}`;
+    }
+    return `${s.getDate()} ${sM} – ${e.getDate()} ${eM} ${yr}`;
+  } catch {
+    return '21–23 NOV 2026';
+  }
+}
+
 export function PortalRegistration() {
-  const { editionId } = useSite();
+  const { editionId, edition } = useSite();
   const { user } = useAuth();
   const [version, setVersion] = useState(0);
   const [step, setStep] = useState(1);
@@ -428,15 +529,178 @@ export function PortalRegistration() {
   const [localRegistration, setLocalRegistration] = useState(null);
   const [changeSheet, setChangeSheet] = useState(false);
   const [changeForm, setChangeForm] = useState({ categoryId: '', note: '' });
+  const [showIdCard, setShowIdCard] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [payStage, setPayStage] = useState(null);
+  const [slowPayment, setSlowPayment] = useState(false);
+  const [photoBlobUrl, setPhotoBlobUrl] = useState(null);
+  const [badgeRoleOverride, setBadgeRoleOverride] = useState(null);
+
+  // Reassure the attendee if the gateway takes longer than expected instead of
+  // leaving a frozen screen with no explanation.
+  useEffect(() => {
+    if (!payStage) {
+      setSlowPayment(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setSlowPayment(true), 7000);
+    return () => clearTimeout(timer);
+  }, [payStage]);
 
   const query = useAsync(() => registrationApi.get(editionId), [editionId, version], {
     enabled: Boolean(editionId),
   });
+  const tickets = useAsync(() => portalApi.tickets(editionId), [editionId, version], {
+    enabled: Boolean(editionId),
+  });
+  // The API only returns the signed payload; the browser draws the QR.
+  const qrToken = useAsync(() => registrationApi.qrToken(editionId), [editionId, version], {
+    enabled: Boolean(editionId),
+  });
+  const userRegs = useAsync(
+    () => (editionId ? portalApi.registrations(editionId) : Promise.resolve({ data: [] })),
+    [editionId, version],
+    { enabled: Boolean(editionId) }
+  );
+  const confirmedEvents = (userRegs.data?.data || []).filter(
+    (r) => r.status === 'confirmed' || r.status === 'reserved'
+  );
   const config = query.data?.data;
   const categories = config?.categories || [];
   const registration = localRegistration || config?.registration;
 
+  const resolveEffectiveRole = () => {
+    if (badgeRoleOverride) return badgeRoleOverride;
+    const sysRole = (user?.role || '').toLowerCase();
+    const catCode = (registration?.category?.code || registration?.category?.name || '').toLowerCase();
+    if (sysRole === 'super_admin' || sysRole === 'edition_admin' || catCode.includes('organizer')) {
+      return 'organizer';
+    }
+    if (sysRole === 'event_coordinator' || catCode.includes('coordinator')) {
+      return 'coordinator';
+    }
+    if (sysRole === 'checkin_staff' || sysRole === 'eligibility_verifier' || catCode.includes('volunteer')) {
+      return 'volunteer';
+    }
+    if (catCode.includes('speaker') || sysRole.includes('speaker')) {
+      return 'speaker';
+    }
+    return 'delegate';
+  };
+
+  const ROLE_CONFIG = {
+    organizer: {
+      key: 'organizer',
+      heroTitle: 'ORGANIZING COMMITTEE',
+      badgePill: 'CORE LEAD',
+      badgeWord: 'COMMITTEE',
+      accessTier: 'ALL-ACCESS CREDENTIAL',
+      accentColor: '#fbbf24',
+      subColor: '#f59e0b',
+      clearance: 'LEVEL 4 · ALL ZONES & BACKSTAGE',
+      venueArea: 'CENTRAL CONTROL & MAIN AUDITORIUM',
+    },
+    coordinator: {
+      key: 'coordinator',
+      heroTitle: 'EVENT COORDINATOR',
+      badgePill: 'TRACK LEAD',
+      badgeWord: 'COORDINATOR',
+      accessTier: 'COORDINATOR CREDENTIAL',
+      accentColor: '#38bdf8',
+      subColor: '#0284c7',
+      clearance: 'LEVEL 3 · VENUES & TECH LABS',
+      venueArea: 'COMPETITION ARENAS & LABS',
+    },
+    volunteer: {
+      key: 'volunteer',
+      heroTitle: 'OPERATIONS CREW',
+      badgePill: 'OPERATIONS',
+      badgeWord: 'CREW',
+      accessTier: 'CREW CREDENTIAL',
+      accentColor: '#ff6b57',
+      subColor: '#ea580c',
+      clearance: 'LEVEL 2 · DESK & TURNSTILES',
+      venueArea: 'REGISTRATION DESK & TURNSTILES',
+    },
+    speaker: {
+      key: 'speaker',
+      heroTitle: 'KEYNOTE SPEAKER',
+      badgePill: 'VIP GUEST',
+      badgeWord: 'SPEAKER',
+      accessTier: 'DISTINGUISHED SPEAKER',
+      accentColor: '#e0a96d',
+      subColor: '#d97706',
+      clearance: 'VIP ACCESS · STAGE & LOUNGE',
+      venueArea: 'MAIN AUDITORIUM & GREEN ROOM',
+    },
+    delegate: {
+      key: 'delegate',
+      heroTitle: 'CONVENTION DELEGATE',
+      badgePill: 'ATTENDEE',
+      badgeWord: 'DELEGATE',
+      accessTier: '2-DAY CONVENTION PASS',
+      accentColor: '#7c5cff',
+      subColor: '#ff6b57',
+      clearance: 'GENERAL ENTRY · AUDITORIUM & EXHIBITS',
+      venueArea: 'MAIN HALL & EVENT ROOMS',
+    },
+  };
+
+  const activeRoleKey = resolveEffectiveRole();
+  const activeRoleConfig = ROLE_CONFIG[activeRoleKey] || ROLE_CONFIG.delegate;
+  const isStaffRole = activeRoleKey !== 'delegate';
+  const isLightAccent =
+    activeRoleConfig.accentColor === '#fbbf24' || activeRoleConfig.accentColor === '#e0a96d';
+  const passWord = (activeRoleConfig.badgeWord || 'DELEGATE').toUpperCase();
+  const passWordSize = `${Math.min(74, Math.round(302 / (passWord.length * 0.6)))}px`;
+
   const isPaid = Boolean(registration && registration.paymentStatus === 'paid');
+  const passTicket =
+    (tickets.data?.data || []).find((ticket) => ticket.kind === 'pass') ||
+    (tickets.data?.data || [])[0];
+  // The signed payload is authoritative; if that read fails the ticket token we
+  // already hold can still be turned into the same public verification URL.
+  const qrPayload =
+    qrToken.data?.data?.payload || (passTicket?.token ? `${API_ORIGIN}/c/${passTicket.token}` : '');
+  const userDocs = registration?.documents || config?.registration?.documents || [];
+  const photoDoc = userDocs.find(
+    (d) =>
+      d.type === 'passport_photo' ||
+      d.type === 'photo' ||
+      d.docType === 'photo' ||
+      d.docType === 'passport_photo'
+  );
+
+  useEffect(() => {
+    if (fileState?.photo?.previewUrl || fileState?.passport_photo?.previewUrl) {
+      setPhotoBlobUrl(fileState?.photo?.previewUrl || fileState?.passport_photo?.previewUrl);
+      return;
+    }
+    if (photoDoc?.id && editionId) {
+      let active = true;
+      registrationApi
+        .fetchDocumentBlob(editionId, photoDoc.id)
+        .then((blob) => {
+          if (active) {
+            setPhotoBlobUrl(URL.createObjectURL(blob));
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setPhotoBlobUrl(registrationApi.documentUrl(editionId, photoDoc.id));
+          }
+        });
+      return () => {
+        active = false;
+      };
+    }
+  }, [photoDoc?.id, editionId, fileState?.photo?.previewUrl, fileState?.passport_photo?.previewUrl]);
+
+  const photoUrl =
+    photoBlobUrl ||
+    fileState?.photo?.previewUrl ||
+    fileState?.passport_photo?.previewUrl ||
+    (photoDoc?.id ? registrationApi.documentUrl(editionId, photoDoc.id) : null);
 
   useEffect(() => {
     if (config?.registration) {
@@ -534,14 +798,31 @@ export function PortalRegistration() {
     ensureProfileSaved(catId).catch(() => {});
   };
 
-  const MAX_FILE_SIZE = 500 * 1024; // 500 KB limit
+  const MAX_FILE_SIZE = 500 * 1024; // 500 KB limit for ID/proof documents
+  const PHOTO_MAX_BYTES = 100 * 1024; // 100 KB limit for the printed-pass photo
 
   const handleFileSelect = async (docType, file) => {
     if (!file) return;
 
-    if (file.size > MAX_FILE_SIZE) {
-      const sizeKb = Math.round(file.size / 1024);
-      const msg = `File is ${sizeKb} KB (exceeds 500 KB limit). Please compress your PDF or image under 500 KB (e.g. at tinypng.com or ilovepdf.com) and try again.`;
+    const isPhoto = docType === 'photo';
+    const maxBytes = isPhoto ? PHOTO_MAX_BYTES : MAX_FILE_SIZE;
+    const limitKb = Math.round(maxBytes / 1024);
+    const sizeKb = Math.round(file.size / 1024);
+
+    if (isPhoto && !file.type.startsWith('image/')) {
+      const msg = 'Passport photo must be a JPG, PNG or WEBP image (not a PDF).';
+      setFileState((prev) => ({
+        ...prev,
+        [docType]: { ...prev[docType], uploading: false, error: msg },
+      }));
+      setMessage({ tone: 'warn', text: msg });
+      return;
+    }
+
+    if (file.size > maxBytes) {
+      const msg = isPhoto
+        ? `Passport photo is ${sizeKb} KB (limit ${limitKb} KB). Please upload a smaller JPG or PNG under 100 KB.`
+        : `File is ${sizeKb} KB (exceeds ${limitKb} KB limit). Please compress your PDF or image under ${limitKb} KB (e.g. at tinypng.com or ilovepdf.com) and try again.`;
       setFileState((prev) => ({
         ...prev,
         [docType]: {
@@ -628,8 +909,10 @@ export function PortalRegistration() {
   };
 
   const startCheckout = async () => {
+    if (busy) return;
     setBusy('checkout');
     setMessage(null);
+    setPayStage('preparing');
     try {
       if (
         !form.fullName?.trim() ||
@@ -647,6 +930,7 @@ export function PortalRegistration() {
       setPayment(order);
 
       if (order.mock) {
+        setPayStage('verifying');
         await registrationApi.mockPay(editionId, order.orderId);
         setPayment(null);
         refresh('Payment confirmed! Your convention ticket has been generated.');
@@ -659,10 +943,11 @@ export function PortalRegistration() {
         email: form.email?.trim() || user?.email || '',
         phone: form.phone?.trim() || user?.phone || '',
       };
+      setPayStage('gateway');
       const response = await openCheckout(
         order,
         attendeeUser,
-        `${selectedCategory?.name || 'Convention Pass'} - Parallax 2026`
+        `${selectedCategory?.name || 'Convention Pass'} - Parallax 2027`
       );
       if (!response) {
         setMessage({
@@ -679,18 +964,29 @@ export function PortalRegistration() {
         return;
       }
 
-      await registrationApi.verifyPayment(editionId, {
+      setPayStage('verifying');
+      // The verify response already contains the paid registration, so the
+      // ticket can render immediately without a second round trip.
+      const verified = await registrationApi.verifyPayment(editionId, {
         orderId: order.orderId,
         razorpayPaymentId: response.razorpay_payment_id,
         razorpaySignature: response.razorpay_signature,
       });
-
+      if (verified?.data) setLocalRegistration(verified.data);
+      setPayStage('success');
       setPayment(null);
-      refresh('Payment verified successfully! Welcome to Parallax 2026.');
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The verify response is authoritative, so show the paid ticket straight
+      // away instead of waiting for another full reload of the page data.
+      setMessage({
+        tone: 'success',
+        text: 'Payment verified successfully! Welcome to Parallax 2027.',
+      });
     } catch (err) {
       setMessage({ tone: 'error', text: err.message || 'Checkout failed.' });
     } finally {
       setBusy('');
+      setPayStage(null);
     }
   };
 
@@ -852,7 +1148,11 @@ export function PortalRegistration() {
                 }}
               >
                 <div style={{ width: '130px', height: '130px', display: 'grid', placeItems: 'center' }}>
-                  <QrCode size={110} color="#0f172a" />
+                  {passTicket?.token ? (
+                    <BrandedQr value={passTicket.token} title="QR entry pass" logoSrc={PARALLAX_MARK} />
+                  ) : (
+                    <QrCode size={110} color="#0f172a" />
+                  )}
                 </div>
                 <small style={{ color: '#475569', fontSize: '11px', fontWeight: '600', display: 'block', marginTop: '4px' }}>
                   Scan at Entry Desk
@@ -865,7 +1165,7 @@ export function PortalRegistration() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <Check color="#38bdf8" size={18} strokeWidth={2.5} />
-                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Full 3-Day Access</span>
+                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Full 2-Day Access</span>
               </div>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <Check color="#38bdf8" size={18} strokeWidth={2.5} />
@@ -886,16 +1186,12 @@ export function PortalRegistration() {
                 <span>Select Included Events & Workshops</span>
                 <ArrowRight size={15} />
               </Link>
-              {registration.canDownloadReceipt ? (
-                <Button href={registrationApi.receiptUrl(editionId)} variant="ghost" icon={Download}>
-                  Download Receipt
-                </Button>
-              ) : null}
-              {registration.canDownloadConfirmation ? (
-                <Button href={registrationApi.confirmationUrl(editionId)} variant="ghost" icon={BadgeCheck}>
-                  Confirmation Certificate
-                </Button>
-              ) : null}
+              <Button onClick={() => setShowIdCard(true)} variant="secondary" icon={IdCard}>
+                View & Print ID Card
+              </Button>
+              <Button onClick={() => setShowReceipt(true)} variant="ghost" icon={Printer}>
+                View & Print Receipt
+              </Button>
               {registration.canChangeCategory ? (
                 <Button onClick={() => setChangeSheet(true)} variant="ghost">
                   Request Category Change
@@ -1037,7 +1333,7 @@ export function PortalRegistration() {
               <Eyebrow>STEP 1 OF 3</Eyebrow>
               <h2 style={{ fontSize: '22px', margin: '4px 0 8px 0' }}>Select Your Convention Pass</h2>
               <p className="muted" style={{ margin: '0 0 24px 0', fontSize: '14px' }}>
-                All passes include full access to 3-day events, competitions, lunch on both days, certificates, and delegate kits.
+                All passes include full access to 2-day events, competitions, lunch on both convention days, certificates, and delegate kits.
               </p>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
@@ -1097,7 +1393,7 @@ export function PortalRegistration() {
                       </div>
 
                       <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 16px 0', minHeight: '36px' }}>
-                        {cat.description || 'Full 3-day access with lunch, kits, and official certificates.'}
+                        {cat.description || 'Full 2-day access with lunch, kits, and official certificates.'}
                       </p>
 
                       <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '14px', fontSize: '12px' }}>
@@ -1212,7 +1508,8 @@ export function PortalRegistration() {
                   Upload Verification IDs
                 </h3>
                 <p className="muted" style={{ fontSize: '13px', margin: '0 0 20px 0', color: '#94a3b8' }}>
-                  Accepted formats: PDF, JPG, PNG (under 500 KB). Please compress your file before uploading.
+                  ID cards and membership proof: PDF, JPG or PNG under 500 KB. Passport photo: JPG,
+                  PNG or WEBP under <b>100 KB</b>. Please compress your files before uploading.
                 </p>
 
                 <div style={{ display: 'grid', gap: '16px' }}>
@@ -1318,7 +1615,7 @@ export function PortalRegistration() {
                     </span>
                     <h3 style={{ fontSize: '18px', margin: '4px 0 0 0', color: '#fff' }}>{selectedCategory?.name}</h3>
                     <p style={{ margin: '4px 0 0 0', color: '#38bdf8', fontSize: '13px' }}>
-                      Full 3-Day All-Access + Food Included
+                      Full 2-Day All-Access + Lunch Included
                     </p>
                   </div>
 
@@ -1355,6 +1652,20 @@ export function PortalRegistration() {
                     {money(fee)}
                   </span>
                 </div>
+
+                {/* Cancellation, Refund Policy & Double-Payment Caution */}
+                <div style={{ marginTop: '20px', padding: '14px 16px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <ShieldCheck size={16} color="#38bdf8" />
+                    <b style={{ color: '#f8fafc', fontSize: '13px' }}>Cancellation, Refund &amp; Payment Safety Terms</b>
+                  </div>
+                  <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.45' }}>
+                    • <b>Cancellation &amp; Refund:</b> If your uploaded college or institution credentials are found invalid or duplicate, registration may be cancelled and 100% refunded through Razorpay to your source bank/UPI within 5–7 working days.
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#fbbf24', lineHeight: '1.45' }}>
+                    • <b>Avoid Double Charges:</b> Please do not refresh, close, or navigate back while the Razorpay window is processing. If money is deducted from your account but this screen takes a moment, please wait 2 minutes or check your email receipt before trying again.
+                  </p>
+                </div>
               </div>
 
               {/* Payment Actions */}
@@ -1377,14 +1688,23 @@ export function PortalRegistration() {
                       boxShadow: '0 4px 20px rgba(14, 165, 233, 0.4)',
                     }}
                   >
-                    {busy === 'checkout' ? 'Connecting Gateway...' : `Pay ${money(fee)} with Razorpay`}
+                    {busy !== 'checkout'
+                      ? `Pay ${money(fee)} with Razorpay`
+                      : payStage === 'preparing'
+                        ? 'Preparing secure checkout…'
+                        : payStage === 'verifying'
+                          ? 'Verifying payment…'
+                          : 'Complete payment in Razorpay'}
                   </Button>
                 </div>
               </div>
 
-              <div style={{ textAlign: 'center', marginTop: '20px' }}>
-                <small style={{ color: '#64748b', fontSize: '12px' }}>
-                  🔒 256-Bit SSL Encrypted · Supported via UPI (Google Pay, PhonePe, Paytm), Cards & Netbanking.
+              <div style={{ textAlign: 'center', marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <small style={{ color: '#64748b', fontSize: '11.5px' }}>
+                  🔒 256-Bit SSL Encrypted · Supported via UPI (Google Pay, PhonePe, Paytm), Cards &amp; Netbanking.
+                </small>
+                <small style={{ color: '#94a3b8', fontSize: '11px' }}>
+                  Registration may be cancelled and refunded if the uploaded documents are invalid or unverified by NSSCE organisers.
                 </small>
               </div>
             </Panel>
@@ -1401,6 +1721,8 @@ export function PortalRegistration() {
       />
 
       {/* Category Change Modal (If user wants to change category after booking) */}
+      <PaymentProgress stage={payStage} amount={fee} slow={slowPayment} />
+
       <Sheet
         open={changeSheet}
         title="Request a Category Change"
@@ -1444,6 +1766,159 @@ export function PortalRegistration() {
             </Button>
           </div>
         </form>
+      </Sheet>
+
+      {/* Interactive ID Card Sheet */}
+      <Sheet
+        open={showIdCard}
+        title="Parallax 2027 · Official Convention Pass & ID Card"
+        onClose={() => setShowIdCard(false)}
+        wide
+        eyebrow="OFFICIAL CREDENTIAL · CR80 PORTRAIT"
+      >
+        <div className="px-idcard-modal-content">
+          <ParallaxIdCard
+            user={user}
+            registration={registration}
+            edition={edition}
+            category={selectedCategory || registration?.category}
+            photoUrl={photoUrl || registration?.photoUrl}
+            qrPayload={qrPayload}
+            roleKey={activeRoleKey}
+            showControls={false}
+          />
+
+          <div
+            className="no-print"
+            style={{
+              display: 'flex',
+              gap: '12px',
+              marginTop: '16px',
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+            }}
+          >
+            <Button onClick={() => window.print()} icon={Printer} variant="primary">
+              Download PDF / Print
+            </Button>
+            <Button onClick={() => setShowIdCard(false)} variant="ghost">
+              Close
+            </Button>
+          </div>
+        </div>
+      </Sheet>
+
+      {/* Official Receipt Sheet */}
+      <Sheet
+        open={showReceipt}
+        title="Parallax 2027 · Official Payment Receipt"
+        onClose={() => setShowReceipt(false)}
+        wide
+        eyebrow="RECEIPT &amp; CONFIRMATION"
+      >
+        <div className="px-receipt-stage">
+          <div className="px-receipt-card px-printable-target">
+            <div className="px-receipt-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <img src={LOGO} alt="Parallax" style={{ height: '32px', width: 'auto', objectFit: 'contain' }} />
+                <div className="px-receipt-title">
+                  <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>PARALLAX 2027 · PAYMENT RECEIPT</h2>
+                  <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#475569' }}>25th Annual State Student Convention · ISTE Kerala Section &amp; NSSCE Palakkad</p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <img src={ISTE} alt="ISTE" style={{ height: '20px', width: 'auto' }} />
+                  <img src={NSSCE} alt="NSSCE" style={{ height: '20px', width: 'auto' }} />
+                </div>
+                <span className="badge good" style={{ fontSize: '12px', fontWeight: '700' }}>
+                  ✓ PAID &amp; CONFIRMED
+                </span>
+                <p style={{ margin: 0, fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
+                  {registration?.paidAt ? dateTime(registration.paidAt) : 'Confirmed'}
+                </p>
+              </div>
+            </div>
+
+            <div className="px-receipt-meta-grid">
+              <div className="px-receipt-meta-item">
+                <small>RECEIPT REF</small>
+                <b>{registration?.registrationNumber}</b>
+              </div>
+              <div className="px-receipt-meta-item">
+                <small>PAYMENT ID</small>
+                <b>{registration?.transactionId || 'MOCK_PAID'}</b>
+              </div>
+              <div className="px-receipt-meta-item">
+                <small>CATEGORY</small>
+                <b>{registration?.category?.name || 'Delegate'}</b>
+              </div>
+              <div className="px-receipt-meta-item">
+                <small>VERIFICATION</small>
+                <b style={{ textTransform: 'capitalize' }}>
+                  {registration?.verificationStatus?.replace('_', ' ') || 'Pending'}
+                </b>
+              </div>
+            </div>
+
+            <table className="px-receipt-table">
+              <thead>
+                <tr>
+                  <th>Item Description</th>
+                  <th>Attendee</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Amount (INR)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <b>{registration?.category?.name || 'Parallax 2027 Convention Pass'}</b>
+                    <div style={{ fontSize: '11px', color: '#64748b' }}>
+                      2-Day Access, Keynotes, Included Competitions, Lunch Voucher
+                    </div>
+                  </td>
+                  <td>
+                    <div>{registration?.fullName}</div>
+                    <div style={{ fontSize: '11px', color: '#64748b' }}>{registration?.collegeName}</div>
+                  </td>
+                  <td>
+                    <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                    {money(registration?.feePaise || 0)}
+                  </td>
+                </tr>
+                <tr className="px-receipt-total-row">
+                  <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
+                    Total Amount Paid:
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '12px 4px', color: '#0284c7' }}>
+                    {money(registration?.feePaise || 0)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px', fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <b>Issuer:</b> ISTE Student Chapter, NSS College of Engineering, Palakkad - 678008
+              </div>
+              <div>
+                Amounts include all applicable convention fees and event access privileges.
+              </div>
+            </div>
+          </div>
+
+          <div className="no-print" style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <Button onClick={() => window.print()} icon={Printer} variant="primary">
+              Download PDF
+            </Button>
+            <Button onClick={() => setShowReceipt(false)} variant="ghost">
+              Close
+            </Button>
+          </div>
+        </div>
       </Sheet>
     </>
   );

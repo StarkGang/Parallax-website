@@ -1,7 +1,10 @@
 """Public, cacheable catalogue. No cookies are read and no PII is returned."""
 
+import html
+import json
+import re
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import cache_get, cache_set
 from app.core.config import get_settings
 from app.core.errors import Forbidden, NotFound, ValidationFailed
+from app.core.rate_limit import limiter
 from app.integrations.storage import LocalStorage, verify_local_signature
 from app.schemas.common import paged
 from app.schemas.public import PublicConfig
@@ -239,15 +243,25 @@ async def announcements(
     page_size: Annotated[int, Query(ge=1, le=50, alias="pageSize")] = 10,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    cache_key = f"public:announcements:{slug}:{page}:{page_size}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        response.headers.update(CACHE_60)
+        return cached_val
     edition = await edition_by_slug(db, slug)
     rows, total = await announcement_service.public_list(
         db, edition, page=page, page_size=page_size
     )
+    result = paged(rows, total, page, page_size)
+    cache_set(cache_key, result, ttl_seconds=60)
     response.headers.update(CACHE_60)
-    return paged(rows, total, page, page_size)
+    return result
 
 
-@router.get("/icons/{icon_id}")
+@router.get(
+    "/icons/{icon_id}",
+    dependencies=[Depends(limiter("public_icon", 300, 60))],
+)
 async def icon(icon_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Response:
     row = await db.get(Icon, icon_id)
     if row is None or row.status != "active" or not row.data:
@@ -263,7 +277,10 @@ async def icon(icon_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Respon
     )
 
 
-@router.get("/documents/{key:path}")
+@router.get(
+    "/documents/{key:path}",
+    dependencies=[Depends(limiter("public_document", 120, 60))],
+)
 async def document(key: str, expires: int, signature: str) -> Response:
     if not verify_local_signature(key, expires, signature):
         raise Forbidden("This document link has expired.", code="SIGNED_URL_EXPIRED")
@@ -290,16 +307,25 @@ async def document(key: str, expires: int, signature: str) -> Response:
 
 
 @router.get("/editions/{slug}/policy")
-async def public_policy(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def public_policy(
+    slug: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict:
+    response.headers.update(CACHE_60)
+    cache_key = f"public:policy:{slug}"
+    cached_val = cache_get(cache_key)
+    if cached_val is not None:
+        return cached_val
     edition = await edition_by_slug(db, slug)
     policy = await current_policy(db, edition.id)
-    return {
+    result = {
         "data": {
             **policy_public(policy).model_dump(by_alias=True),
             "registrationOpen": registration_open(edition),
             "selectionChangeDeadline": policy.selection_change_deadline,
         }
     }
+    cache_set(cache_key, result, ttl_seconds=60)
+    return result
 
 
 class ContactInquiryRequest(BaseModel):
@@ -309,11 +335,10 @@ class ContactInquiryRequest(BaseModel):
     message: str = Field(default="", max_length=50000)
 
 
-@router.post("/inquiries")
+@router.post("/inquiries", dependencies=[Depends(limiter("public_inquiry", 5, 600))])
 async def submit_inquiry(
     request: Request,
 ) -> dict:
-    import json
     raw = await request.body()
     data: dict = {}
     try:
@@ -332,6 +357,13 @@ async def submit_inquiry(
 
     if not message:
         raise ValidationFailed("Message cannot be empty.")
+    if len(message) > 4000:
+        raise ValidationFailed("Message is too long (4000 characters maximum).")
+    if email and (len(email) > 254 or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
+        raise ValidationFailed("Enter a valid email address.")
+
+    name = name[:200]
+    category = category[:100]
 
     ip = request.client.host if request.client else None
     result = await send_telegram_inquiry(
@@ -348,4 +380,160 @@ async def submit_inquiry(
             "message": "Your message has been received. Our team will contact you shortly.",
         }
     }
+
+
+@router.get(
+    "/c/{code}",
+    dependencies=[Depends(limiter("public_credential", 60, 60))],
+)
+async def check_credential(
+    code: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Public credential check for scanned QR codes, returning verification and registered events."""
+    from app.models.registration import CollegeRegistration
+    from app.models.commerce import Registration, Ticket
+    from app.models.edition import Event
+    from app.services import tickets as ticket_service
+    from fastapi.responses import HTMLResponse
+
+    normalized = (code or "").strip().upper()
+    reg = None
+
+    # A pass card carries a signed ticket token; a registration card carries a
+    # signed registration code. An unsigned registration number is rejected so
+    # the page cannot be used to look up attendees by guessing.
+    ticket_id = ticket_service.parse_ticket_token(normalized)
+    if ticket_id is not None and ticket_service.token_is_valid(normalized, ticket_id):
+        ticket = await db.get(Ticket, ticket_id)
+        if ticket is not None:
+            reg = (
+                await db.execute(
+                    select(CollegeRegistration)
+                    .where(
+                        CollegeRegistration.user_id == ticket.user_id,
+                        CollegeRegistration.edition_id == ticket.edition_id,
+                    )
+                    .order_by(CollegeRegistration.created_at.desc())
+                )
+            ).scalars().first()
+
+    if reg is None:
+        number = ticket_service.public_registration_number(normalized)
+        if number:
+            reg = (
+                await db.execute(
+                    select(CollegeRegistration).where(
+                        CollegeRegistration.registration_number == number
+                    )
+                )
+            ).scalars().first()
+
+    if reg:
+        is_valid = reg.payment_status in {"paid", "completed"} and reg.verification_status != "rejected"
+        event_rows = list(
+            (
+                await db.execute(
+                    select(Registration, Event)
+                    .join(Event, Registration.event_id == Event.id)
+                    .where(
+                        Registration.user_id == reg.user_id,
+                        Registration.edition_id == reg.edition_id,
+                        Registration.status.in_(["confirmed", "reserved"]),
+                    )
+                )
+            ).all()
+        )
+        events_data = [
+            {
+                "id": str(event.id),
+                "title": event.title,
+                "category": event.category,
+                "startsAt": aware(event.starts_at).isoformat() if event.starts_at else None,
+                "endsAt": aware(event.ends_at).isoformat() if event.ends_at else None,
+                "venueRoom": event.venue_room,
+                "status": r.status,
+                "teamId": str(r.team_id) if r.team_id else None,
+            }
+            for r, event in event_rows
+        ]
+
+        if "text/html" in request.headers.get("accept", ""):
+            # Every value below is participant-controlled, so it must be escaped
+            # before it reaches the HTML page.
+            safe_name = html.escape(reg.full_name or "")
+            safe_category = html.escape(reg.category_name or "")
+            safe_number = html.escape(reg.registration_number or "")
+            safe_college = html.escape(reg.college_name or "NSS College of Engineering")
+            status_badge = (
+                '<span style="background:#059669;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">✓ ACTIVE PASS</span>'
+                if is_valid and reg.verification_status == "approved"
+                else '<span style="background:#d97706;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">⚠️ PENDING VERIFICATION</span>'
+                if is_valid
+                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">INVALID / CANCELLED</span>'
+            )
+            events_html = "".join(
+                f'<li style="margin-bottom:8px;padding:8px 12px;background:#18181b;border-radius:8px;border:1px solid #27272a;">'
+                f'<strong style="color:#c4b5fd;display:block;">{html.escape(e["title"] or "")}</strong>'
+                f'<span style="font-size:12px;color:#a1a1aa;">Venue: {html.escape(e["venueRoom"] or "Main Campus")} · Confirmed</span>'
+                f'</li>'
+                for e in events_data
+            ) or '<p style="color:#71717a;font-size:13px;">No individual add-on events registered. Delegate has General All-Access pass privileges.</p>'
+
+            page_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Credential Verification · Parallax</title>
+</head>
+<body style="margin:0;padding:24px;background:#09090b;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;">
+  <div style="max-width:440px;width:100%;background:#0f0f12;border:1px solid #27272a;border-radius:16px;padding:24px;box-shadow:0 20px 40px rgba(0,0,0,0.8);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #27272a;padding-bottom:12px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;color:#fff;letter-spacing:0.05em;">PARALLAX 2027</h3>
+        <small style="color:#71717a;">Official Credential Verification</small>
+      </div>
+      {status_badge}
+    </div>
+    <h2 style="margin:0 0 4px 0;font-size:22px;color:#fff;">{safe_name}</h2>
+    <div style="font-size:13px;color:#7c5cff;font-weight:600;margin-bottom:14px;">{safe_category} · {safe_number}</div>
+    <div style="background:#18181b;border-radius:10px;padding:12px;margin-bottom:18px;font-size:13px;line-height:1.6;color:#d4d4d8;">
+      <div><strong>College:</strong> {safe_college}</div>
+    </div>
+    <h4 style="margin:0 0 10px 0;font-size:13px;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.08em;">Verified Event Registrations ({len(events_data)})</h4>
+    <ul style="list-style:none;padding:0;margin:0 0 20px 0;">{events_html}</ul>
+    <div style="text-align:center;font-size:11px;color:#52525b;border-top:1px solid #18181b;padding-top:14px;">
+      ISTE Students' Chapter · NSS College of Engineering, Palakkad
+    </div>
+  </div>
+</body>
+</html>"""
+            return HTMLResponse(
+                content=page_html,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Robots-Tag": "noindex, nofollow",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                },
+            )
+
+        return {
+            "data": {
+                "valid": is_valid,
+                "registrationNumber": reg.registration_number,
+                "fullName": reg.full_name,
+                "category": reg.category_name,
+                "college": reg.college_name,
+                "verificationStatus": reg.verification_status,
+                "isVerified": reg.verification_status == "approved",
+                "registeredEvents": events_data,
+                "eventsCount": len(events_data),
+            }
+        }
+    return {"data": {"valid": False, "code": code, "registeredEvents": [], "eventsCount": 0}}
+
+
 

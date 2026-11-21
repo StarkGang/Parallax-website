@@ -6,6 +6,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import request_id_ctx
+from app.core.sessions import ip_prefix
 from app.models.commerce import AuditLog
 
 SENSITIVE_KEYS = {
@@ -38,8 +39,6 @@ async def record(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
 ) -> None:
-    from app.core.sessions import ip_prefix
-
     client_host = request.client.host if (request and request.client) else None
     client_ip = ip_prefix(client_host) if client_host else None
     ua = request.headers.get("user-agent", "")[:255] if request else None

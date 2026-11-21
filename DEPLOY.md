@@ -1,6 +1,6 @@
 # Parallax 2026 · Production Deployment Guide
 
-This document provides a production-grade deployment runbook for **Parallax 2026** (FastAPI backend + Vite/React frontend + PostgreSQL database + S3/Supabase storage).
+This document provides a production-grade deployment runbook for **Parallax** — a single app where FastAPI serves the React SPA and the API on one origin, backed by PostgreSQL and S3/Supabase storage.
 
 ---
 
@@ -16,7 +16,7 @@ This document provides a production-grade deployment runbook for **Parallax 2026
    - [E. Storage Backend (Supabase or AWS S3)](#e-storage-backend-supabase-or-aws-s3)
    - [F. Transactional Email Server (SMTP)](#f-transactional-email-server-smtp)
 4. [Deployment Runbooks](#4-deployment-runbooks)
-   - [Runbook 1: Vercel (Frontend) + Render / Railway (Backend) + Supabase (Recommended)](#runbook-1-vercel-frontend--render--railway-backend--supabase-recommended)
+   - [Runbook 1: Vercel (single project) + Supabase (Recommended)](#runbook-1-vercel-single-project--supabase-recommended)
    - [Runbook 2: Docker Compose on a Single Linux VPS (DigitalOcean / Hetzner / AWS EC2)](#runbook-2-docker-compose-on-a-single-linux-vps)
 5. [Database Initialization & Seeding](#5-database-initialization--seeding)
 6. [Post-Deployment Verification & Health Checks](#6-post-deployment-verification--health-checks)
@@ -25,27 +25,22 @@ This document provides a production-grade deployment runbook for **Parallax 2026
 
 ## 1. Architecture Overview
 
-Parallax is separated into two components designed for horizontal scalability:
+Parallax ships as **one app on one origin**. FastAPI serves the built React SPA, the REST API, health checks and the auth callbacks together. On Vercel the same project serves the static build from the CDN and routes `/api`, `/health`, `/auth` and `/google/callback` to the Python function.
 
 ```
 [ Participant / Admin Browser ]
-              │
-       HTTPS Requests
-              ▼
-   ┌──────────────────────┐         ┌─────────────────────────────────────┐
-   │ Frontend SPA         │         │ FastAPI Backend API                 │
-   │ (Vercel / Netlify /  │ ──────> │ (Render / Railway / Fly.io / VPS)   │
-   │ Cloudflare Pages)    │  proxy  │ Port: 8000                          │
-   └──────────────────────┘         └──────────────────┬──────────────────┘
-                                                       │
-                           ┌───────────────────────────┼───────────────────────────┐
-                           ▼                           ▼                           ▼
-                 ┌───────────────────┐       ┌───────────────────┐       ┌───────────────────┐
-                 │ PostgreSQL 15+    │       │ Cloud Storage     │       │ External Services │
-                 │ (Supabase / Neon) │       │ (Supabase / S3)   │       │ Razorpay, Google, │
-                 │ Transactions & DB │       │ Passports & IDs   │       │ SMTP Mail Server  │
-                 └───────────────────┘       └───────────────────┘       └───────────────────┘
+              |  HTTPS, one domain
+              v
+  +------------------------------------------+
+  | Parallax app (one deployment, one origin) |
+  |   - React SPA build (frontend/dist)      |
+  |   - FastAPI: /api/v1, /health, /auth     |
+  +---------------------+--------------------+
+                        v
+     PostgreSQL + Cloud Storage + Razorpay / Google / SMTP
 ```
+
+Because the SPA and the API share an origin, `VITE_API_BASE` stays `/api/v1`, session cookies are first-party, and CSRF origin checks compare the same origin. There is no separate frontend service to deploy, and no cross-origin CORS in production.
 
 ---
 
@@ -86,7 +81,7 @@ Parallax is separated into two components designed for horizontal scalability:
 
 | Variable | Required? | Default | Description |
 |---|---|---|---|
-| `VITE_API_BASE` | Optional | `/api/v1` | If frontend and backend are hosted on separate domains, set to `https://api.yourdomain.com/api/v1`. If behind a reverse proxy (Caddy/Nginx) or CDN rewrite, keep `/api/v1`. |
+| `VITE_*` | No | - | The SPA is built and served by the same app, so it calls `/api/v1` on its own origin. Only set `VITE_API_BASE` if you deliberately host the SPA separately. Never put secrets in `VITE_` variables: they are embedded in the browser bundle. |
 
 ---
 
@@ -238,46 +233,53 @@ SMTP_FROM_EMAIL=iste@nssce.ac.in
 
 ## 4. Deployment Runbooks
 
-### Runbook 1: Vercel (Frontend) + Render / Railway (Backend) + Supabase (Recommended)
+### Runbook 1: Vercel (single project) + Supabase (Recommended)
 
-This is the standard modern serverless/PaaS setup requiring zero server maintenance.
+One Vercel project deploys the whole app from the repository root. `vercel.json` builds `frontend/dist`, serves it from the CDN, and routes API/auth/health paths to `api/index.py` (the FastAPI app). Every other path falls back to `index.html`; missing asset paths return a real 404 instead of HTML, so model and image loaders are never handed the page shell.
 
-#### 1. Backend on Render.com
+#### 1. Import the project
+
 1. Push your repository to GitHub.
-2. In Render Dashboard, click **New** → **Web Service**.
-3. Connect your GitHub repository.
-4. Settings:
-   - **Name**: `parallax-api`
-   - **Region**: Singapore or Frankfurt
-   - **Root Directory**: `backend`
-   - **Environment**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port 10000 --workers 4`
-5. Click **Advanced** → **Add Environment Variable**:
-   - Add all variables from Section 2 (`APP_ENV=production`, `SERVER_SECRET_KEY`, `DATABASE_URL`, `FRONTEND_ORIGIN`, etc.).
-6. Click **Create Web Service**. Note your backend URL (e.g., `https://parallax-api.onrender.com`).
+2. In Vercel: **Add New** -> **Project** -> select the repository.
+3. Leave **Root Directory** at the repository root (do **not** set it to `frontend`).
+4. Framework preset: **Other**. `vercel.json` sets `framework: null` plus the build and output paths.
+5. Build Command / Output Directory are read from `vercel.json` (`npm --prefix frontend install && npm --prefix frontend run build` -> `frontend/dist`).
 
-#### 2. Frontend on Vercel
-1. Go to [vercel.com](https://vercel.com) → Click **Add New** → **Project**.
-2. Select your repository.
-3. Configure Project:
-   - **Framework Preset**: `Vite`
-   - **Root Directory**: `frontend`
-   - **Build Command**: `npm run build`
-   - **Output Directory**: `dist`
-4. In **Environment Variables**, add:
-   - `VITE_API_BASE`: `https://parallax-api.onrender.com/api/v1`
-5. Click **Deploy**.
-6. Set your custom domain in Vercel (e.g., `parallax.nssce.ac.in`).
-7. Update `FRONTEND_ORIGIN` in your Render backend settings to match your live Vercel URL!
+#### 2. Environment variables
+
+Add the backend variables from Section 2 with production values. Because the SPA and API share one origin:
+
+- `APP_BASE_URL` = `https://your-domain.com`
+- `FRONTEND_ORIGIN` = `https://your-domain.com`
+- `ALLOWED_HOSTS` = `your-domain.com`
+- `APP_ENV=production`, `COOKIE_SECURE=true`, `DEV_AUTH_ENABLED=false`, `APP_DEBUG=false`
+- Plus `DATABASE_URL`, `SERVER_SECRET_KEY`, the `RAZORPAY_*` values, Google OAuth, storage and SMTP as needed
+
+#### 3. Google OAuth callbacks
+
+Register the same-origin callbacks:
+
+- `https://your-domain.com/api/v1/auth/google/callback`
+- `https://your-domain.com/google/callback`
+- `http://localhost:8000/api/v1/auth/google/callback` for local work
+
+#### 4. Razorpay webhook
+
+Set the webhook URL to `https://your-domain.com/api/v1/webhooks/razorpay`.
+
+#### 5. Deploy and verify
+
+Deploy, then run the checks in Section 6 against your own domain. Each release rebuilds `frontend/dist` and updates the API function together.
+
+> One project means one domain, one cookie jar and no CORS between the site and its API. Do not create a second Vercel project for `frontend/`: it would serve static files only, with no API behind it.
 
 ---
 
 ### Runbook 2: Docker Compose on a Single Linux VPS
 
-For complete data sovereignty, you can host both frontend, backend, and reverse proxy on a single Ubuntu VPS ($5 - $10/mo on Hetzner, DigitalOcean, or AWS EC2).
+The root `Dockerfile` builds the SPA in a Node stage and copies it next to the FastAPI app, so one container runs the whole product on port 8000.
 
-Create a `docker-compose.prod.yml` in your workspace root:
+Create `docker-compose.prod.yml` in the repository root:
 
 ```yaml
 version: '3.8'
@@ -298,9 +300,9 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  app:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     restart: always
     depends_on:
@@ -318,13 +320,6 @@ services:
       - PAYMENTS_ENABLED=${PAYMENTS_ENABLED:-false}
       - BOOTSTRAP_OWNER_EMAIL=${BOOTSTRAP_OWNER_EMAIL}
       - DEV_AUTH_ENABLED=false
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    restart: always
 
   caddy:
     image: caddy:2-alpine
@@ -345,30 +340,18 @@ volumes:
   caddy_config:
 ```
 
-With `Caddyfile` (Caddy automatically fetches and renews free Let's Encrypt SSL/TLS certificates):
+`Caddyfile` - one upstream, because the app serves both the pages and the API:
 
 ```caddyfile
 {$DOMAIN} {
-    # API endpoints
-    handle /api/* {
-        reverse_proxy backend:8000
-    }
-
-    # Health endpoints
-    handle /health/* {
-        reverse_proxy backend:8000
-    }
-
-    # Frontend SPA
-    handle {
-        reverse_proxy frontend:80
-    }
+    reverse_proxy app:8000
 }
 ```
 
-Run with:
+Run it with:
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ---
@@ -397,12 +380,17 @@ Verify your deployment with the following checklist:
 
 | Check | Expected Result | Command / URL |
 |---|---|---|
-| Liveness Probe | HTTP 200 `{"status": "ok"}` | `curl -i https://api.yourdomain.com/health/live` |
-| Readiness Probe (DB Check) | HTTP 200 `{"status": "ok"}` | `curl -i https://api.yourdomain.com/health/ready` |
-| Security Headers | Check `X-Content-Type-Options: nosniff`, `Content-Security-Policy` | `curl -I https://api.yourdomain.com/api/v1/public/config` |
-| Public Edition Data | Returns `Parallax 2026` hosted by NSS College of Engineering | `curl https://api.yourdomain.com/api/v1/public/editions/current` |
-| Public Events | Returns all 12 events across Day 1 & Day 2 | `curl https://api.yourdomain.com/api/v1/public/editions/parallax-2026/events` |
-| Public Schedule | Returns Day 1 & Day 2 schedule items at NSSCE | `curl https://api.yourdomain.com/api/v1/public/editions/parallax-2026/schedule` |
+| SPA document | HTTP 200 HTML with `Cache-Control: no-cache` | `curl -I https://yourdomain.com/` |
+| SPA deep link | HTTP 200 HTML (not a 404, not JSON) | `curl -I https://yourdomain.com/venue` |
+| Hashed assets | HTTP 200 `text/css` with `immutable` caching | `curl -I https://yourdomain.com/assets/<file>.css` |
+| Mascot model | HTTP 200 `model/gltf-binary`, `HEAD` allowed | `curl -I https://yourdomain.com/mascot/mascot-rigged.glb` |
+| Unknown asset | HTTP 404, never HTML | `curl -I https://yourdomain.com/mascot/missing.glb` |
+| Liveness Probe | HTTP 200 `{"status": "ok"}` | `curl -i https://yourdomain.com/health/live` |
+| Readiness Probe (DB Check) | HTTP 200 `{"status": "ok"}` | `curl -i https://yourdomain.com/health/ready` |
+| Security Headers | Check `X-Content-Type-Options: nosniff`, `Content-Security-Policy` | `curl -I https://yourdomain.com/api/v1/public/config` |
+| Public Edition Data | Returns `Parallax 2026` hosted by NSS College of Engineering | `curl https://yourdomain.com/api/v1/public/editions/current` |
+| Public Events | Returns all 12 events across Day 1 & Day 2 | `curl https://yourdomain.com/api/v1/public/editions/parallax-2026/events` |
+| Public Schedule | Returns Day 1 & Day 2 schedule items at NSSCE | `curl https://yourdomain.com/api/v1/public/editions/parallax-2026/schedule` |
 | Google Maps on Venue | Loads NSS College of Engineering, Palakkad map embed | Navigate to `https://yourdomain.com/venue` |
 | Make My Pass Badge | Renders vertical badge with scannable QR, tear-strip, and print button | Sign in and visit `https://yourdomain.com/portal/tickets` |
 

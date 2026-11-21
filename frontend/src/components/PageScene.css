@@ -19,25 +19,6 @@
   padding-top: 48px;
 }
 
-.page-scene-page > .section:first-of-type::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(84%, 1200px);
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(56, 189, 248, 0.15) 20%,
-    rgba(56, 189, 248, 0.5) 50%,
-    rgba(56, 189, 248, 0.15) 80%,
-    transparent 100%
-  );
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
-}
-
 .page-scene-hero {
   position: relative;
   isolation: isolate;

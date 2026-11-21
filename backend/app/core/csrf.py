@@ -37,13 +37,16 @@ async def ensure_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     if origin:
         origin_clean = origin.rstrip("/")
+        dev_origin = (not settings.is_production) and (
+            origin_clean.startswith("http://localhost:")
+            or origin_clean.startswith("http://127.0.0.1:")
+            or origin_clean.startswith("https://localhost:")
+            or origin_clean.startswith("https://127.0.0.1:")
+        )
         if (
             origin_clean != settings.frontend_origin
             and origin_clean not in settings.allowed_origins
-            and not origin_clean.startswith("http://localhost:")
-            and not origin_clean.startswith("http://127.0.0.1:")
-            and not origin_clean.startswith("https://localhost:")
-            and not origin_clean.startswith("https://127.0.0.1:")
+            and not dev_origin
         ):
             raise Forbidden("Cross-origin request rejected.", code="ORIGIN_REJECTED")
 

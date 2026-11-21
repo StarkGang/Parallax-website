@@ -3,6 +3,7 @@
 import hashlib
 import os
 import secrets
+import time
 from datetime import UTC, datetime
 
 from fastapi import Depends, Request
@@ -13,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import RateLimited
 from app.core.config import get_settings
+from app.core.security import hash_token
 from app.db.session import get_db
 from app.models.commerce import RateLimitCounter
+from app.models.user import Session as SessionRow
 
 
 def client_ip(request: Request) -> str:
@@ -35,7 +38,15 @@ def client_ip(request: Request) -> str:
     return peer
 
 
-def _subject(request: Request, explicit: str | None = None) -> str:
+async def _subject(
+    db: AsyncSession, request: Request, explicit: str | None = None
+) -> str:
+    """Bucket key that an internet client cannot choose for itself.
+
+    A cookie value is only trusted after it resolves to a real session. Using
+    the raw cookie hash would let anyone send a fresh random cookie per request
+    and get a brand-new counter every time, which defeats the limit entirely.
+    """
     if explicit:
         return explicit
     user_id = getattr(request.state, "user_id", None)
@@ -44,8 +55,11 @@ def _subject(request: Request, explicit: str | None = None) -> str:
     settings = get_settings()
     session_token = request.cookies.get(settings.session_cookie_name)
     if session_token:
-        token_hash = hashlib.sha256(session_token.encode()).hexdigest()[:16]
-        return f"s:{token_hash}"
+        session_id = await db.scalar(
+            select(SessionRow.id).where(SessionRow.token_hash == hash_token(session_token))
+        )
+        if session_id is not None:
+            return f"s:{session_id}"
     return f"ip:{client_ip(request)}"
 
 
@@ -112,7 +126,7 @@ def limiter(
     async def dependency(
         request: Request, db: AsyncSession = Depends(get_db)
     ) -> None:
-        target_subject = subject or _subject(request, None)
+        target_subject = subject or await _subject(db, request, None)
         allowed, retry_after = await consume(
             db,
             bucket=bucket,
@@ -156,7 +170,7 @@ async def login_limiter(
     allowed, retry_after = await consume(
         db,
         bucket="auth_login_ip",
-        subject=_subject(request, None),
+        subject=await _subject(db, request, None),
         limit=60,
         window_seconds=60,
     )
@@ -176,7 +190,7 @@ async def limit_user(
     allowed, retry_after = await consume(
         db,
         bucket=bucket,
-        subject=_subject(request, None),
+        subject=await _subject(db, request, None),
         limit=limit,
         window_seconds=window_seconds,
     )
@@ -184,6 +198,45 @@ async def limit_user(
         exc = RateLimited("Too many requests. Slow down for a moment.")
         exc.details = {"retryAfter": retry_after}
         raise exc
+
+
+# Process-local limiter for read-only endpoints. It costs no database write, so
+# a refresh loop is absorbed before it can hammer Postgres. Multi-instance
+# deployments enforce it per instance, which is enough to bound a single caller.
+_MEMORY_LIMITS: dict[tuple[str, str, int], int] = {}
+_MEMORY_ENTRY_LIMIT = 5000
+
+
+def _memory_subject(request: Request) -> str:
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return f"u:{user_id}"
+    settings = get_settings()
+    session_token = request.cookies.get(settings.session_cookie_name)
+    if session_token:
+        return f"s:{hashlib.sha256(session_token.encode()).hexdigest()[:16]}"
+    return f"ip:{client_ip(request)}"
+
+
+def memory_limiter(bucket: str, limit: int, window_seconds: int = 60):
+    """In-memory fixed-window limiter for endpoints that must stay cheap."""
+
+    async def dependency(request: Request) -> None:
+        now = int(time.time())
+        window = now // window_seconds
+        key = (bucket, _memory_subject(request), window)
+        if len(_MEMORY_LIMITS) > _MEMORY_ENTRY_LIMIT:
+            stale = [item for item in _MEMORY_LIMITS if item[2] < window - 1]
+            for item in stale:
+                _MEMORY_LIMITS.pop(item, None)
+        count = _MEMORY_LIMITS.get(key, 0) + 1
+        if count > limit:
+            exc = RateLimited("Too many requests. Slow down for a moment.")
+            exc.details = {"retryAfter": max(0, (window + 1) * window_seconds - now)}
+            raise exc
+        _MEMORY_LIMITS[key] = count
+
+    return dependency
 
 
 def fingerprint(value: str) -> str:

@@ -5,6 +5,16 @@
 
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1';
 
+// Origin of the API (and of the public /c/<code> verification pages), resolved
+// once so QR links can be built without guessing from the current route.
+export const API_ORIGIN = (() => {
+  try {
+    return new URL(API_BASE, window.location.origin).origin;
+  } catch {
+    return '';
+  }
+})();
+
 let csrfToken = null;
 let unauthorizedHandler = null;
 
@@ -198,17 +208,19 @@ export const portalApi = {
     api(`/editions/${editionId}/teams/${teamId}`, { method: 'DELETE' }),
   rotateInvite: (editionId, teamId) =>
     api(`/editions/${editionId}/teams/${teamId}/rotate-invite`, { method: 'POST' }),
+  toggleTeamLock: (editionId, teamId) =>
+    api(`/editions/${editionId}/teams/${teamId}/lock`, { method: 'POST' }),
   verification: (editionId) => api(`/editions/${editionId}/verification`),
   submitVerification: (editionId, form) =>
     api(`/editions/${editionId}/verification`, { method: 'POST', form }),
   confirmVerification: (editionId, code) =>
     api(`/editions/${editionId}/verification/confirm`, { method: 'POST', body: { code } }),
   tickets: (editionId) => api(`/editions/${editionId}/tickets`),
-  ticketQrUrl: (editionId, ticketId, accent = '') =>
-    `${API_BASE}/editions/${editionId}/tickets/${ticketId}/qr${accent ? `?accent=${encodeURIComponent(accent)}` : ''}`,
   payment: (editionId, orderId) => api(`/editions/${editionId}/payments/${orderId}`),
   mockPay: (editionId, orderId) =>
     api(`/editions/${editionId}/payments/${orderId}/mock`, { method: 'POST' }),
+  verifyPayment: (editionId, payload) =>
+    api(`/editions/${editionId}/payments/verify`, { method: 'POST', body: payload }),
 };
 
 export const razorpayCheckoutApi = {
@@ -266,8 +278,10 @@ export const registrationApi = {
     return res.blob();
   },
   receiptUrl: (editionId) => `${API_BASE}/editions/${editionId}/registration/receipt`,
+  qrToken: (editionId) => api(`/editions/${editionId}/registration/qr-token`),
   confirmationUrl: (editionId) =>
     `${API_BASE}/editions/${editionId}/registration/confirmation`,
+  passCardUrl: (editionId) => `${API_BASE}/editions/${editionId}/registration/pass-card`,
 };
 
 const adminBase = (editionId) => `/editions/${editionId}/admin`;
@@ -327,6 +341,22 @@ export const adminApi = {
     }),
   registrations: (editionId, params = {}) =>
     api(`${adminBase(editionId)}/registrations${query(params)}`),
+  forceCancelEventRegistration: (editionId, registrationId, payload) =>
+    api(`${adminBase(editionId)}/registrations/${registrationId}/force-cancel`, {
+      method: 'POST',
+      body: payload,
+    }),
+  refundEventRegistration: (editionId, registrationId, payload) =>
+    api(`${adminBase(editionId)}/registrations/${registrationId}/refund`, {
+      method: 'POST',
+      body: payload,
+    }),
+  eventRoster: (editionId, eventId, params = {}) =>
+    api(`${adminBase(editionId)}/events/${eventId}/roster${query(params)}`),
+  markAttendance: (editionId, payload) =>
+    api(`${adminBase(editionId)}/attendance/mark`, { method: 'POST', body: payload }),
+  deleteAttendance: (editionId, attendanceId) =>
+    api(`${adminBase(editionId)}/attendance/${attendanceId}`, { method: 'DELETE' }),
   announcements: (editionId) => api(`${adminBase(editionId)}/announcements`),
   createAnnouncement: (editionId, payload) =>
     api(`${adminBase(editionId)}/announcements`, { method: 'POST', body: payload }),

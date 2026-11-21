@@ -1950,7 +1950,7 @@ summary:focus-visible {
   inset: 0;
   background: rgba(4, 5, 8, 0.85);
   backdrop-filter: blur(8px);
-  z-index: 999;
+  z-index: 99999 !important;
   display: grid;
   place-items: center;
   padding: 20px;

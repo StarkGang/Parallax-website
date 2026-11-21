@@ -113,6 +113,29 @@ def token_is_valid(raw: str, ticket_id: uuid.UUID) -> bool:
     return constant_compare((raw or "").strip().upper(), ticket_token_for(ticket_id))
 
 
+def public_registration_code(registration_number: str) -> str:
+    """Signed code for the public credential URL.
+
+    A bare registration number is short enough to guess; the signature means
+    only a link this server issued resolves to a participant, so the public
+    verification page cannot be used to enumerate attendees.
+    """
+    number = (registration_number or "").strip().upper()
+    signature = hash_token(f"public-registration:{number}")[:12].upper()
+    return f"{number}.{signature}"
+
+
+def public_registration_number(raw: str) -> str | None:
+    value = (raw or "").strip().upper()
+    if "." not in value:
+        return None
+    number, signature = value.rsplit(".", 1)
+    expected = hash_token(f"public-registration:{number}")[:12].upper()
+    if not number or not constant_compare(signature, expected):
+        return None
+    return number
+
+
 async def _existing_for_pass(
     db: AsyncSession, user_id: uuid.UUID, pass_id: uuid.UUID
 ) -> Ticket | None:
@@ -280,6 +303,110 @@ def qr_svg(token: str, accent: str = "cyan") -> str:
     )
 
 
+def plain_qr_svg(token: str) -> str:
+    """Standard square QR code: black modules on white with a quiet zone.
+
+    Used for the printed pass, where any gradient, rounded module or centre logo
+    only hurts scan reliability.
+    """
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(token)
+    qr.make(fit=True)
+    image = qr.make_image(
+        image_factory=qrcode.image.svg.SvgPathFillImage,
+        attrib={"class": "parallax-pass-qr"},
+    )
+    return image.to_string().decode("utf-8")
+
+
+def id_card_qr_svg(token: str) -> str:
+    """A custom, scannable QR code matching the PARALLAX ID Card Design specifications:
+    - Error correction: Level H
+    - Shape: rounded dot modules (near black #0a0a0c) on off-white #f4f2ee panel
+    - Eyes (corner markers): rounded squares with violet #7c5cff outer ring and coral #ff6b57 inner dot
+    - Parallax effect: faint violet ghost copy of QR offset behind it at 20% opacity
+    - Center: small PARALLAX 'P' shield badge in a circle (<= 15% area)
+    - High contrast, ultra-crisp scannability
+    """
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=2,
+    )
+    qr.add_data(token)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    n = len(matrix)
+    b = 2
+
+    eyes = [
+        (b + 3.5, b + 3.5),
+        (n - b - 3.5, b + 3.5),
+        (b + 3.5, n - b - 3.5),
+    ]
+
+    def in_eye(r: int, c: int) -> bool:
+        for cx, cy in eyes:
+            if abs(c + 0.5 - cx) <= 3.5 and abs(r + 0.5 - cy) <= 3.5:
+                return True
+        return False
+
+    center = n / 2.0
+    r_center = n * 0.12
+
+    def in_center(r: int, c: int) -> bool:
+        return ((c + 0.5 - center) ** 2 + (r + 0.5 - center) ** 2) <= (r_center ** 2)
+
+    parts = [
+        f'<svg class="parallax-idcard-qr" viewBox="0 0 {n} {n}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">',
+        f'  <rect width="{n}" height="{n}" rx="2" fill="#f4f2ee" />',
+    ]
+
+    ghost_dots = []
+    real_dots = []
+    for r in range(n):
+        for c in range(n):
+            if matrix[r][c] and not in_eye(r, c) and not in_center(r, c):
+                ghost_dots.append(
+                    f'  <circle cx="{c + 0.65:.2f}" cy="{r + 0.65:.2f}" r="0.38" fill="#7c5cff" fill-opacity="0.22" />'
+                )
+                real_dots.append(
+                    f'  <circle cx="{c + 0.5:.2f}" cy="{r + 0.5:.2f}" r="0.38" fill="#0a0a0c" />'
+                )
+    parts.extend(ghost_dots)
+    parts.extend(real_dots)
+
+    for cx, cy in eyes:
+        parts.append(
+            f'  <rect x="{cx - 3.2:.2f}" y="{cy - 3.2:.2f}" width="6.4" height="6.4" rx="1.6" fill="none" stroke="#7c5cff" stroke-width="0.85" />'
+        )
+        parts.append(
+            f'  <rect x="{cx - 1.5:.2f}" y="{cy - 1.5:.2f}" width="3.0" height="3.0" rx="0.75" fill="#ff6b57" />'
+        )
+
+    badge_radius = r_center
+    parts.append(
+        f'  <circle cx="{center:.2f}" cy="{center:.2f}" r="{badge_radius:.2f}" fill="#f4f2ee" stroke="#7c5cff" stroke-width="0.5" />'
+    )
+    p_w = badge_radius * 1.15
+    p_h = p_w * (836.0 / 516.0)
+    p_x = center - (p_w / 2.0)
+    p_y = center - (p_h / 2.0)
+    parts.append(
+        f'  <svg x="{p_x:.2f}" y="{p_y:.2f}" width="{p_w:.2f}" height="{p_h:.2f}" viewBox="0 0 520 840">\n'
+        f'    <path fill="#7c5cff" d="M779,712H630V904l-166,98,2-300,86-44c7.792-7.755,76-67,76-67H789c87.292-22.755,73-109,73-109,11.292-82.255-385-239-385-239V166L833,301c143.125,46.453,147,191,147,191C976.125,697.453,779,712,779,712Z" transform="translate(-464 -166)"/>\n'
+        f'  </svg>'
+    )
+    parts.append('</svg>')
+    return "\n".join(parts)
+
+
 async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
     kind = "pass" if ticket.pass_id else "registration"
     title = "Convention Entry Pass"
@@ -314,17 +441,45 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
 
 
 async def resolve(db: AsyncSession, raw: str, edition_id: uuid.UUID) -> Ticket:
-    ticket_id = parse_ticket_token(raw)
-    if ticket_id is None:
-        raise NotFound("Invalid ticket token.")
-    ticket = await db.get(Ticket, ticket_id)
-    if ticket is None or ticket.edition_id != edition_id:
-        raise NotFound("Invalid ticket token.")
-    if not token_is_valid(raw, ticket.id):
-        raise NotFound("Invalid ticket token.")
-    if ticket.status not in ("active", "valid"):
-        raise NotFound("This ticket is no longer valid.")
-    return ticket
+    token_str = (raw or "").strip()
+    if "/c/" in token_str:
+        token_str = token_str.split("/c/")[-1].split("?")[0].strip()
+
+    ticket_id = parse_ticket_token(token_str)
+    if ticket_id is not None:
+        ticket = await db.get(Ticket, ticket_id)
+        if ticket and ticket.edition_id == edition_id and token_is_valid(token_str, ticket.id):
+            if ticket.status not in ("active", "valid"):
+                raise NotFound("This ticket is no longer valid.")
+            return ticket
+
+    # Fallback: resolve by a signed public code, a scanned registration number
+    # or an ID card credential.
+    from app.models.registration import CollegeRegistration
+
+    lookup_code = public_registration_number(token_str) or token_str
+    col_reg = (
+        await db.execute(
+            select(CollegeRegistration).where(
+                (CollegeRegistration.registration_number == lookup_code)
+                | (CollegeRegistration.registration_number == lookup_code.upper())
+            )
+        )
+    ).scalars().first()
+    if col_reg and col_reg.edition_id == edition_id:
+        pass_ticket = (
+            await db.execute(
+                select(Ticket).where(
+                    Ticket.user_id == col_reg.user_id,
+                    Ticket.edition_id == edition_id,
+                    Ticket.status.in_(["active", "valid"]),
+                )
+            )
+        ).scalars().first()
+        if pass_ticket:
+            return pass_ticket
+
+    raise NotFound("Invalid ticket token or registration code.")
 
 
 async def rotate(db: AsyncSession, ticket: Ticket) -> Ticket:
@@ -352,6 +507,8 @@ __all__ = [
     "ticket_token_for",
     "parse_ticket_token",
     "token_is_valid",
+    "public_registration_code",
+    "public_registration_number",
     "issue_for_pass",
     "issue_for_registration",
     "revoke_for_registration",

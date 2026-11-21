@@ -101,6 +101,7 @@ async def test_selections_issue_event_tickets_and_cancel_revokes(
                     Event.status.in_(["published", "open"]),
                     Event.included_eligible.is_(True),
                     Event.base_value_paise <= cap,
+                    Event.starts_at > datetime.now(UTC) + timedelta(hours=25),
                 )
                 .order_by(Event.sort_order)
                 .limit(1)

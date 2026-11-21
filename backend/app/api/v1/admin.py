@@ -6,11 +6,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthContext, require_permission
+from app.api.deps import AuthContext, require_permission, require_any_permission
 from app.integrations.storage import get_storage
+from app.core.cache import cache_delete_pattern
 from app.core.errors import AppError
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import permissions_for
@@ -20,9 +21,13 @@ from app.db.session import get_db
 from app.models.commerce import (
     AttendanceRecord,
     AuditLog,
+    ConventionPass,
+    IncludedEventSelection,
     PaymentOrder,
     Refund,
     Registration,
+    Team,
+    TeamMember,
     Ticket,
 )
 from app.models.edition import (
@@ -33,8 +38,12 @@ from app.models.edition import (
     EventCategory,
     Icon,
 )
+from app.models.registration import CollegeRegistration
 from app.models.user import EditionMembership, User
 from app.schemas.admin import (
+    AdminForceCancelPayload,
+    AdminManualAttendancePayload,
+    AdminProcessRefundPayload,
     AnnouncementUpsert,
     CategoryUpsert,
     CheckinRequest,
@@ -47,6 +56,8 @@ from app.schemas.admin import (
     UserStatusUpdate,
     VerificationDecision,
 )
+from app.services.audit import record
+from app.services.tickets import revoke_for_registration
 from app.services import (
     announcements as announcement_service,
     editions as edition_service,
@@ -389,10 +400,22 @@ async def upload_banner(
 ) -> dict:
     data = await read_upload_limited(file, 10 * 1024 * 1024, label="Banner image")
 
-    ext = (file.filename or "").split(".")[-1].lower() if "." in (file.filename or "") else "jpg"
-    if ext not in ("jpg", "jpeg", "png", "webp", "avif"):
-        ext = "jpg"
-    content_type = file.content_type or f"image/{ext}"
+    # Trust the bytes, not the filename or the client-declared Content-Type: this
+    # lands in a public bucket and must never hold arbitrary content.
+    if data.startswith(b"\xff\xd8\xff"):
+        ext, content_type = "jpg", "image/jpeg"
+    elif data.startswith(b"\x89PNG\r\n\x1a\n"):
+        ext, content_type = "png", "image/png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        ext, content_type = "webp", "image/webp"
+    elif data[4:12] in (b"ftypavif", b"ftypavis"):
+        ext, content_type = "avif", "image/avif"
+    else:
+        raise AppError(
+            "Upload a JPG, PNG, WebP or AVIF image.",
+            code="FILE_TYPE_NOT_ALLOWED",
+            status_code=415,
+        )
 
     key = f"banners/{edition_id}/{uuid.uuid4().hex}.{ext}"
     storage = get_storage()
@@ -735,9 +758,17 @@ async def registrations(
     page_size: int = Query(100, ge=1, le=500),
 ) -> dict:
     stmt = (
-        select(Registration, User, Event)
+        select(Registration, User, Event, PaymentOrder, CollegeRegistration)
         .join(User, Registration.user_id == User.id)
         .join(Event, Registration.event_id == Event.id)
+        .outerjoin(PaymentOrder, Registration.order_id == PaymentOrder.id)
+        .outerjoin(
+            CollegeRegistration,
+            and_(
+                CollegeRegistration.user_id == User.id,
+                CollegeRegistration.edition_id == edition_id,
+            ),
+        )
         .where(Registration.edition_id == edition_id)
     )
     if event_id:
@@ -766,24 +797,277 @@ async def registrations(
             )
         ).all()
     )
-    return {
-        "data": [
+
+    # Collect order IDs to look up any processed or pending refunds
+    order_ids = [o.id for _, _, _, o, _ in rows if o is not None]
+    refund_map = {}
+    if order_ids:
+        r_rows = (
+            await db.execute(
+                select(Refund.order_id, func.coalesce(func.sum(Refund.amount_paise), 0))
+                .where(Refund.order_id.in_(order_ids), Refund.status.in_(["processed", "pending"]))
+                .group_by(Refund.order_id)
+            )
+        ).all()
+        refund_map = {oid: int(amt or 0) for oid, amt in r_rows}
+
+    data = []
+    for r, u, e, o, col in rows:
+        is_included = r.kind == "included" or r.fee_paise == 0
+        refunded_paise = refund_map.get(o.id, 0) if o else 0
+        order_remaining = max(0, (o.amount_paise - refunded_paise)) if o else 0
+        max_refundable = 0 if is_included else min(r.fee_paise, order_remaining)
+        is_refundable = bool(o and o.status == "paid" and not is_included and max_refundable > 0)
+
+        data.append(
             {
                 "id": str(r.id),
                 "registrationNumber": r.registration_number,
                 "userName": u.full_name,
                 "userEmail": u.email,
+                "userPhone": col.phone if col else None,
+                "userCollege": col.college_name if col else None,
+                "eventId": str(e.id),
                 "eventTitle": e.title,
+                "venueRoom": e.venue_room,
                 "kind": r.kind,
                 "feePaise": r.fee_paise,
+                "isIncluded": is_included,
                 "status": r.status,
                 "createdAt": edition_service.aware(r.created_at).isoformat() if r.created_at else None,
+                "cancelledAt": edition_service.aware(r.cancelled_at).isoformat() if r.cancelled_at else None,
+                "cancelledBy": r.cancelled_by,
+                "cancellationReason": r.cancellation_reason,
+                "orderId": str(o.id) if o else None,
+                "orderStatus": o.status if o else None,
+                "orderAmountPaise": o.amount_paise if o else 0,
+                "refundedAmountPaise": refunded_paise,
+                "isRefundable": is_refundable,
+                "refundableAmountPaise": max_refundable,
+                "canCancel": r.status in ("confirmed", "reserved"),
             }
-            for r, u, e in rows
-        ],
+        )
+
+    return {
+        "data": data,
         "total": total,
         "page": page,
         "pageSize": page_size,
+    }
+
+
+@router.post("/registrations/{registration_id}/force-cancel")
+async def force_cancel_registration(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    payload: AdminForceCancelPayload,
+    request: Request,
+    ctx: AuthContext = Depends(require_any_permission("events.write", "finance.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    reg = await db.get(Registration, registration_id)
+    if reg is None or reg.edition_id != edition_id:
+        raise NotFound("Registration not found.")
+    if reg.status == "cancelled":
+        raise Conflict("Registration is already cancelled.")
+
+    event = await db.get(Event, reg.event_id)
+    reg.status = "cancelled"
+    reg.cancelled_at = datetime.now(UTC)
+    reg.cancelled_by = "admin"
+    reg.cancellation_reason = payload.reason or "Removed from event by administration"
+    await revoke_for_registration(db, reg.id)
+
+    # Free up included event selection so attendee's quota is restored
+    if reg.kind == "included":
+        user_pass = (
+            (
+                await db.execute(
+                    select(ConventionPass)
+                    .where(
+                        ConventionPass.user_id == reg.user_id,
+                        ConventionPass.edition_id == reg.edition_id,
+                    )
+                    .order_by(ConventionPass.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if user_pass is not None:
+            await db.execute(
+                delete(IncludedEventSelection).where(
+                    IncludedEventSelection.pass_id == user_pass.id,
+                    IncludedEventSelection.event_id == reg.event_id,
+                )
+            )
+
+    refund_data = None
+    if payload.issue_refund:
+        if reg.kind == "included" or reg.fee_paise == 0:
+            raise ValidationFailed("Included free events have no paid fee and are not eligible for refunds.")
+        if not reg.order_id:
+            raise ValidationFailed("Cannot refund this registration because there is no associated payment order.")
+        order = await db.get(PaymentOrder, reg.order_id)
+        if order is None or order.status != "paid":
+            raise Conflict("Associated payment order is not paid or cannot be refunded.")
+
+        already_refunded = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status == "processed",
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        ) or 0
+        order_remaining = max(0, order.amount_paise - int(already_refunded))
+        max_refundable = min(reg.fee_paise, order_remaining)
+
+        amount_paise = (
+            payload.refund_amount_paise
+            if payload.refund_amount_paise is not None
+            else max_refundable
+        )
+        if amount_paise > reg.fee_paise:
+            raise ValidationFailed(
+                f"Refund amount (INR {amount_paise/100:.2f}) cannot exceed the paid fee of INR {reg.fee_paise/100:.2f}."
+            )
+        if amount_paise > order_remaining:
+            raise ValidationFailed(
+                f"Only INR {order_remaining/100:.2f} remains refundable on this order."
+            )
+        if amount_paise <= 0:
+            raise ValidationFailed("Refund amount must be greater than zero.")
+
+        rf = await payment_service.refund_order(
+            db,
+            order,
+            amount_paise,
+            reason_code="admin_force_cancel",
+            reason_note=payload.refund_reason_note or payload.reason,
+            requested_by_id=ctx.user.id,
+        )
+        refund_data = {"refundId": str(rf.id), "amountPaise": rf.amount_paise}
+
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
+    await record(
+        db,
+        request,
+        action="registration.force_cancelled",
+        resource_type="registration",
+        resource_id=reg.id,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        after={
+            "status": "cancelled",
+            "cancelled_by": "admin",
+            "reason": reg.cancellation_reason,
+            "event_title": event.title if event else None,
+            "refund": refund_data,
+        },
+    )
+    await db.commit()
+    return {
+        "data": {
+            "id": str(reg.id),
+            "status": reg.status,
+            "cancelledBy": reg.cancelled_by,
+            "cancellationReason": reg.cancellation_reason,
+            "refund": refund_data,
+        }
+    }
+
+
+@router.post("/registrations/{registration_id}/refund")
+async def refund_registration(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    payload: AdminProcessRefundPayload,
+    request: Request,
+    ctx: AuthContext = Depends(require_any_permission("finance.write", "events.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    reg = await db.get(Registration, registration_id)
+    if reg is None or reg.edition_id != edition_id:
+        raise NotFound("Registration not found.")
+    if reg.kind == "included" or reg.fee_paise == 0:
+        raise ValidationFailed("Included free events have no paid fee and are not eligible for refunds.")
+    if not reg.order_id:
+        raise ValidationFailed("No payment order found for this registration.")
+
+    order = await db.get(PaymentOrder, reg.order_id)
+    if order is None or order.status != "paid":
+        raise ValidationFailed("Only paid registrations can be refunded.")
+
+    already_refunded = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order.id,
+                    Refund.status == "processed",
+                )
+            )
+        )
+        .scalars()
+        .one()
+    ) or 0
+    order_remaining = max(0, order.amount_paise - int(already_refunded))
+    max_refundable = min(reg.fee_paise, order_remaining)
+    if max_refundable <= 0:
+        raise ValidationFailed("This registration has already been fully refunded.")
+
+    amount_paise = (
+        payload.amount_paise
+        if payload.amount_paise is not None
+        else max_refundable
+    )
+    if amount_paise > reg.fee_paise:
+        raise ValidationFailed(
+            f"Refund amount (INR {amount_paise/100:.2f}) cannot exceed the paid fee of INR {reg.fee_paise/100:.2f}."
+        )
+    if amount_paise > order_remaining:
+        raise ValidationFailed(
+            f"Only INR {order_remaining/100:.2f} remains refundable on this order."
+        )
+    if amount_paise <= 0:
+        raise ValidationFailed("Refund amount must be greater than zero.")
+
+    rf = await payment_service.refund_order(
+        db,
+        order,
+        amount_paise,
+        reason_code="admin_event_refund",
+        reason_note=payload.reason_note or "Registration refund issued by admin",
+        requested_by_id=ctx.user.id,
+    )
+    await record(
+        db,
+        request,
+        action="registration.refunded",
+        resource_type="registration",
+        resource_id=reg.id,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        after={
+            "refund_id": str(rf.id),
+            "amount_paise": rf.amount_paise,
+            "order_id": str(order.id),
+        },
+    )
+    await db.commit()
+    return {
+        "data": {
+            "refundId": str(rf.id),
+            "amountPaise": rf.amount_paise,
+            "status": rf.status,
+            "remainingRefundablePaise": max(0, order_remaining - amount_paise),
+        }
     }
 
 
@@ -901,27 +1185,309 @@ async def attendance(
     ctx: AuthContext = Depends(require_permission("checkin.read")),
     db: AsyncSession = Depends(get_db),
     day: str | None = None,
+    event_id: uuid.UUID | None = None,
+    q: str | None = None,
 ) -> dict:
+    from sqlalchemy.orm import aliased
+    StaffUser = aliased(User)
+
     stmt = (
-        select(AttendanceRecord, User)
+        select(AttendanceRecord, User, Event, StaffUser)
         .join(User, AttendanceRecord.user_id == User.id)
+        .outerjoin(Event, AttendanceRecord.event_id == Event.id)
+        .outerjoin(StaffUser, AttendanceRecord.checked_in_by == StaffUser.id)
         .where(AttendanceRecord.edition_id == edition_id)
     )
     if day:
         stmt = stmt.where(AttendanceRecord.day == day)
-    rows = list((await db.execute(stmt.order_by(AttendanceRecord.checked_in_at.desc()).limit(100))).all())
+    if event_id:
+        stmt = stmt.where(AttendanceRecord.event_id == event_id)
+    if q and q.strip():
+        term = f"%{q.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(User.full_name).like(term),
+                func.lower(User.email).like(term),
+                func.lower(Event.title).like(term),
+            )
+        )
+
+    rows = list((await db.execute(stmt.order_by(AttendanceRecord.checked_in_at.desc()).limit(200))).all())
     return {
         "data": [
             {
                 "id": str(a.id),
+                "participantId": str(u.id),
                 "participantName": u.full_name,
+                "participantEmail": u.email,
+                "eventId": str(e.id) if e else None,
+                "eventTitle": e.title if e else "Convention Pass Gate",
+                "venueRoom": e.venue_room if e else "Main Entrance",
                 "day": a.day,
                 "result": a.result,
                 "checkedInAt": edition_service.aware(a.checked_in_at).isoformat() if a.checked_in_at else None,
+                "checkedInByName": staff.full_name if staff else None,
+                "deviceLabel": a.device_label,
             }
-            for a, u in rows
+            for a, u, e, staff in rows
         ]
     }
+
+
+@router.get("/events/{event_id}/roster")
+async def event_roster(
+    edition_id: uuid.UUID,
+    event_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_any_permission("attendance.read", "checkin.read", "events.read")),
+    db: AsyncSession = Depends(get_db),
+    status: str | None = None,
+    q: str | None = None,
+    day: str | None = None,
+) -> dict:
+    event = await db.get(Event, event_id)
+    if event is None or event.edition_id != edition_id:
+        raise NotFound("Event not found.")
+
+    check_day = day or datetime.now(UTC).strftime("%Y-%m-%d")
+
+    stmt = (
+        select(Registration, User)
+        .join(User, Registration.user_id == User.id)
+        .where(
+            Registration.edition_id == edition_id,
+            Registration.event_id == event_id,
+        )
+    )
+    if status:
+        stmt = stmt.where(Registration.status == status)
+    if q and q.strip():
+        term = f"%{q.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(User.full_name).like(term),
+                func.lower(User.email).like(term),
+                func.lower(Registration.registration_number).like(term),
+            )
+        )
+
+    rows = list((await db.execute(stmt.order_by(Registration.created_at.asc()))).all())
+
+    # Get attendance for this event and day
+    att_stmt = select(AttendanceRecord).where(
+        AttendanceRecord.edition_id == edition_id,
+        AttendanceRecord.event_id == event_id,
+        AttendanceRecord.day == check_day,
+    )
+    att_records = {a.user_id: a for a in (await db.execute(att_stmt)).scalars()}
+
+    # Resolve staff who marked attendance
+    staff_ids = {a.checked_in_by for a in att_records.values() if a.checked_in_by}
+    staff_map = {}
+    if staff_ids:
+        staff_users = (
+            await db.execute(select(User).where(User.id.in_(staff_ids)))
+        ).scalars()
+        staff_map = {u.id: u.full_name for u in staff_users}
+
+    # Resolve colleges
+    user_ids = [u.id for _, u in rows]
+    colleges = {}
+    if user_ids:
+        college_regs = (
+            await db.execute(
+                select(CollegeRegistration).where(
+                    CollegeRegistration.user_id.in_(user_ids),
+                    CollegeRegistration.edition_id == edition_id,
+                )
+            )
+        ).scalars()
+        colleges = {c.user_id: (c.college_name, c.phone) for c in college_regs}
+
+    # Resolve teams if team event
+    teams = {}
+    team_ids = [r.team_id for r, _ in rows if r.team_id]
+    if team_ids:
+        t_rows = (await db.execute(select(Team).where(Team.id.in_(team_ids)))).scalars()
+        teams = {t.id: t for t in t_rows}
+
+    data = []
+    for r, u in rows:
+        att = att_records.get(u.id)
+        col_name, phone = colleges.get(u.id, (None, None))
+        team = teams.get(r.team_id) if r.team_id else None
+        data.append(
+            {
+                "registrationId": str(r.id),
+                "registrationNumber": r.registration_number,
+                "userId": str(u.id),
+                "userName": u.full_name,
+                "userEmail": u.email,
+                "userPhone": phone,
+                "userCollege": col_name,
+                "teamId": str(r.team_id) if r.team_id else None,
+                "teamName": team.name if team else None,
+                "isTeamLeader": team.leader_id == u.id if team else False,
+                "kind": r.kind,
+                "feePaise": r.fee_paise,
+                "isIncluded": r.kind == "included" or r.fee_paise == 0,
+                "status": r.status,
+                "cancelledAt": edition_service.aware(r.cancelled_at).isoformat() if r.cancelled_at else None,
+                "cancelledBy": r.cancelled_by,
+                "cancellationReason": r.cancellation_reason,
+                "attended": att is not None and att.result == "admitted",
+                "attendanceId": str(att.id) if att else None,
+                "checkedInAt": edition_service.aware(att.checked_in_at).isoformat() if att and att.checked_in_at else None,
+                "checkedInByName": staff_map.get(att.checked_in_by) if att and att.checked_in_by else None,
+            }
+        )
+
+    return {
+        "data": {
+            "event": {
+                "id": str(event.id),
+                "title": event.title,
+                "format": event.format,
+                "venueRoom": event.venue_room,
+                "capacity": event.capacity,
+                "startsAt": edition_service.aware(event.starts_at).isoformat() if event.starts_at else None,
+            },
+            "day": check_day,
+            "totalRegistered": len(rows),
+            "totalAttended": sum(1 for d in data if d["attended"]),
+            "roster": data,
+        }
+    }
+
+
+@router.post("/attendance/mark")
+async def mark_manual_attendance(
+    edition_id: uuid.UUID,
+    payload: AdminManualAttendancePayload,
+    request: Request,
+    ctx: AuthContext = Depends(require_any_permission("attendance.write", "checkin.write", "events.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    user = await db.get(User, payload.user_id)
+    if user is None:
+        raise NotFound("User not found.")
+
+    day = payload.day or datetime.now(UTC).strftime("%Y-%m-%d")
+
+    # If event_id is specified, verify active registration (either direct or team)
+    if payload.event_id:
+        event = await db.get(Event, payload.event_id)
+        if event is None or event.edition_id != edition_id:
+            raise NotFound("Event not found.")
+        reg = (
+            await db.execute(
+                select(Registration).where(
+                    Registration.user_id == payload.user_id,
+                    Registration.edition_id == edition_id,
+                    Registration.event_id == payload.event_id,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalar_one_or_none()
+        if reg is None:
+            team_reg = (
+                await db.execute(
+                    select(Registration)
+                    .join(TeamMember, Registration.team_id == TeamMember.team_id)
+                    .where(
+                        TeamMember.user_id == payload.user_id,
+                        TeamMember.status == "active",
+                        Registration.edition_id == edition_id,
+                        Registration.event_id == payload.event_id,
+                        Registration.status.in_(["confirmed", "reserved"]),
+                    )
+                )
+            ).scalar_one_or_none()
+            if team_reg is None:
+                raise Conflict("User does not have an active confirmed registration for this event.")
+
+    existing = (
+        await db.execute(
+            select(AttendanceRecord).where(
+                AttendanceRecord.user_id == payload.user_id,
+                AttendanceRecord.event_id == payload.event_id,
+                AttendanceRecord.day == day,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return {
+            "data": {
+                "id": str(existing.id),
+                "result": "duplicate",
+                "participantName": user.full_name,
+                "checkedInAt": edition_service.aware(existing.checked_in_at).isoformat(),
+                "message": "Already marked present for this day.",
+            }
+        }
+
+    rec = AttendanceRecord(
+        edition_id=edition_id,
+        user_id=payload.user_id,
+        ticket_id=None,
+        event_id=payload.event_id,
+        day=day,
+        result="admitted",
+        checked_in_by=ctx.user.id,
+        device_label=payload.note or "admin_manual_roster",
+    )
+    db.add(rec)
+    await db.flush()
+    await record(
+        db,
+        request,
+        action="attendance.marked_manual",
+        resource_type="attendance_record",
+        resource_id=rec.id,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        after={
+            "user_id": str(user.id),
+            "user_name": user.full_name,
+            "event_id": str(payload.event_id) if payload.event_id else None,
+            "day": day,
+        },
+    )
+    await db.commit()
+    return {
+        "data": {
+            "id": str(rec.id),
+            "result": "admitted",
+            "participantName": user.full_name,
+            "checkedInAt": edition_service.aware(rec.checked_in_at).isoformat(),
+        }
+    }
+
+
+@router.delete("/attendance/{attendance_id}")
+async def delete_attendance_record(
+    edition_id: uuid.UUID,
+    attendance_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_any_permission("attendance.write", "checkin.write", "events.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    rec = await db.get(AttendanceRecord, attendance_id)
+    if rec is None or rec.edition_id != edition_id:
+        raise NotFound("Attendance record not found.")
+
+    await record(
+        db,
+        request,
+        action="attendance.revoked",
+        resource_type="attendance_record",
+        resource_id=rec.id,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        before={"user_id": str(rec.user_id), "event_id": str(rec.event_id) if rec.event_id else None},
+    )
+    await db.delete(rec)
+    await db.commit()
+    return {"data": {"revoked": True, "id": str(attendance_id)}}
 
 
 @router.post("/checkin", dependencies=[Depends(limiter("admin_checkin", 300, 60))])
@@ -939,6 +1505,7 @@ async def checkin(
     day = payload.day or datetime.now(UTC).strftime("%Y-%m-%d")
 
     event_id = payload.event_id
+    team_info = None
     if ticket.registration_id:
         registration = await db.get(Registration, ticket.registration_id)
         if registration is None or registration.status not in ("confirmed", "reserved"):
@@ -946,10 +1513,18 @@ async def checkin(
         if event_id and event_id != registration.event_id:
             raise Conflict("This ticket belongs to a different event.")
         event_id = registration.event_id
+        if registration.team_id:
+            team_obj = await db.get(Team, registration.team_id)
+            if team_obj:
+                team_info = {
+                    "teamId": str(team_obj.id),
+                    "teamName": team_obj.name,
+                    "isLeader": team_obj.leader_id == ticket.user_id,
+                }
     elif event_id:
-        linked = (
+        linked_reg = (
             await db.execute(
-                select(Registration.id).where(
+                select(Registration).where(
                     Registration.user_id == ticket.user_id,
                     Registration.edition_id == edition_id,
                     Registration.event_id == event_id,
@@ -957,8 +1532,38 @@ async def checkin(
                 )
             )
         ).scalar_one_or_none()
-        if linked is None:
-            raise Conflict("This participant is not registered for that event.")
+        if linked_reg is None:
+            # Check team registration
+            team_reg_row = (
+                await db.execute(
+                    select(Registration, Team, TeamMember)
+                    .join(Team, Registration.team_id == Team.id)
+                    .join(TeamMember, Team.id == TeamMember.team_id)
+                    .where(
+                        TeamMember.user_id == ticket.user_id,
+                        TeamMember.status == "active",
+                        Registration.edition_id == edition_id,
+                        Registration.event_id == event_id,
+                        Registration.status.in_(["confirmed", "reserved"]),
+                    )
+                )
+            ).first()
+            if team_reg_row is None:
+                raise Conflict("This participant is not registered for that event.")
+            _, t_obj, tm_obj = team_reg_row
+            team_info = {
+                "teamId": str(t_obj.id),
+                "teamName": t_obj.name,
+                "isLeader": tm_obj.is_leader,
+            }
+        elif linked_reg.team_id:
+            t_obj = await db.get(Team, linked_reg.team_id)
+            if t_obj:
+                team_info = {
+                    "teamId": str(t_obj.id),
+                    "teamName": t_obj.name,
+                    "isLeader": t_obj.leader_id == ticket.user_id,
+                }
 
     existing = (
         await db.execute(
@@ -976,6 +1581,7 @@ async def checkin(
                 "participantName": user.full_name if user else "Participant",
                 "checkedInAt": edition_service.aware(existing.checked_in_at).isoformat(),
                 "message": "Already checked in for this day.",
+                "team": team_info,
             }
         }
     rec = AttendanceRecord(
@@ -991,11 +1597,32 @@ async def checkin(
     db.add(rec)
     await db.flush()
     await db.commit()
+
+    college_reg = (
+        await db.execute(
+            select(CollegeRegistration).where(
+                CollegeRegistration.user_id == ticket.user_id,
+                CollegeRegistration.edition_id == edition_id,
+            )
+        )
+    ).scalars().first()
+    is_verified = college_reg.verification_status == "approved" if college_reg else True
+    warning = (
+        "UNVERIFIED ATTENDEE: Check physical college ID on the spot."
+        if (college_reg and college_reg.verification_status != "approved")
+        else None
+    )
+
     return {
         "data": {
             "result": "admitted",
             "participantName": user.full_name if user else "Participant",
             "checkedInAt": datetime.now(UTC).isoformat(),
+            "isVerified": is_verified,
+            "verificationStatus": college_reg.verification_status if college_reg else "approved",
+            "warning": warning,
+            "team": team_info,
+            "eventId": str(event_id) if event_id else None,
         }
     }
 

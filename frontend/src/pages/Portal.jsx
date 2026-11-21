@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { QRCodeCanvas } from 'qrcode.react';
 import {
   ArrowRight,
   LayoutDashboard,
@@ -23,8 +24,10 @@ import {
   Users,
   Utensils,
 } from 'lucide-react';
-import { authApi, portalApi, publicApi } from '../lib/api.js';
-import { ISTE, LOGO, NSSCE } from './Public.jsx';
+import { authApi, portalApi, publicApi, registrationApi } from '../lib/api.js';
+import { openCheckout } from '../lib/razorpay.js';
+import { ISTE, LOGO, NSSCE, PARALLAX_MARK } from './Public.jsx';
+import { BrandedQr } from '../components/BrandedQr.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { useTheme } from '../lib/theme.jsx';
@@ -45,6 +48,7 @@ import {
   Stat,
   StatusBadge,
   Sheet,
+  clearAsyncCache,
   useAsync,
 } from '../components/ui.jsx';
 
@@ -103,13 +107,44 @@ async function openRazorpay(order, user) {
 }
 
 export function PortalLayout() {
-  const { user, logout, isStaff } = useAuth();
-  const { edition } = useSite();
+  const { user, logout, isStaff, reload: reloadUser } = useAuth();
+  const { edition, refresh: refreshSite } = useSite();
   const navigate = useNavigate();
+  const [pageKey, setPageKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState('');
+  const lastRefreshRef = useRef(0);
 
   const signOut = async () => {
     await logout();
     navigate('/');
+  };
+
+  // Stale-data escape hatch: drop cached API responses, re-check the signed-in
+  // profile and edition/policy, then remount the page so every widget refetches.
+  const refreshAll = async () => {
+    if (refreshing) return;
+    // A short cooldown keeps a repeated click from becoming a request loop.
+    if (Date.now() - lastRefreshRef.current < 10_000) {
+      setRefreshNote('Just refreshed — wait a moment');
+      return;
+    }
+    lastRefreshRef.current = Date.now();
+    setRefreshing(true);
+    setRefreshNote('');
+    try {
+      clearAsyncCache();
+      const freshUser = await reloadUser();
+      refreshSite();
+      setPageKey((value) => value + 1);
+      setRefreshNote(
+        freshUser
+          ? `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          : 'Could not reach the server',
+      );
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -120,6 +155,22 @@ export function PortalLayout() {
         desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition?.name || 'Parallax 2027'}.`}
         aside={
           <div className="title-badges">
+            <button
+              type="button"
+              className="button ghost small"
+              onClick={refreshAll}
+              disabled={refreshing}
+              title="Re-fetch your profile, pass and bookings from the server"
+              style={{ fontSize: 11, padding: '4px 8px' }}
+            >
+              <RefreshCw size={12} className={refreshing ? 'is-spinning' : ''} />
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            {refreshNote ? (
+              <small className="muted" style={{ fontSize: 11 }}>
+                {refreshNote}
+              </small>
+            ) : null}
             {isStaff ? (
               <Badge tone="accent">Staff Access</Badge>
             ) : (
@@ -208,7 +259,7 @@ export function PortalLayout() {
           </button>
         </aside>
         <div className="portal-main">
-          <Outlet />
+          <Outlet key={pageKey} />
         </div>
       </section>
     </>
@@ -226,7 +277,7 @@ function PassStatusCard({ pass, policy }) {
           Buy the {money(policy?.passPricePaise)} pass to unlock event selection, add-ons and your
           entry ticket.
         </p>
-        <Button to="/portal/pass" icon={ArrowRight}>
+        <Button to="/portal/registration" icon={ArrowRight}>
           Get the pass
         </Button>
       </Panel>
@@ -328,11 +379,9 @@ export function PortalOverview() {
               isStaff
                 ? '/manage'
                 : !passData
-                ? '/portal/pass'
-                : !selection?.valid
-                  ? '/portal/select-events'
-                  : verificationStatus?.status !== 'verified'
-                    ? '/portal/verification'
+                  ? '/portal/registration'
+                  : !selection?.valid
+                    ? '/portal/select-events'
                     : '/portal/tickets'
             }
             icon={ArrowRight}
@@ -556,6 +605,7 @@ export function PortalPass() {
 
 export function PortalSelectEvents() {
   const { editionId, slug, policy } = useSite();
+  const { user } = useAuth();
   const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
   const catalogue = useAsync(() => publicApi.events(slug, { pageSize: 100 }), [slug], {
     enabled: Boolean(slug),
@@ -702,13 +752,44 @@ export function PortalSelectEvents() {
       const order = body.data?.order;
       if (order?.mock) {
         await portalApi.mockPay(editionId, order.orderId);
+      } else if (order) {
+        const attendeeUser = {
+          ...user,
+          fullName: user?.fullName || '',
+          email: user?.email || '',
+          phone: user?.phone || '',
+        };
+        const response = await openCheckout(
+          order,
+          attendeeUser,
+          `Add-on Event Bookings (${addons.length}) - Parallax 2027`
+        );
+        if (!response) {
+          setMessage({
+            tone: 'info',
+            text: 'Payment was cancelled or closed. Your add-on bookings were not charged.',
+          });
+          return;
+        }
+        if (response.failed) {
+          setMessage({
+            tone: 'error',
+            text: response.error?.message || 'Payment declined in Razorpay. Please retry or choose another payment method.',
+          });
+          return;
+        }
+        await portalApi.verifyPayment(editionId, {
+          orderId: order.orderId,
+          razorpayPaymentId: response.razorpay_payment_id,
+          razorpaySignature: response.razorpay_signature,
+        });
       }
       setAddons([]);
       await Promise.all([regs.reload(), pass.reload()]);
       setMessage({
         tone: 'success',
         text: order
-          ? `Add-on registrations confirmed. Your tickets are ready.`
+          ? `Add-on registrations confirmed & paid! Your tickets are ready.`
           : 'Add-on registrations confirmed.',
       });
     } catch (error) {
@@ -722,7 +803,7 @@ export function PortalSelectEvents() {
   if (!passData) {
     return (
       <Empty title="A pass is required first" desc="Buy the convention pass to unlock event selection.">
-        <Button to="/portal/pass" icon={ArrowRight}>
+        <Button to="/portal/registration" icon={ArrowRight}>
           Get the pass
         </Button>
       </Empty>
@@ -835,6 +916,14 @@ export function PortalSelectEvents() {
       <p className="muted">
         Each add-on is charged at its published fee after the pass. The pass is never replaced.
       </p>
+      {selected.length < required ? (
+        <InlineMessage tone="info">
+          You still have {required - selected.length} included{' '}
+          {required - selected.length === 1 ? 'slot' : 'slots'} on your pass. Events inside your{' '}
+          {money(cap)} allowance are already covered, so claim them above instead of paying the
+          add-on price here.
+        </InlineMessage>
+      ) : null}
       <div className="addon-box">
         {addonOptions.length ? (
           addonOptions.map((event) => (
@@ -869,8 +958,23 @@ export function PortalSelectEvents() {
           <b>{money(addonTotal)}</b>
           <strong>Due now {money(addonTotal)}</strong>
         </div>
-        <Button onClick={registerAddons} disabled={!addons.length || busy === 'addons'} icon={ArrowRight}>
-          {busy === 'addons' ? 'Registering' : 'Register selected add-ons'}
+
+        {/* Cancellation, Refund & Double Payment Warning */}
+        <div style={{ margin: '14px 0', padding: '12px 14px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', fontSize: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f8fafc', fontWeight: 700, marginBottom: '6px' }}>
+            <ShieldCheck size={15} color="#38bdf8" />
+            <span>Add-on Payment, Refund &amp; Safety Policy</span>
+          </div>
+          <p style={{ margin: '0 0 6px 0', color: '#94a3b8', lineHeight: '1.4' }}>
+            • <b>Refund Guarantee:</b> If an event or workshop is cancelled by the organisers, a 100% refund is credited back to your bank within 5–7 working days.
+          </p>
+          <p style={{ margin: 0, color: '#fbbf24', lineHeight: '1.4' }}>
+            • <b>Avoid Double Charges:</b> Do not refresh or exit while Razorpay checkout is processing. If money is deducted but tickets take a moment, wait 2 minutes or check your receipts before trying again.
+          </p>
+        </div>
+
+        <Button onClick={registerAddons} disabled={!addons.length || busy === 'addons'} icon={CreditCard} variant="primary">
+          {busy === 'addons' ? 'Securing booking…' : `Pay ${money(addonTotal)} with Razorpay`}
         </Button>
         <p className="demo-label">
           Add-on reservations expire after {policy?.holdMinutes || 15} minutes if unpaid.
@@ -882,12 +986,17 @@ export function PortalSelectEvents() {
 
 export function PortalRegistrations() {
   const { editionId } = useSite();
+  const [activeTab, setActiveTab] = useState('events');
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
   const [confirm, setConfirm] = useState(null);
   const [message, setMessage] = useState(null);
   const rows = regs.data?.data || [];
+  const cancelCutoff = confirm?.eventStartsAt
+    ? new Date(confirm.eventStartsAt).getTime() - 24 * 60 * 60 * 1000
+    : null;
+  const cancelLocked = cancelCutoff !== null && Date.now() >= cancelCutoff;
 
   const cancel = async (id) => {
     setMessage(null);
@@ -904,59 +1013,134 @@ export function PortalRegistrations() {
 
   return (
     <>
-      <SectionHead
-        kicker="Selection Record"
-        title="My registrations"
-        action={
-          <Button to="/portal/select-events" variant="ghost" icon={Plus}>
-            Add events
-          </Button>
-        }
-      />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-      {regs.loading ? <Loading label="Loading registrations" rows={2} /> : null}
-      {regs.error ? <ErrorBox error={regs.error} onRetry={regs.reload} /> : null}
-      {!regs.loading && !rows.length ? (
-        <Empty title="No registrations yet" desc="Included selections and add-on events appear here.">
-          <Button to="/portal/select-events" icon={ArrowRight}>
-            Choose events
-          </Button>
-        </Empty>
-      ) : null}
-      <div className="registration-list">
-        {rows.map((row) => (
-          <div className="registration-row" key={row.id}>
-            <span className="event-dot" />
-            <div>
-              <b>{row.eventTitle}</b>
-              <small>
-                {row.registrationNumber} · {row.category} ·{' '}
-                {row.teamName ? `${row.teamName} · ` : ''}
-                {row.kind}
-              </small>
-            </div>
-            <span className="reg-fee">{money(row.feePaise)}</span>
-            <StatusBadge status={row.status} />
-            {row.status !== 'cancelled' ? (
-              <button className="table-action" onClick={() => setConfirm(row)}>
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        ))}
+      <div className="portal-subtabs" style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className={`button ${activeTab === 'events' ? 'primary' : 'ghost'}`}
+          onClick={() => setActiveTab('events')}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <Ticket size={16} />
+          <span>My Event Registrations</span>
+          {rows.length ? <span className="badge" style={{ padding: '2px 6px', fontSize: '11px' }}>{rows.length}</span> : null}
+        </button>
+        <button
+          type="button"
+          className={`button ${activeTab === 'teams' ? 'primary' : 'ghost'}`}
+          onClick={() => setActiveTab('teams')}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <Users size={16} />
+          <span>My Teams &amp; Invites</span>
+        </button>
       </div>
-      <Sheet open={Boolean(confirm)} title="Cancel registration" onClose={() => setConfirm(null)}>
-        <p className="muted">
-          Cancel the registration for <b>{confirm?.eventTitle}</b>? Add-on fees already paid are
-          handled by the finance team, not automatically.
-        </p>
-        <div className="sheet-actions">
-          <Button variant="ghost" onClick={() => setConfirm(null)}>
-            Keep it
-          </Button>
-          <Button onClick={() => cancel(confirm.id)}>Cancel registration</Button>
-        </div>
-      </Sheet>
+
+      {activeTab === 'teams' ? (
+        <PortalTeams />
+      ) : (
+        <>
+          <SectionHead
+            kicker="Selection Record"
+            title="My registrations"
+            action={
+              <Button to="/portal/select-events" variant="ghost" icon={Plus}>
+                Add events
+              </Button>
+            }
+          />
+          {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+          {regs.loading ? <Loading label="Loading registrations" rows={2} /> : null}
+          {regs.error ? <ErrorBox error={regs.error} onRetry={regs.reload} /> : null}
+          {!regs.loading && !rows.length ? (
+            <Empty title="No registrations yet" desc="Included selections and add-on events appear here.">
+              <Button to="/portal/select-events" icon={ArrowRight}>
+                Choose events
+              </Button>
+            </Empty>
+          ) : null}
+          <div className="registration-list">
+            {rows.map((row) => (
+              <div className="registration-row" key={row.id}>
+                <span className="event-dot" />
+                <div>
+                  <b>{row.eventTitle}</b>
+                  <small>
+                    {row.registrationNumber} · {row.category} ·{' '}
+                    {row.teamName ? `${row.teamName} · ` : ''}
+                    {row.kind === 'included' ? 'Included with Pass (Free)' : row.kind}
+                  </small>
+                  {row.status === 'cancelled' && row.cancelledBy === 'admin' ? (
+                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '4px', fontWeight: 500 }}>
+                      ⚠️ Removed by administration{row.cancellationReason ? `: ${row.cancellationReason}` : ''}
+                    </div>
+                  ) : row.status === 'cancelled' && row.cancelledBy === 'user' ? (
+                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginTop: '4px' }}>
+                      Cancelled by you · Seat released
+                    </div>
+                  ) : null}
+                </div>
+                <span className="reg-fee">{money(row.feePaise)}</span>
+                <div>
+                  {row.status === 'cancelled' ? (
+                    row.cancelledBy === 'admin' ? (
+                      <Badge tone="bad">Removed by Admin</Badge>
+                    ) : (
+                      <Badge tone="muted">Cancelled</Badge>
+                    )
+                  ) : (
+                    <StatusBadge status={row.status} />
+                  )}
+                </div>
+                {row.status !== 'cancelled' ? (
+                  <button className="table-action" onClick={() => setConfirm(row)}>
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          <Sheet open={Boolean(confirm)} title="Cancel registration" onClose={() => setConfirm(null)}>
+            <p className="muted">
+              Cancel the registration for <b>{confirm?.eventTitle}</b>? Your seat is released
+              immediately and the event ticket is revoked.
+            </p>
+            <div
+              style={{
+                margin: '12px 0 16px',
+                padding: '12px 14px',
+                borderRadius: '10px',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                fontSize: '13px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span className="muted">{confirm?.kind === 'included' ? 'Selection Type' : 'Amount you paid'}</span>
+                <b>{confirm?.kind === 'included' ? 'Included with Pass (₹0)' : money(confirm?.feePaise || 0)}</b>
+              </div>
+              <p className="muted" style={{ margin: 0, lineHeight: 1.5 }}>
+                {confirm?.kind === 'included'
+                  ? 'This event was selected as part of your pass quota. Cancelling releases your seat immediately and restores 1 event credit so you can choose another event before the 24-hour cutoff.'
+                  : 'Refunds are not automatic. The finance desk reviews every cancellation and returns the paid amount, less any processing charges, to your original payment method.'}
+              </p>
+              {cancelLocked ? (
+                <InlineMessage tone="error">
+                  Cancellation is closed: this event starts within 24 hours. Contact the helpdesk if
+                  you cannot attend.
+                </InlineMessage>
+              ) : null}
+            </div>
+            <div className="sheet-actions">
+              <Button variant="ghost" onClick={() => setConfirm(null)}>
+                Keep it
+              </Button>
+              <Button onClick={() => cancel(confirm.id)} disabled={cancelLocked}>
+                Cancel registration
+              </Button>
+            </div>
+          </Sheet>
+        </>
+      )}
     </>
   );
 }
@@ -971,10 +1155,24 @@ export function PortalTickets() {
   });
   const profile = useAsync(() => authApi.profile(), [], { enabled: Boolean(user) });
   const [message, setMessage] = useState(null);
+  const [downloadTicket, setDownloadTicket] = useState(null);
+  const qrDownloadRef = useRef(null);
   const rows = tickets.data?.data || [];
   const prof = profile.data?.data || {};
 
-  const effectiveQrAccent = qrTheme === 'auto' ? accent : qrTheme;
+  // The QR is drawn in the browser from the signed token the API returns, so
+  // downloading it is just a canvas export.
+  useEffect(() => {
+    if (!downloadTicket) return;
+    const canvas = qrDownloadRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = `parallax-pass-${downloadTicket.registrationNumber || downloadTicket.id}.png`;
+    link.click();
+    setMessage({ tone: 'success', text: 'Pass QR downloaded (PNG).' });
+    setDownloadTicket(null);
+  }, [downloadTicket]);
 
   const copy = async (token) => {
     try {
@@ -989,20 +1187,12 @@ export function PortalTickets() {
     window.print();
   };
 
-  const downloadQr = async (ticket) => {
-    try {
-      const url = portalApi.ticketQrUrl(editionId, ticket.id, effectiveQrAccent);
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `parallax-pass-${ticket.token}-${effectiveQrAccent}.svg`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      setMessage({ tone: 'success', text: `Pass QR code downloaded (${effectiveQrAccent} theme).` });
-    } catch {
-      setMessage({ tone: 'error', text: 'Could not download QR code.' });
+  const downloadQr = (ticket) => {
+    if (!ticket?.token) {
+      setMessage({ tone: 'error', text: 'This ticket has no scannable token yet.' });
+      return;
     }
+    setDownloadTicket(ticket);
   };
 
   return (
@@ -1012,9 +1202,18 @@ export function PortalTickets() {
         title="Your official convention pass"
         action={
           rows.length ? (
-            <Button variant="light" onClick={printBadge} icon={Printer}>
-              Print / Save pass
-            </Button>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <Button
+                to="/portal/registration"
+                variant="ghost"
+                icon={IdCard}
+              >
+                Open pass &amp; save PDF
+              </Button>
+              <Button variant="light" onClick={printBadge} icon={Printer}>
+                Print / Save pass
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -1023,7 +1222,7 @@ export function PortalTickets() {
       {tickets.error ? <ErrorBox error={tickets.error} onRetry={tickets.reload} /> : null}
       {!tickets.loading && !rows.length ? (
         <Empty title="No ticket issued yet" desc="Tickets are issued when a pass or paid registration activates.">
-          <Button to="/portal/pass" icon={ArrowRight}>
+          <Button to="/portal/registration" icon={ArrowRight}>
             Get the pass
           </Button>
         </Empty>
@@ -1090,12 +1289,11 @@ export function PortalTickets() {
               <div className="qr-reticle reticle-bl" />
               <div className="qr-reticle reticle-br" />
               <div className="qr-matrix-surface">
-                <img
-                  src={portalApi.ticketQrUrl(editionId, ticket.id, effectiveQrAccent)}
-                  alt={`QR entry pass for ${ticket.title}`}
+                <BrandedQr
+                  value={ticket.token}
+                  title={`QR entry pass for ${ticket.title}`}
                   className="qr-img"
-                  width="200"
-                  height="200"
+                  logoSrc={PARALLAX_MARK}
                 />
               </div>
 
@@ -1182,6 +1380,18 @@ export function PortalTickets() {
           </div>
         ))}
       </div>
+      {downloadTicket ? (
+        <div ref={qrDownloadRef} style={{ display: 'none' }} aria-hidden="true">
+          <QRCodeCanvas
+            value={downloadTicket.token}
+            size={640}
+            level="M"
+            marginSize={4}
+            bgColor="#ffffff"
+            fgColor="#000000"
+          />
+        </div>
+      ) : null}
     </>
   );
 }
@@ -1189,6 +1399,7 @@ export function PortalTickets() {
 export function PortalTeams() {
   const { editionId, slug, policy } = useSite();
   const teams = useAsync(() => portalApi.teams(editionId), [editionId], { enabled: Boolean(editionId) });
+  const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
   const catalogue = useAsync(() => publicApi.events(slug, { format: 'team', pageSize: 100 }), [slug], {
     enabled: Boolean(slug),
   });
@@ -1199,6 +1410,8 @@ export function PortalTeams() {
 
   const teamEvents = catalogue.data?.data || [];
   const rows = teams.data?.data || [];
+  const passActive = pass.data?.data?.status === 'active';
+  const needsPass = Boolean(policy?.teamMembersRequirePass) && !passActive && !pass.loading;
 
   useEffect(() => {
     if (!form.eventId && teamEvents.length) setForm((current) => ({ ...current, eventId: teamEvents[0].id }));
@@ -1228,6 +1441,14 @@ export function PortalTeams() {
           ? 'Every member needs an active convention pass before joining.'
           : 'A pass is not required per member for this edition.'}
       </p>
+      {needsPass ? (
+        <InlineMessage tone="warn">
+          You need an active convention pass before you can create or join a team.{' '}
+          <Link to="/portal/registration" style={{ color: '#38bdf8', fontWeight: 600 }}>
+            Get your pass →
+          </Link>
+        </InlineMessage>
+      ) : null}
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
 
       <div className="portal-columns">
@@ -1310,10 +1531,22 @@ export function PortalTeams() {
                 <Eyebrow>{team.eventTitle}</Eyebrow>
                 <h3>{team.name}</h3>
                 <p className="muted">
-                  {team.members.length} / {team.maxSize} members · {team.status}
+                  {team.members.length} / {team.maxSize} members ·{' '}
+                  {team.status === 'locked' ? (
+                    <span style={{ color: '#fbbf24', fontWeight: 600 }}>🔒 Roster Locked</span>
+                  ) : (
+                    <span style={{ color: '#38bdf8' }}>Forming</span>
+                  )}
                 </p>
               </div>
-              {team.isLeader ? <Badge tone="accent">You lead</Badge> : <Badge>Member</Badge>}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {team.status === 'locked' ? (
+                  <Badge tone="positive">Locked</Badge>
+                ) : (
+                  <Badge tone="accent">Open</Badge>
+                )}
+                {team.isLeader ? <Badge tone="accent">You lead</Badge> : <Badge>Member</Badge>}
+              </div>
             </div>
             <ul className="member-list">
               {team.members.map((member) => (
@@ -1327,7 +1560,31 @@ export function PortalTeams() {
                 </li>
               ))}
             </ul>
-            {team.inviteCode ? (
+            {team.isLeader ? (
+              <div style={{ margin: '14px 0 10px 0', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button
+                  variant={team.status === 'locked' ? 'ghost' : 'primary'}
+                  onClick={() =>
+                    run(
+                      `lock-${team.id}`,
+                      () => portalApi.toggleTeamLock(editionId, team.id),
+                      team.status === 'locked'
+                        ? 'Team roster unlocked.'
+                        : 'Team roster finalized and locked for competition check-in.',
+                    )
+                  }
+                  disabled={busy === `lock-${team.id}`}
+                >
+                  {team.status === 'locked' ? '🔓 Unlock Team Roster' : '🔒 Lock & Finalize Roster'}
+                </Button>
+                <small className="muted" style={{ fontSize: '11px' }}>
+                  {team.status === 'locked'
+                    ? 'Roster is locked for event check-in. Unlock if you need to add or remove members.'
+                    : 'Lock before event start to freeze team members.'}
+                </small>
+              </div>
+            ) : null}
+            {team.inviteCode && team.status !== 'locked' ? (
               <div className="invite-row">
                 <div>
                   <span>INVITE CODE</span>
@@ -1348,15 +1605,21 @@ export function PortalTeams() {
                 </Button>
               </div>
             ) : null}
-            <Button
-              variant="ghost"
-              onClick={() =>
-                run(`leave-${team.id}`, () => portalApi.leaveTeam(editionId, team.id), 'You left the team.')
-              }
-              disabled={busy === `leave-${team.id}`}
-            >
-              Leave team
-            </Button>
+            {team.status !== 'locked' ? (
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  run(`leave-${team.id}`, () => portalApi.leaveTeam(editionId, team.id), 'You left the team.')
+                }
+                disabled={busy === `leave-${team.id}`}
+              >
+                Leave team
+              </Button>
+            ) : (
+              <p className="muted" style={{ fontSize: '12px', fontStyle: 'italic', margin: '8px 0 0 0' }}>
+                Roster is locked. Members cannot leave or change teams.
+              </p>
+            )}
           </Panel>
         ))}
       </div>
@@ -1524,6 +1787,7 @@ export function PortalProfile() {
   const [form, setForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
+  const lastRefreshRef = useRef(0);
 
   useEffect(() => {
     if (profile.data?.data) {
@@ -1543,6 +1807,27 @@ export function PortalProfile() {
   }, [profile.data]);
 
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
+  const refreshDetails = async () => {
+    if (Date.now() - lastRefreshRef.current < 10_000) {
+      setMessage({ tone: 'info', text: 'Details were just refreshed. Try again in a moment.' });
+      return;
+    }
+    lastRefreshRef.current = Date.now();
+    setBusy('refresh');
+    setMessage(null);
+    try {
+      // Direct read first so a failed refetch surfaces instead of silently
+      // keeping the stale cached copy.
+      await authApi.profile();
+      await Promise.all([profile.reload(), reload()]);
+      setMessage({ tone: 'success', text: 'Details refreshed from the server.' });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
 
   const save = async (event) => {
     event.preventDefault();
@@ -1578,7 +1863,20 @@ export function PortalProfile() {
       <SectionHead
         kicker="Account"
         title="Profile and sessions"
-        action={<StatusBadge status={user?.profileComplete ? 'complete' : 'incomplete'} />}
+        action={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Button
+              variant="ghost"
+              onClick={refreshDetails}
+              disabled={busy === 'refresh' || busy === 'save'}
+              icon={RefreshCw}
+              title="Re-fetch your saved details from the server"
+            >
+              {busy === 'refresh' ? 'Refreshing…' : 'Refresh details'}
+            </Button>
+            <StatusBadge status={user?.profileComplete ? 'complete' : 'incomplete'} />
+          </div>
+        }
       />
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       <Panel>

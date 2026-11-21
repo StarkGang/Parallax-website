@@ -46,6 +46,7 @@ class RegistrationSettings(Base, UUIDPrimaryKey, Timestamps):
     )
     max_upload_bytes: Mapped[int] = mapped_column(Integer, default=5_242_880, nullable=False)
     allow_resubmission: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    helpdesk_phone: Mapped[str | None] = mapped_column(String(40), default="+91 94460 00000")
     payment_instructions: Mapped[str | None] = mapped_column(Text)
     refund_policy: Mapped[str | None] = mapped_column(Text)
     approval_message: Mapped[str | None] = mapped_column(Text)

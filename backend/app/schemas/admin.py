@@ -22,6 +22,7 @@ class DashboardStats(CamelModel):
     refunded_paise: int = 0
     registrations_confirmed: int = 0
     registrations_pending: int = 0
+    registrations_cancelled: int = 0
     verifications_pending: int = 0
     checked_in: int = 0
     events_published: int = 0
@@ -313,7 +314,29 @@ class EditionUpdate(CamelModel):
     branding: dict | None = None
 
 
+class AdminForceCancelPayload(CamelModel):
+    reason: str = "Removed from event by administration"
+    issue_refund: bool = False
+    refund_amount_paise: int | None = None
+    refund_reason_note: str | None = None
+
+
+class AdminProcessRefundPayload(CamelModel):
+    amount_paise: int | None = None
+    reason_note: str | None = None
+
+
+class AdminManualAttendancePayload(CamelModel):
+    user_id: uuid.UUID
+    event_id: uuid.UUID | None = None
+    day: str | None = None
+    note: str | None = None
+
+
 __all__ = [
+    "AdminForceCancelPayload",
+    "AdminProcessRefundPayload",
+    "AdminManualAttendancePayload",
     "Metric",
     "DashboardStats",
     "PolicyView",

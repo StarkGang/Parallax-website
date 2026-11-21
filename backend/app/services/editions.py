@@ -341,6 +341,15 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         )
     ).scalar() or 0
 
+    reg_cancelled = (
+        await db.execute(
+            select(func.count(Registration.id)).where(
+                Registration.edition_id == edition_id,
+                Registration.status == "cancelled",
+            )
+        )
+    ).scalar() or 0
+
     verif_pending = (
         await db.execute(
             select(func.count(EligibilityVerification.id)).where(
@@ -455,6 +464,7 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         refunded_paise=refunded,
         registrations_confirmed=reg_confirmed,
         registrations_pending=reg_pending,
+        registrations_cancelled=reg_cancelled,
         verifications_pending=verif_pending,
         checked_in=checked_in,
         events_published=events_pub,

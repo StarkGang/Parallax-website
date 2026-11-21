@@ -8,7 +8,7 @@ from pydantic import Field, field_validator
 
 from app.schemas.common import CamelModel
 
-DOC_CODES = {"college_id", "iste_card"}
+DOC_CODES = {"photo", "college_id", "iste_card"}
 
 
 class DocumentRequirement(CamelModel):
@@ -97,6 +97,7 @@ class RegistrationSettingsUpdate(CamelModel):
     accepted_formats: list[str] | None = None
     max_upload_bytes: int | None = Field(default=None, ge=1024, le=20_971_520)
     allow_resubmission: bool | None = None
+    helpdesk_phone: str | None = Field(default=None, max_length=40)
     payment_instructions: str | None = Field(default=None, max_length=4000)
     refund_policy: str | None = Field(default=None, max_length=4000)
     approval_message: str | None = Field(default=None, max_length=2000)

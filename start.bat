@@ -106,30 +106,34 @@ if not exist "%FRONTEND_DIR%\node_modules" (
 )
 
 :: ---------------------------------------------------
-:: 4. Launch Services
+:: 4. Build the SPA and launch it as ONE app
 :: ---------------------------------------------------
-echo [4/4] Launching Backend & Frontend services...
-echo.
+echo [4/4] Building the frontend and starting the single app...
+cd /d "%FRONTEND_DIR%"
 
-:: Launch Backend in separate window
-if %USE_UV% equ 1 (
-    start "Parallax Backend API [Port 8000]" cmd /k "cd /d "%BACKEND_DIR%" && uv run --python 3.12 uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --reload"
-) else (
-    start "Parallax Backend API [Port 8000]" cmd /k "cd /d "%BACKEND_DIR%" && call "%BACKEND_DIR%\.venv\Scripts\activate.bat" && uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --reload"
+call npm run build
+if %errorlevel% neq 0 (
+    echo   [ERROR] Frontend build failed. Fix the build before launching.
+    pause
+    exit /b 1
 )
 
-:: Launch Frontend in separate window
-start "Parallax Frontend Vite [Port 5173]" cmd /k "cd /d "%FRONTEND_DIR%" && npm run dev"
+:: FastAPI serves the built SPA and the API from the same port, so the whole
+:: product runs as one app at http://localhost:8000
+if %USE_UV% equ 1 (
+    start "Parallax App [Port 8000]" cmd /k "cd /d "%BACKEND_DIR%" && uv run --python 3.12 uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --reload"
+) else (
+    start "Parallax App [Port 8000]" cmd /k "cd /d "%BACKEND_DIR%" && call "%BACKEND_DIR%\.venv\Scripts\activate.bat" && uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --reload"
+)
 
 echo ===================================================
 echo   PARALLAX IS RUNNING!
-echo   -------------------------------------------------
-echo   * Frontend:  http://localhost:5173
+echo   ---------------------------------------------------
+echo   * App:      http://localhost:8000
 echo   * API Docs:  http://localhost:8000/api/docs
 echo   * Dev Admin: owner@parallax.local
 echo ===================================================
 echo.
 echo Opening browser in 3 seconds...
 timeout /t 3 /nobreak >nul
-start http://localhost:5173
-
+start http://localhost:8000

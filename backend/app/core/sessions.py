@@ -119,6 +119,8 @@ def token_from_request(request: Request) -> str | None:
     auth_header = request.headers.get('authorization')
     if auth_header and auth_header.lower().startswith('bearer '):
         return auth_header[7:].strip()
+    # Session tokens are deliberately not accepted from the query string: URLs
+    # leak through referrers, logs and browser history.
     return None
 
 

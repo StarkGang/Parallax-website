@@ -11,12 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.security import hash_token
 from app.models.commerce import ConventionPass, Registration, Team, TeamMember
+from app.models.registration import CollegeRegistration
 from app.models.edition import ConventionEdition, Event
 from app.models.user import ParticipantProfile, User
 from app.schemas.participant import TeamMemberView, TeamView
 from app.services.editions import current_policy
 from app.services.events import event_open
-from app.services.tickets import revoke_for_registration
+from app.services.tickets import issue_for_registration, revoke_for_registration
 
 
 def invite_code() -> str:
@@ -88,6 +89,12 @@ async def serialize_teams(
 
 
 async def _pass_active(db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UUID) -> bool:
+    """A paid pass in either pass model counts as an active pass.
+
+    College registration is the current purchase flow, but it writes a
+    CollegeRegistration row rather than the legacy ConventionPass, so checking
+    only ConventionPass wrongly blocked team creation for paying attendees.
+    """
     row = (
         await db.execute(
             select(ConventionPass.id).where(
@@ -97,7 +104,18 @@ async def _pass_active(db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UU
             )
         )
     ).scalar_one_or_none()
-    return row is not None
+    if row is not None:
+        return True
+    paid = (
+        await db.execute(
+            select(CollegeRegistration.id).where(
+                CollegeRegistration.user_id == user_id,
+                CollegeRegistration.edition_id == edition_id,
+                CollegeRegistration.payment_status.in_(["paid", "completed"]),
+            )
+        )
+    ).scalar_one_or_none()
+    return paid is not None
 
 
 async def create_team(
@@ -115,6 +133,10 @@ async def create_team(
         raise ValidationFailed("This event is not a team event.")
     if not event_open(event):
         raise Conflict("This event is not open for team registration.")
+
+    # One lock per attendee keeps two fast clicks from creating two teams for
+    # the same event.
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
 
     policy = await current_policy(db, edition.id)
     if policy.team_members_require_pass:
@@ -179,7 +201,23 @@ async def join_team(
     if team is None:
         raise NotFound("Team with that invite code not found.")
 
+    # Lock the team row so a burst of joins cannot overshoot team_max_size.
+    team = (
+        await db.execute(
+            select(Team).where(Team.id == team.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if team is None or team.status != "active":
+        raise NotFound("Team with that invite code not found.")
+
     event = await db.get(Event, team.event_id)
+    if team.status == "locked":
+        raise Conflict("This team roster has been locked by the team leader.")
+    if event and event.starts_at:
+        now_dt = datetime.now(UTC)
+        ev_start = event.starts_at if event.starts_at.tzinfo else event.starts_at.replace(tzinfo=UTC)
+        if now_dt >= ev_start:
+            raise Conflict("Team rosters are locked after the event begins.")
     policy = await current_policy(db, edition.id)
     if policy.team_members_require_pass:
         if not await _pass_active(db, user_id, edition.id):
@@ -215,38 +253,87 @@ async def join_team(
     )
     db.add(mem)
     await db.flush()
-    return team
 
-
-async def _maybe_register_team(db: AsyncSession, team: Team, event: Event) -> None:
-    # Automatic registration record for team
-    existing = (
+    # Link existing registration or issue a team event registration for the new member
+    existing_mem_reg = (
         await db.execute(
             select(Registration).where(
-                Registration.team_id == team.id,
+                Registration.user_id == user_id,
+                Registration.event_id == team.event_id,
+                Registration.status.in_(["confirmed", "reserved"]),
             )
         )
-    ).scalar_one_or_none()
-    if existing is None:
+    ).scalars().first()
+    if existing_mem_reg is not None:
+        existing_mem_reg.team_id = team.id
+        await issue_for_registration(db, existing_mem_reg)
+    else:
         reg_num = f"TM-{secrets.token_hex(4).upper()}"
-        reg = Registration(
+        mem_reg = Registration(
             edition_id=team.edition_id,
-            user_id=team.leader_id,
+            user_id=user_id,
             event_id=team.event_id,
             team_id=team.id,
-            kind="addon",
+            kind="team",
             fee_paise=0,
             status="confirmed",
             registration_number=reg_num,
         )
-        db.add(reg)
+        db.add(mem_reg)
         await db.flush()
+        await issue_for_registration(db, mem_reg)
+
+    return team
+
+
+async def _maybe_register_team(db: AsyncSession, team: Team, event: Event) -> None:
+    # Check if leader already has a confirmed registration for this event (e.g. from pass selection)
+    existing = (
+        await db.execute(
+            select(Registration).where(
+                Registration.user_id == team.leader_id,
+                Registration.event_id == team.event_id,
+                Registration.status.in_(["confirmed", "reserved"]),
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        existing.team_id = team.id
+        await issue_for_registration(db, existing)
+        return
+
+    # Automatic registration record for team leader
+    team_reg = (
+        await db.execute(
+            select(Registration).where(
+                Registration.team_id == team.id,
+                Registration.user_id == team.leader_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if team_reg is None:
+        reg_num = f"TM-{secrets.token_hex(4).upper()}"
+        team_reg = Registration(
+            edition_id=team.edition_id,
+            user_id=team.leader_id,
+            event_id=team.event_id,
+            team_id=team.id,
+            kind="team",
+            fee_paise=0,
+            status="confirmed",
+            registration_number=reg_num,
+        )
+        db.add(team_reg)
+        await db.flush()
+        await issue_for_registration(db, team_reg)
 
 
 async def leave_team(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.UUID) -> None:
     team = await db.get(Team, team_id)
     if team is None:
         raise NotFound("Team not found.")
+    if team.status == "locked":
+        raise Conflict("This team roster is locked and cannot be modified.")
     mem = (
         await db.execute(
             select(TeamMember).where(
@@ -278,6 +365,23 @@ async def leave_team(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.UUID) -
             await db.delete(row)
         await db.flush()
         return
+    # If leaving member had an event registration for this team, revoke it or unlink team
+    from datetime import UTC, datetime
+    mem_reg = (
+        await db.execute(
+            select(Registration).where(
+                Registration.user_id == user_id,
+                Registration.team_id == team_id,
+            )
+        )
+    ).scalars().first()
+    if mem_reg is not None:
+        if mem_reg.kind == "team":
+            mem_reg.status = "cancelled"
+            mem_reg.cancelled_at = datetime.now(UTC)
+            await revoke_for_registration(db, mem_reg.id)
+        else:
+            mem_reg.team_id = None
     await db.delete(mem)
     await db.flush()
 
@@ -328,6 +432,17 @@ async def team_seats(db: AsyncSession, event_id: uuid.UUID) -> int:
     ).scalar() or 0
 
 
+async def toggle_team_lock(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.UUID) -> Team:
+    team = await db.get(Team, team_id)
+    if team is None:
+        raise NotFound("Team not found.")
+    if team.leader_id != user_id:
+        raise Conflict("Only the team leader can lock or unlock the roster.")
+    team.status = "forming" if team.status == "locked" else "locked"
+    await db.flush()
+    return team
+
+
 __all__ = [
     "invite_code",
     "list_for_user",
@@ -337,6 +452,7 @@ __all__ = [
     "join_team",
     "_maybe_register_team",
     "leave_team",
+    "toggle_team_lock",
     "rotate_invite",
     "get_team",
     "team_registration",

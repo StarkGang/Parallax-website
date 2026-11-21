@@ -56,7 +56,6 @@ import './TeamFrame.css';
 import HeroOdyssey from '../components/HeroOdyssey.jsx';
 import PageScene from '../components/PageScene.jsx';
 import { MascotEasterEggBubble, useMascotEasterEgg } from '../components/MascotEasterEgg.jsx';
-import { RazorpayCheckoutButton } from '../components/RazorpayCheckoutButton.jsx';
 
 const TIER_SHORT_LABELS = {
   iste_member: 'ISTE',
@@ -68,6 +67,16 @@ const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/
 const GLOBE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/modified assets/globe.svg`;
 const NSSCE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp`;
 const ISTE = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png`;
+// Served straight from public/ so dev and production resolve the same vector.
+const PARALLAX_MARK = `${import.meta.env.BASE_URL}images/parallax-vector.svg`;
+const TEAM_PLACEHOLDER = `${import.meta.env.BASE_URL}images/team/placeholder.svg`;
+const VENUE_ADDRESS = 'NSS Nagar, Akathethara, Palakkad, Kerala 678008';
+
+function teamImageFallback(event) {
+  const img = event.currentTarget;
+  if (img.src.endsWith('/placeholder.svg')) return;
+  img.src = TEAM_PLACEHOLDER;
+}
 
 // High-fidelity architectural parallax depth backplates & vector assets
 const PARALLAX_BG_VAULT = `${import.meta.env.BASE_URL}images/parallax-bg-vault.webp`;
@@ -674,11 +683,31 @@ function useParallaxScroll() {
 }
 
 function PassHighlightSection({ policy }) {
-  const { edition } = useSite();
+  const { edition, slug } = useSite();
+  const tiers = useAsync(() => publicApi.registrationCategories(slug), [slug], {
+    enabled: Boolean(slug),
+  });
+  const registrationTiers = tiers.data?.data || [];
+  const tierFor = (code) => registrationTiers.find((tier) => tier.code === code);
+  const isteTier = tierFor('iste_member');
+  const nonIsteTier = tierFor('non_iste');
+  const polytechnicTier = tierFor('polytechnic');
+  const cheapestTier = registrationTiers.reduce(
+    (cheapest, tier) => (!cheapest || tier.feePaise < cheapest.feePaise ? tier : cheapest),
+    null,
+  );
+  const fromPrice = cheapestTier ? money(cheapestTier.feePaise) : '';
+  const btechPerks = [
+    isteTier ? `B.Tech ISTE ${money(isteTier.feePaise)}` : null,
+    nonIsteTier ? `B.Tech Non-ISTE ${money(nonIsteTier.feePaise)}` : null,
+  ].filter(Boolean);
+  const tierPerks = [
+    polytechnicTier ? `Polytechnic ${money(polytechnicTier.feePaise)}` : null,
+    btechPerks.length ? btechPerks.join(' · ') : null,
+  ].filter(Boolean);
   const tiltRef = useCardTilt({ maxTilt: 2.5, scale: 1.01 });
   const lunchDays = policy?.lunchIncludedDays?.length || 2;
   const includedCount = policy?.includedEventCount || 3;
-  const priceRupees = Math.round((policy?.passPricePaise || 50000) / 100);
   const valueCap = money(policy?.includedValueCapPaise || 45000);
   const sceneRef = useRef(null);
 
@@ -715,12 +744,12 @@ function PassHighlightSection({ policy }) {
       <div className="pass-scene-floor" aria-hidden="true" />
       <div className="pass-scene-card">
         <HolographicTicket
-          stubText="FROM ₹299"
+          stubText={fromPrice ? `FROM ${fromPrice}` : 'GET PASS'}
           dates={dateRange(edition?.startsAt, edition?.endsAt).toUpperCase()}
           city={edition?.city || 'Palakkad'}
           perks={[
             `Lunch on ${lunchDays === 2 ? 'both days' : 'selected day'}`,
-            `Tiered from ₹299 (Polytechnic) & ₹500 (B.Tech)`,
+            ...tierPerks,
             'Unrestricted access to all exhibitions & talks',
           ]}
         />
@@ -923,8 +952,48 @@ function placeLabel(...parts) {
     .join(', ');
 }
 
+function useCountdown(targetIso) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!targetIso) return undefined;
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [targetIso]);
+
+  if (!targetIso) return null;
+  const target = new Date(targetIso).getTime();
+  if (!Number.isFinite(target)) return null;
+
+  const remaining = target - now;
+  if (remaining <= 0) return { live: true };
+
+  return {
+    live: false,
+    days: Math.floor(remaining / 86_400_000),
+    hours: Math.floor((remaining % 86_400_000) / 3_600_000),
+    minutes: Math.floor((remaining % 3_600_000) / 60_000),
+  };
+}
+
 export function About() {
-  const { edition, policy } = useSite();
+  const { edition, policy, slug } = useSite();
+  const countdown = useCountdown(edition?.startsAt);
+  const catalogue = useAsync(() => publicApi.events(slug, { pageSize: 1 }), [slug], {
+    enabled: Boolean(slug),
+  });
+  const eventTotal = catalogue.data?.meta?.total;
+  const dayCount =
+    edition?.startsAt && edition?.endsAt
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(edition.endsAt).setHours(23, 59) -
+              new Date(edition.startsAt).setHours(0, 0)) /
+              86_400_000,
+          ),
+        )
+      : 2;
   return (
     <div className="page-scene-page">
       <PageScene bg={BACKGROUND_ART} mascot={MASCOT_ART}>
@@ -971,17 +1040,83 @@ export function About() {
               <b>{dateRange(edition?.startsAt, edition?.endsAt)}</b>
             </div>
           </div>
+          <div className="about-stats" aria-label="Convention at a glance">
+            <div className="about-stat">
+              <b>{dayCount}</b>
+              <span>Days on campus</span>
+            </div>
+            <div className="about-stat">
+              <b>{catalogue.loading ? '—' : eventTotal ?? '—'}</b>
+              <span>Live events</span>
+            </div>
+            <div className="about-stat">
+              <b>{policy?.includedEventCount ?? 3}</b>
+              <span>Included with a pass</span>
+            </div>
+          </div>
         </HudFrame>
         <HudFrame as="article" className="host-card">
           <img src={NSSCE} alt={`${edition?.host || 'NSSCE'} emblem`} />
           <Eyebrow>Host Institution</Eyebrow>
           <h3>{edition?.host || 'NSS College of Engineering'}</h3>
           <p>{edition?.city || 'Palakkad, Kerala'}</p>
-          <div className="host-rule" />
+          <div className="host-facts">
+            <div>
+              <span>Campus</span>
+              <b>{edition?.venue || 'NSSCE Campus'}</b>
+            </div>
+            <div>
+              <span>Dates</span>
+              <b>{dateRange(edition?.startsAt, edition?.endsAt)}</b>
+            </div>
+            <div>
+              <span>Check-in</span>
+              <b>Main auditorium</b>
+            </div>
+          </div>
           <p>
-            Get your Pass Now!, lunch included on{' '}
-            {policy?.lunchIncludedDays?.length || 0} days.
+            One pass covers both days, with lunch included on{' '}
+            {policy?.lunchIncludedDays?.length || dayCount} days.
           </p>
+          {countdown ? (
+            countdown.live ? (
+              <div className="host-countdown is-live">
+                <span className="host-countdown-kicker">
+                  <i aria-hidden="true" /> Convention status
+                </span>
+                <b>Live this weekend</b>
+                <span className="host-countdown-date">
+                  {dateRange(edition?.startsAt, edition?.endsAt)}
+                </span>
+              </div>
+            ) : (
+              <div className="host-countdown">
+                <span className="host-countdown-kicker">Doors open in</span>
+                <div className="host-countdown-grid">
+                  <div>
+                    <b>{countdown.days}</b>
+                    <span>Days</span>
+                  </div>
+                  <div>
+                    <b>{String(countdown.hours).padStart(2, '0')}</b>
+                    <span>Hrs</span>
+                  </div>
+                  <div>
+                    <b>{String(countdown.minutes).padStart(2, '0')}</b>
+                    <span>Min</span>
+                  </div>
+                </div>
+              </div>
+            )
+          ) : null}
+          <div className="host-card-cta">
+            <Button to="/pass" icon={ArrowRight}>
+              Get your pass
+            </Button>
+            <Link className="host-card-link" to="/venue">
+              Venue &amp; directions <ArrowUpRight size={12} strokeWidth={2} />
+            </Link>
+          </div>
         </HudFrame>
       </section>
     </div>
@@ -1393,44 +1528,35 @@ export function PassPage() {
               Tiered pricing for Polytechnic &amp; B.Tech students. Lunch &amp; kits included.
             </p>
 
-            {/* Clean Tier Matrix like modern SaaS / Conference pricing */}
-            <div
-              style={{
-                width: '100%',
-                background: 'rgba(255, 255, 255, 0.03)',
-                border: '1px solid rgba(255, 255, 255, 0.09)',
-                borderRadius: '12px',
-                padding: '14px 16px',
-                margin: '18px 0 20px',
-              }}
-            >
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', marginBottom: '10px' }}>
-                Pass Categories &amp; Pricing
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>Polytechnic Student</span>
-                  <b style={{ color: '#38bdf8' }}>₹299</b>
+            {/* Prices are rendered from the live registration categories. */}
+            {registrationTiers.length ? (
+              <div className="apple-tier-panel">
+                <div className="apple-tier-head">
+                  <span>Pass pricing</span>
+                  <span>Live fees</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>B.Tech (ISTE Member)</span>
-                  <b style={{ color: '#38bdf8' }}>
-                    ₹500 <span style={{ fontSize: '10px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 6px', borderRadius: '4px', marginLeft: '4px' }}>ISTE DISCOUNT</span>
-                  </b>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: '#f8fafc' }}>B.Tech (Non-ISTE)</span>
-                  <b style={{ color: '#38bdf8' }}>₹600</b>
+                <div className="apple-tier-list">
+                  {registrationTiers.map((tier) => (
+                    <div className="apple-tier-row" key={tier.id}>
+                      <span className="apple-tier-name">{tier.name}</span>
+                      <b className="apple-tier-price">
+                        {money(tier.feePaise)}
+                        {tier.code === 'iste_member' ? (
+                          <span className="apple-tier-tag">ISTE</span>
+                        ) : null}
+                      </b>
+                    </div>
+                  ))}
                 </div>
               </div>
-            </div>
+            ) : null}
 
-            <div className="apple-pass-benefits" style={{ margin: '0 0 24px', width: '100%' }}>
+            <div className="apple-pass-benefits">
               <div className="apple-benefit-row">
                 <span className="apple-check-icon">
                   <Check size={13} strokeWidth={2.4} />
                 </span>
-                <span>
+                <span className="apple-benefit-copy">
                   <b>Lunch included</b> on both convention days ({lunchDays} days)
                 </span>
               </div>
@@ -1438,7 +1564,7 @@ export function PassPage() {
                 <span className="apple-check-icon">
                   <Check size={13} strokeWidth={2.4} />
                 </span>
-                <span>
+                <span className="apple-benefit-copy">
                   <b>
                     {mode} {includedCount} included events
                   </b>{' '}
@@ -1449,7 +1575,7 @@ export function PassPage() {
                 <span className="apple-check-icon">
                   <Check size={13} strokeWidth={2.4} />
                 </span>
-                <span>
+                <span className="apple-benefit-copy">
                   <b>Full floor access</b> with verified digital convention ticket
                 </span>
               </div>
@@ -1462,21 +1588,12 @@ export function PassPage() {
               </span>
             </Link>
 
-            <div style={{ marginTop: '12px', width: '100%' }}>
-              <RazorpayCheckoutButton
-                amount={50000}
-                description="Parallax 2027 Convention Pass"
-                buttonText="Quick Razorpay Checkout (From ₹299)"
-              />
-            </div>
-
             {registrationTiers.length ? (
               <a className="apple-registration-strip" href="#registration">
                 <span className="apple-registration-label">College registration</span>
                 <span className="apple-registration-prices">
-                  {registrationTiers.map((tier, index) => (
+                  {registrationTiers.map((tier) => (
                     <span key={tier.id}>
-                      {index ? ' · ' : ''}
                       {TIER_SHORT_LABELS[tier.code] || tier.name} <b>{money(tier.feePaise)}</b>
                     </span>
                   ))}
@@ -1541,6 +1658,15 @@ export function PassPage() {
                 Selection locks on {date(policy?.selectionChangeDeadline)}. Unpaid add-on
                 reservations expire after {policy?.holdMinutes || 15} minutes.
               </p>
+            </div>
+
+            <div className="apple-pass-copy-cta">
+              <Button to="/portal/registration" icon={ArrowRight}>
+                Start registration
+              </Button>
+              <Link className="apple-pass-copy-link" to="/faq">
+                Read the FAQ <ArrowUpRight size={12} strokeWidth={2} />
+              </Link>
             </div>
           </HudFrame>
         </div>
@@ -1704,7 +1830,7 @@ export function VenuePage() {
           </div>
           <div className="map-caption">
             <MapPin size={16} strokeWidth={1.5} />
-            <span>NSS Nagar, Akathethara, Palakkad, Kerala 678008</span>
+            <span>{VENUE_ADDRESS}</span>
           </div>
         </HudFrame>
         <HudFrame as="article" className="venue-copy">
@@ -1747,6 +1873,54 @@ export function VenuePage() {
             </Button>
           </div>
         </HudFrame>
+      </section>
+      <section className="section venue-notes" aria-label="Getting to the venue">
+        <article className="venue-note">
+          <span className="venue-note-icon" aria-hidden="true">
+            <MapPin size={17} strokeWidth={1.7} />
+          </span>
+          <div className="venue-note-copy">
+            <span className="venue-note-kicker">Address</span>
+            <b>NSS College of Engineering</b>
+            <p>{VENUE_ADDRESS}</p>
+          </div>
+        </article>
+        <article className="venue-note">
+          <span className="venue-note-icon" aria-hidden="true">
+            <Navigation size={17} strokeWidth={1.7} />
+          </span>
+          <div className="venue-note-copy">
+            <span className="venue-note-kicker">Transit</span>
+            <b>Getting here</b>
+            <p className="venue-note-route">
+              <span>
+                <em>Rail</em>
+                <strong>Palakkad Junction (PGT)</strong>
+                <i>~7 km</i>
+              </span>
+              <span>
+                <em>Air</em>
+                <strong>Coimbatore Airport (CJB)</strong>
+                <i>~65 km</i>
+              </span>
+            </p>
+          </div>
+        </article>
+        <article className="venue-note">
+          <span className="venue-note-icon" aria-hidden="true">
+            <Clock3 size={17} strokeWidth={1.7} />
+          </span>
+          <div className="venue-note-copy">
+            <span className="venue-note-kicker">Arrival</span>
+            <b>Check-in</b>
+            <p>Registration desk at the main auditorium, open before the first session on each day.</p>
+            <div className="venue-note-tags">
+              <span>Both days</span>
+              <span>Digital pass</span>
+              <span>College ID</span>
+            </div>
+          </div>
+        </article>
       </section>
     </div>
   );
@@ -1815,20 +1989,56 @@ export function FAQPage() {
         />
       </PageScene>
       <section className="section apple-faq-section">
-        <div className="apple-faq-list">
-          {rows.map(([question, answer]) => (
-            <details className="apple-faq-card" key={question}>
-              <summary className="apple-faq-summary">
-                <span className="apple-faq-question">{question}</span>
-                <span className="apple-faq-chevron" aria-hidden="true">
-                  <ChevronDown size={18} strokeWidth={2} />
-                </span>
-              </summary>
-              <div className="apple-faq-answer">
-                <p>{answer}</p>
-              </div>
-            </details>
-          ))}
+        <div className="apple-faq-layout">
+          <aside className="faq-aside">
+            <Eyebrow>Before you ask</Eyebrow>
+            <h2>
+              Clear answers.
+              <br />
+              <em>No fine print.</em>
+            </h2>
+            <p>
+              Passes, event choices, verification and refunds — the details that matter, in one
+              place.
+            </p>
+            <div className="faq-aside-actions">
+              <Button to="/pass" icon={ArrowRight}>
+                See pass options
+              </Button>
+              <Button to="/contact" variant="ghost">
+                Talk to the desk
+              </Button>
+            </div>
+            <ul className="faq-aside-facts">
+              <li>
+                <span>Pass</span>
+                <b>{money(policy?.passPricePaise)}</b>
+              </li>
+              <li>
+                <span>Included events</span>
+                <b>{policy?.includedEventCount ?? 3}</b>
+              </li>
+              <li>
+                <span>Lunch</span>
+                <b>{(policy?.lunchIncludedDays || []).length || 2} days</b>
+              </li>
+            </ul>
+          </aside>
+          <div className="apple-faq-list">
+            {rows.map(([question, answer]) => (
+              <details className="apple-faq-card" key={question}>
+                <summary className="apple-faq-summary">
+                  <span className="apple-faq-question">{question}</span>
+                  <span className="apple-faq-chevron" aria-hidden="true">
+                    <ChevronDown size={18} strokeWidth={2} />
+                  </span>
+                </summary>
+                <div className="apple-faq-answer">
+                  <p>{answer}</p>
+                </div>
+              </details>
+            ))}
+          </div>
         </div>
       </section>
     </div>
@@ -1992,12 +2202,10 @@ function TeamMemberCard({ member }) {
               .join('')}
           >
             <img
-              src={imageUrl}
+              src={member.image ? imageUrl : TEAM_PLACEHOLDER}
               alt={member.name}
               loading="lazy"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
+              onError={teamImageFallback}
             />
           </div>
 
@@ -2024,12 +2232,10 @@ function TeamMemberCard({ member }) {
     <article className="team-member-card" {...mascotProps}>
       <div className="team-member-image">
         <img
-          src={imageUrl}
+          src={member.image ? imageUrl : TEAM_PLACEHOLDER}
           alt={member.name}
           loading="lazy"
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
+          onError={teamImageFallback}
         />
       </div>
 
@@ -2360,25 +2566,36 @@ export function Footer() {
   return (
     <footer className="footer">
       <div className="footer-top">
-        <Link
-          to="/"
-          className="footer-brand"
-          aria-label={`${edition?.name || 'Parallax 2027'} home`}
-        >
-          <img
-            src={ISTE}
-            alt={edition?.organizer || 'ISTE'}
-            className="footer-logo footer-iste-logo"
-          />
-        </Link>
-        <p>Organised by ISTE</p>
+        <div className="footer-identity">
+          <Link
+            to="/"
+            className="footer-brand"
+            aria-label={`${edition?.name || 'Parallax 2027'} home`}
+          >
+            <img
+              src={ISTE}
+              alt={edition?.organizer || 'ISTE'}
+              className="footer-logo footer-iste-logo"
+            />
+          </Link>
+          <div className="footer-identity-copy">
+            <span className="footer-kicker">Organised by ISTE</span>
+            <strong>
+              {edition?.name || 'Parallax 2027'}
+              <span>{dateRange(edition?.startsAt, edition?.endsAt)}</span>
+            </strong>
+          </div>
+        </div>
         <div className="footer-host">
           <img src={NSSCE} alt="NSSCE emblem" />
-          <span>
-            Hosted by {(edition?.host || 'NSS College of Engineering').split(',')[0]}
-            <br />
-            {edition?.city || 'Palakkad, Kerala'}
-          </span>
+          <div className="footer-host-copy">
+            <span className="footer-kicker">Host campus</span>
+            <span>
+              {(edition?.host || 'NSS College of Engineering').split(',')[0]}
+              <br />
+              {edition?.city || 'Palakkad, Kerala'}
+            </span>
+          </div>
         </div>
       </div>
       <div className="footer-links">
@@ -2399,7 +2616,7 @@ export function Footer() {
         ))}
       </div>
       <div className="footer-bottom">
-        <span className="footer-copy">© 2027 All rights reserved.</span>
+        <span className="footer-copy">© {new Date().getFullYear()} Parallax. All rights reserved.</span>
         <span className="footer-credits">
           Developed by{' '}
           <a
@@ -2429,4 +2646,4 @@ export function Footer() {
   );
 }
 
-export { ISTE, LOGO, NSSCE, GLOBE };
+export { ISTE, LOGO, NSSCE, GLOBE, PARALLAX_MARK };

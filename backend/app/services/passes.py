@@ -18,12 +18,18 @@ from app.models.commerce import (
 from app.models.edition import ConventionEdition, EditionPolicy, Event
 from app.schemas.participant import SelectedEvent, SelectionState
 from app.services.editions import aware, registration_open
+from app.services.events import seats_taken
+from app.services.tickets import (
+    issue_for_pass,
+    issue_for_registration,
+    revoke_for_registration,
+)
 
 
 async def get_pass(
     db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UUID
 ) -> ConventionPass | None:
-    return (
+    user_pass = (
         (
             await db.execute(
                 select(ConventionPass)
@@ -38,6 +44,87 @@ async def get_pass(
         .scalars()
         .first()
     )
+    if user_pass is not None and user_pass.status == "active":
+        return user_pass
+
+    # Self-healing pass bridge: if the user has a paid college registration, activate immediately
+    from app.models.registration import CollegeRegistration
+    from app.services.editions import current_policy
+
+    paid_reg = (
+        await db.execute(
+            select(CollegeRegistration).where(
+                CollegeRegistration.user_id == user_id,
+                CollegeRegistration.edition_id == edition_id,
+                CollegeRegistration.payment_status.in_(["paid", "completed"]),
+            )
+        )
+    ).scalar_one_or_none()
+
+    if paid_reg is not None:
+        policy = await current_policy(db, edition_id)
+        user_pass = await activate_pass_for_registration(
+            db, user_id, edition_id, policy, paid_reg.fee_paise
+        )
+        await db.flush()
+        return user_pass
+
+    return user_pass
+
+
+async def activate_pass_for_registration(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    edition_id: uuid.UUID,
+    policy: EditionPolicy,
+    price_paise: int,
+) -> ConventionPass:
+    """Ensure a paid college registration has an active pass and entry ticket.
+
+    The college-registration checkout is the participant-facing purchase flow,
+    but the rest of the portal (event selection, tickets, teams) reads the
+    ``ConventionPass`` tables. Without this bridge a paying attendee would have
+    no pass, no ticket and no team access even though money moved.
+    """
+    existing = (
+        (
+            await db.execute(
+                select(ConventionPass)
+                .where(
+                    ConventionPass.user_id == user_id,
+                    ConventionPass.edition_id == edition_id,
+                )
+                .order_by(ConventionPass.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    now = datetime.now(UTC)
+    if existing is None:
+        existing = ConventionPass(
+            edition_id=edition_id,
+            user_id=user_id,
+            price_paise=price_paise,
+            policy_version=policy.version,
+            lunch_days=policy.lunch_included_days or [],
+            status="active",
+            paid_at=now,
+        )
+        db.add(existing)
+        await db.flush()
+    else:
+        existing.status = "active"
+        existing.paid_at = existing.paid_at or now
+        existing.price_paise = price_paise
+        existing.policy_version = policy.version
+        existing.lunch_days = policy.lunch_included_days or []
+        await db.flush()
+
+    await issue_for_pass(db, existing)
+    await db.flush()
+    return existing
 
 
 async def selections_for(db: AsyncSession, pass_id: uuid.UUID) -> list[uuid.UUID]:
@@ -88,8 +175,6 @@ async def selection_state(
             )
         ).scalars()
     )
-
-    from app.services.events import seats_taken
 
     taken = await seats_taken(db, [e.id for e in events]) if events else {}
     deadline = aware(policy.selection_change_deadline)
@@ -172,6 +257,13 @@ async def set_selections(
     if user_pass.status not in ("pending", "active"):
         raise Conflict("This pass is no longer active, so its selections cannot be changed.")
 
+    # Serialise concurrent saves: one row lock on the pass stops parallel
+    # requests from the same attendee, the event locks below stop two different
+    # attendees from claiming the same last seat.
+    await db.execute(
+        select(ConventionPass.id).where(ConventionPass.id == user_pass.id).with_for_update()
+    )
+
     unique_ids = list(dict.fromkeys(event_ids))
     if len(unique_ids) != len(event_ids):
         raise ValidationFailed("The same event was selected twice.")
@@ -190,10 +282,12 @@ async def set_selections(
         events = list(
             (
                 await db.execute(
-                    select(Event).where(
+                    select(Event)
+                    .where(
                         Event.id.in_(unique_ids),
                         Event.edition_id == user_pass.edition_id,
                     )
+                    .with_for_update()
                 )
             ).scalars()
         )
@@ -215,6 +309,7 @@ async def set_selections(
                         Registration.edition_id == user_pass.edition_id,
                         Registration.event_id.in_(unique_ids),
                         Registration.kind == "addon",
+                        Registration.team_id.is_(None),
                         Registration.status.in_(["confirmed", "reserved", "pending"]),
                     )
                 )
@@ -287,8 +382,6 @@ async def sync_included_registrations(
     if user_pass.status != "active":
         return
 
-    from app.services.tickets import issue_for_registration, revoke_for_registration
-
     keep = set(event_ids)
     existing = list(
         (
@@ -317,6 +410,20 @@ async def sync_included_registrations(
                 row.cancelled_at = None
             await issue_for_registration(db, row)
             continue
+        existing_other = (
+            await db.execute(
+                select(Registration).where(
+                    Registration.user_id == user_pass.user_id,
+                    Registration.event_id == eid,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalars().first()
+        if existing_other is not None:
+            existing_other.kind = "included"
+            await issue_for_registration(db, existing_other)
+            continue
+
         reg = Registration(
             edition_id=user_pass.edition_id,
             user_id=user_pass.user_id,
@@ -406,8 +513,6 @@ async def create_pass_order(
 async def activate_mock_pass(db: AsyncSession, user_pass: ConventionPass) -> None:
     user_pass.status = "active"
     user_pass.paid_at = datetime.now(UTC)
-    from app.services.tickets import issue_for_pass
-
     await issue_for_pass(db, user_pass)
     # Selections made before payment become real included registrations and tickets.
     await sync_included_registrations(
@@ -425,6 +530,7 @@ async def change_pass_state(
 
 __all__ = [
     "get_pass",
+    "activate_pass_for_registration",
     "selections_for",
     "selection_state",
     "set_selections",

@@ -1,13 +1,18 @@
 """Application factory: middleware, routers, lifespan and health checks."""
 
+import mimetypes
+import os
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -34,6 +39,57 @@ from app.db.base import Base
 
 logger = get_logger("app")
 
+# When a production build exists, the API serves the SPA itself so the whole
+# product runs as one app on one origin (no separate frontend service).
+# SPA_DIST lets a container or VPS point at the built files explicitly.
+SPA_DIST = Path(
+    os.getenv("SPA_DIST") or Path(__file__).resolve().parents[2] / "frontend" / "dist"
+)
+SPA_INDEX = SPA_DIST / "index.html"
+SPA_RESERVED_PREFIXES = {"api", "health", "healthz", "auth", "google", "docs", "openapi.json"}
+
+# Serve non-text assets with the right MIME types when the API hosts the SPA.
+for _ext, _type in (
+    (".glb", "model/gltf-binary"),
+    (".gltf", "model/gltf+json"),
+    (".webp", "image/webp"),
+    (".woff2", "font/woff2"),
+    (".webmanifest", "application/manifest+json"),
+):
+    mimetypes.add_type(_type, _ext)
+
+
+def _spa_index() -> Path | None:
+    return SPA_INDEX if SPA_INDEX.is_file() else None
+
+
+class SPAStaticFiles(StaticFiles):
+    """Static files for the built SPA, with client-route history fallback.
+
+    Unknown paths without a file extension fall back to index.html so deep
+    links work. Unknown asset paths stay 404 on purpose: answering a missing
+    .glb/.webp with HTML breaks model and image loaders silently.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        # StaticFiles normalises to OS separators, so check both slash styles.
+        segment = path.replace("\\", "/").split("/", 1)[0].lower()
+        if segment in SPA_RESERVED_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not found")
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # StaticFiles raises Starlette's HTTPException, not FastAPI's subclass.
+            if exc.status_code != 404:
+                raise
+            if Path(path).suffix:
+                raise
+        fallback = await super().get_response("index.html", scope)
+        if fallback.status_code != 200:
+            raise HTTPException(status_code=404, detail="Not found")
+        return fallback
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         supplied_request_id = (request.headers.get("x-request-id") or "").strip()
@@ -48,9 +104,25 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
-        )
+        # A locked-down CSP is correct for JSON API responses, but applying it
+        # to the SPA document would block its own scripts and styles.
+        # Use setdefault: some routes set their own policy. Document content,
+        # for example, must allow framing by this same origin so the admin and
+        # participant PDF review views can display it.
+        if request.url.path.startswith(("/api", "/health")):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            )
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        # Hashed build output can be cached forever; the document must always
+        # be revalidated so a new deploy is picked up.
+        if request.url.path.startswith("/assets/"):
+            response.headers.setdefault(
+                "Cache-Control", "public, max-age=31536000, immutable"
+            )
+        elif request.url.path in ("/", "/index.html"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         if request.url.path.startswith("/api/v1") and not request.url.path.startswith(
             "/api/v1/public/"
         ):
@@ -82,7 +154,10 @@ class BodyLimitMiddleware:
             "/admin/banner-upload",
             "/admin/icons",
         )
-        upload_limit = 20_971_520 + 1_048_576  # 20 MB document + form overhead
+        # Largest legitimate upload is the admin banner (10 MB); document and
+        # photo routes cap themselves far lower. Do not buffer more than that
+        # plus multipart overhead, so a streamed request cannot pin memory.
+        upload_limit = max(10 * 1024 * 1024, settings.max_upload_bytes_document) + 1_048_576
         limit = upload_limit if any(p in path for p in upload_paths) else settings.max_request_body_bytes
         if length and length.isdigit() and int(length) > limit:
             response = JSONResponse(
@@ -142,13 +217,15 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
             settings = get_settings()
             if origin:
                 origin_clean = origin.rstrip("/")
-                is_allowed = (
-                    origin_clean in settings.allowed_origins
-                    or origin_clean.startswith("http://localhost:")
+                # Localhost origins are a development convenience only; a
+                # production deployment must not treat them as trusted.
+                dev_origin = (not settings.is_production) and (
+                    origin_clean.startswith("http://localhost:")
                     or origin_clean.startswith("http://127.0.0.1:")
                     or origin_clean.startswith("https://localhost:")
                     or origin_clean.startswith("https://127.0.0.1:")
                 )
+                is_allowed = origin_clean in settings.allowed_origins or dev_origin
 
                 if not is_allowed:
                     return JSONResponse(
@@ -301,9 +378,14 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return JSONResponse({"status": "ok"})
 
-    @app.get("/", include_in_schema=False)
-    async def root() -> dict:
-        return {"service": "parallax-api", "version": "2.0.0"}
+    # Mounted last so API, health, docs and auth routes always win.
+    if _spa_index() is not None:
+        app.mount("/", SPAStaticFiles(directory=SPA_DIST, html=True), name="spa")
+    else:
+
+        @app.get("/", include_in_schema=False)
+        async def root() -> dict:
+            return {"service": "parallax-api", "version": "2.0.0"}
 
     return app
 

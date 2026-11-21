@@ -1,4 +1,5 @@
 import React, { Component, useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Inbox, LoaderCircle, X } from 'lucide-react';
 
@@ -347,7 +348,9 @@ export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  // Render into <body> so no transformed/overflow-hidden ancestor (page
+  // wrappers, the site footer stacking context) can clip the sheet.
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
@@ -369,7 +372,8 @@ export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 
         </header>
         <div className="sheet-body" data-lenis-prevent><SheetErrorBoundary>{children}</SheetErrorBoundary></div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -17,13 +17,17 @@ from app.models.commerce import (
     PaymentOrder,
     Registration,
     Team,
+    TeamMember,
 )
 from app.models.edition import ConventionEdition, Event, EventCategory
+from app.models.user import User
 from app.schemas.participant import RegistrationView
 from app.services.audit import record
 from app.services.editions import aware, current_policy
 from app.services.events import event_open, seats_taken
 from app.services.tickets import issue_for_registration, revoke_for_registration
+
+CANCELLATION_CUTOFF_HOURS = 24
 
 
 def _number(kind: str) -> str:
@@ -34,20 +38,33 @@ def _number(kind: str) -> str:
 async def list_for_user(
     db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UUID
 ) -> list[Registration]:
+    from sqlalchemy import or_
+    from app.models.commerce import TeamMember
+
+    team_subq = select(TeamMember.team_id).where(TeamMember.user_id == user_id)
     rows = list(
         (
             await db.execute(
                 select(Registration)
                 .where(
-                    Registration.user_id == user_id,
+                    or_(
+                        Registration.user_id == user_id,
+                        Registration.team_id.in_(team_subq),
+                    ),
                     Registration.edition_id == edition_id,
-                    Registration.status.in_(["confirmed", "reserved", "pending"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending", "cancelled"]),
                 )
                 .order_by(Registration.created_at.desc())
             )
         ).scalars()
     )
-    return rows
+    seen = set()
+    deduped = []
+    for r in rows:
+        if r.id not in seen:
+            seen.add(r.id)
+            deduped.append(r)
+    return deduped
 
 
 async def serialize_registrations(
@@ -76,6 +93,10 @@ async def serialize_registrations(
                 team_name=team.name if team else None,
                 reservation_expires_at=aware(r.reservation_expires_at),
                 order_id=r.order_id,
+                event_starts_at=aware(event.starts_at) if event else None,
+                cancelled_at=aware(r.cancelled_at) if r.cancelled_at else None,
+                cancelled_by=getattr(r, "cancelled_by", None),
+                cancellation_reason=getattr(r, "cancellation_reason", None),
             )
         )
     return items
@@ -94,6 +115,11 @@ async def create_addon_registrations(
     edition: ConventionEdition,
     event_ids: list[uuid.UUID],
 ) -> tuple[list[Registration], PaymentOrder | None]:
+    # Serialise concurrent bookings from the same attendee. Two parallel
+    # requests cannot both pass the duplicate/seat checks and book different
+    # seats for the same events.
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+
     policy = await current_policy(db, edition.id)
     user_pass = (
         await db.execute(
@@ -231,8 +257,20 @@ async def cancel_registration(
         raise NotFound("Registration not found.")
     if reg.status == "cancelled":
         return
+    event = await db.get(Event, reg.event_id)
+    entry = aware(event.starts_at) if event else None
+    if entry is not None:
+        cutoff = datetime.now(UTC) + timedelta(hours=CANCELLATION_CUTOFF_HOURS)
+        if entry <= cutoff:
+            raise Conflict(
+                "Registrations cannot be cancelled within 24 hours of the event start. "
+                "Contact the helpdesk if you cannot attend.",
+                code="CANCELLATION_CLOSED",
+            )
     reg.status = "cancelled"
     reg.cancelled_at = datetime.now(UTC)
+    reg.cancelled_by = "user"
+    reg.cancellation_reason = reason or "Cancelled by attendee"
     await revoke_for_registration(db, reg.id)
     if reg.kind == "included":
         user_pass = (
@@ -311,8 +349,6 @@ async def expire_reservations(db: AsyncSession) -> int:
 
 
 async def team_member_count(db: AsyncSession, team_id: uuid.UUID) -> int:
-    from app.models.commerce import TeamMember
-
     return (
         await db.execute(
             select(func.count(TeamMember.id)).where(TeamMember.team_id == team_id)

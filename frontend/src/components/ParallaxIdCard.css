@@ -1,0 +1,463 @@
+/* Parallax ID Card - CR80 Portrait Architecture */
+.px-card-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+.px-card-root .stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  justify-content: center;
+  perspective: 1200px;
+  width: 100%;
+}
+
+/* Card Container Query CR80 Architecture */
+.px-card-root .card {
+  --paper: color-mix(in srgb, #fff 93%, var(--mid));
+  --ink: var(--dark);
+  --soft: color-mix(in srgb, var(--dark) 56%, var(--paper));
+  --line: color-mix(in srgb, var(--dark) 14%, transparent);
+  --ivory: #f4f1ea;
+  position: relative;
+  width: min(340px, 86vw);
+  aspect-ratio: 63/100;
+  container-type: inline-size;
+  border-radius: 5cqw;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.24), 0 2px 6px rgba(0, 0, 0, 0.14);
+  will-change: transform;
+  transform-style: preserve-3d;
+  transition: transform 0.15s ease-out;
+}
+
+/* Subtle paper texture */
+.px-card-root .card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  z-index: 10;
+}
+
+/* Parallax Art Layers */
+.px-card-root .pl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  overflow: hidden;
+}
+.px-card-root .pl svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  will-change: transform;
+  transform: scale(1.14);
+}
+
+/* Lanyard Slot */
+.px-card-root .slot {
+  position: absolute;
+  left: 50%;
+  top: 3.4cqw;
+  width: 14cqw;
+  height: 2.8cqw;
+  transform: translateX(-50%);
+  border-radius: 99px;
+  background: #06080b;
+  box-shadow: inset 0 0.3cqw 0.7cqw #000, 0 0 0 0.35cqw rgba(255, 255, 255, 0.22);
+  z-index: 5;
+}
+
+/* FRONT */
+.px-card-root .front .pl {
+  height: 76cqw;
+  background: var(--mid);
+}
+.px-card-root .photo {
+  position: absolute;
+  left: 23cqw;
+  top: 13cqw;
+  width: 54cqw;
+  height: 63cqw;
+  border-radius: 27cqw 27cqw 0 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--dark) 86%, var(--mid));
+  z-index: 3;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+.px-card-root .photo svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.px-card-root .photo svg * {
+  fill: color-mix(in srgb, var(--light) 30%, var(--dark));
+}
+.px-card-root .photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.px-card-root .panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 76cqw;
+  bottom: 0;
+  padding: 5cqw 5.5cqw 4.5cqw;
+  display: flex;
+  flex-direction: column;
+  z-index: 4;
+}
+.px-card-root .name {
+  font-size: 8.6cqw;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+  color: var(--dark);
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.px-card-root .role {
+  margin-top: 1cqw;
+  font-size: 3.8cqw;
+  font-weight: 700;
+  color: var(--dark);
+  letter-spacing: -0.01em;
+}
+.px-card-root .sub {
+  font-size: 2.85cqw;
+  color: var(--soft);
+  margin-top: 0.4cqw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.px-card-root .pills {
+  display: flex;
+  align-items: center;
+  gap: 2.5cqw;
+  margin-top: 2.8cqw;
+}
+.px-card-root .pill {
+  background: var(--light);
+  color: var(--dark);
+  font-size: 2.9cqw;
+  font-weight: 700;
+  padding: 1.4cqw 3cqw;
+  border-radius: 99px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.px-card-root .ver {
+  font-size: 2.75cqw;
+  color: var(--soft);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+}
+.px-card-root .ver i {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.6cqw;
+  height: 3.6cqw;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--mid) 25%, transparent);
+  color: var(--dark);
+  margin-right: 1cqw;
+  font-weight: 800;
+  font-size: 2.4cqw;
+}
+.px-card-root .row2 {
+  margin-top: 3.2cqw;
+  padding-top: 3cqw;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr 21cqw;
+  gap: 3cqw;
+  align-items: center;
+}
+.px-card-root .f + .f {
+  margin-top: 1.2cqw;
+}
+.px-card-root .f small {
+  display: block;
+  font-size: 2cqw;
+  color: var(--soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.px-card-root .f b {
+  display: block;
+  font-size: 2.9cqw;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.px-card-root .f.id b {
+  color: color-mix(in srgb, var(--mid) 75%, var(--dark));
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.02em;
+}
+.px-card-root .qrb {
+  border: 1px solid var(--line);
+  border-radius: 2.4cqw;
+  padding: 1.6cqw;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+.px-card-root .qrb svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.px-card-root .foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-top: 2cqw;
+}
+.px-card-root .wm {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.px-card-root .wm .px-vector {
+  height: 3.8cqw;
+  width: auto;
+  display: block;
+  color: var(--dark);
+}
+.px-card-root .wm span {
+  display: block;
+  margin-top: 0.6cqw;
+  font-size: 1.9cqw;
+  color: var(--soft);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.px-card-root .fr {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  color: var(--dark);
+}
+.px-card-root .org-badges {
+  display: flex;
+  align-items: center;
+  gap: 1.8cqw;
+  margin-bottom: 0.8cqw;
+}
+.px-card-root .org-badge {
+  height: 4.8cqw;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
+}
+.px-card-root .fr b {
+  display: block;
+  font-size: 2.9cqw;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+.px-card-root .fr span {
+  display: block;
+  margin-top: 0.5cqw;
+  font-size: 1.7cqw;
+  letter-spacing: 0.16em;
+  color: var(--soft);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* BACK */
+.px-card-root .back {
+  background: var(--dark);
+  color: var(--ivory);
+  --soft: color-mix(in srgb, var(--ivory) 62%, var(--dark));
+  --line: color-mix(in srgb, var(--ivory) 18%, transparent);
+}
+.px-card-root .back .pl {
+  height: 76cqw;
+  background: var(--dark);
+}
+.px-card-root .fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 46cqw;
+  height: 32cqw;
+  background: linear-gradient(transparent, var(--dark));
+  z-index: 2;
+}
+.px-card-root .binfo {
+  position: absolute;
+  left: 6cqw;
+  right: 6cqw;
+  top: 73cqw;
+  bottom: 4.5cqw;
+  display: flex;
+  flex-direction: column;
+  z-index: 3;
+}
+.px-card-root .back .wm .px-vector {
+  height: 4.8cqw;
+  color: var(--ivory);
+}
+.px-card-root .back .wm span {
+  font-size: 2.3cqw;
+  margin-top: 0.8cqw;
+}
+.px-card-root .rows {
+  margin-top: 3.5cqw;
+}
+.px-card-root .rows div {
+  border-top: 1px solid var(--line);
+  padding: 1.6cqw 0 1.8cqw;
+}
+.px-card-root .rows small {
+  display: block;
+  font-size: 2.1cqw;
+  color: var(--soft);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.px-card-root .rows b {
+  display: block;
+  margin-top: 0.2cqw;
+  font-size: 3.3cqw;
+  font-weight: 600;
+}
+.px-card-root .code {
+  margin-top: 2.5cqw;
+  background: var(--ivory);
+  border-radius: 2.6cqw;
+  padding: 2cqw 2.5cqw;
+  text-align: center;
+  color: var(--dark);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+.px-card-root .code svg {
+  width: 100%;
+  height: 8.5cqw;
+  display: block;
+}
+.px-card-root .code small {
+  display: block;
+  margin-top: 0.8cqw;
+  font-size: 2.2cqw;
+  color: color-mix(in srgb, var(--dark) 60%, var(--ivory));
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.px-card-root .note {
+  margin-top: auto;
+  font-size: 2.25cqw;
+  color: var(--soft);
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Controls Panel */
+.px-card-root .controls-panel {
+  width: 100%;
+  max-width: 720px;
+  background: var(--surface, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.px-card-root .control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.px-card-root .control-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+.px-card-root .btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.px-card-root button.btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 99px;
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  color: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.px-card-root button.btn:hover {
+  transform: translateY(-1px);
+  border-color: #6366f1;
+}
+.px-card-root button.btn[aria-pressed="true"],
+.px-card-root button.btn.active {
+  background: #6366f1;
+  color: #fff;
+  border-color: #6366f1;
+}
+
+/* Print Stylesheet */
+@media print {
+  .no-print,
+  .px-card-root .controls-panel,
+  .top-header {
+    display: none !important;
+  }
+  body,
+  .stage,
+  .px-card-root {
+    background: transparent !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+  .px-card-root .card {
+    box-shadow: none !important;
+    page-break-inside: avoid;
+    transform: none !important;
+    width: 54mm !important;
+    height: 85.6mm !important;
+    margin: 4mm auto !important;
+  }
+}
+

@@ -42,6 +42,14 @@ async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient
     assert len(tickets) >= 1
     assert tickets[0]["kind"] == "pass"
 
+    # 6. ID-card pass redirects to the interactive frontend view.
+    card_resp = await client.get(
+        f"/api/v1/editions/{edition_id}/registration/pass-card",
+        follow_redirects=False,
+    )
+    assert card_resp.status_code == 303
+    assert card_resp.headers["location"] == "/portal/registration"
+
 
 @pytest.mark.asyncio
 async def test_admin_overview_and_events(admin_client: AsyncClient):

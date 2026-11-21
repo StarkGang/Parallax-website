@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.errors import NotFound
+from app.core.rate_limit import limiter, memory_limiter
 from app.core.sessions import revoke_session_row
 from app.db.session import get_db
 from app.schemas.auth import (
@@ -23,7 +24,11 @@ from app.services import users as user_service
 router = APIRouter(tags=["account"])
 
 
-@router.get("/me", response_model=MeEnvelope)
+@router.get(
+    "/me",
+    response_model=MeEnvelope,
+    dependencies=[Depends(memory_limiter("me_read", 180, 60))],
+)
 async def me(
     ctx: AuthContext = Depends(current_context), db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -31,7 +36,10 @@ async def me(
     return ok(resp.model_dump(by_alias=True))
 
 
-@router.patch("/me/profile")
+@router.patch(
+    "/me/profile",
+    dependencies=[Depends(limiter("me_profile_update", 30, 60))],
+)
 async def update_profile(
     payload: ProfilePatch,
     request: Request,
@@ -48,7 +56,10 @@ async def update_profile(
     )
 
 
-@router.get("/me/profile")
+@router.get(
+    "/me/profile",
+    dependencies=[Depends(memory_limiter("me_profile_read", 120, 60))],
+)
 async def get_profile(
     ctx: AuthContext = Depends(current_context), db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -56,7 +67,10 @@ async def get_profile(
     return ok(ProfileResponse(**data).model_dump(by_alias=True))
 
 
-@router.get("/me/sessions")
+@router.get(
+    "/me/sessions",
+    dependencies=[Depends(memory_limiter("me_sessions_read", 120, 60))],
+)
 async def my_sessions(
     ctx: AuthContext = Depends(current_context), db: AsyncSession = Depends(get_db)
 ) -> dict:

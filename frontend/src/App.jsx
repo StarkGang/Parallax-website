@@ -22,14 +22,11 @@ import {
 } from './pages/Public.jsx';
 import {
   PortalLayout,
-  PortalOverview,
-  PortalPass,
   PortalProfile,
   PortalRegistrations,
   PortalSelectEvents,
   PortalTeams,
   PortalTickets,
-  PortalVerification,
 } from './pages/Portal.jsx';
 import { PortalRegistration } from './pages/PortalRegistration.jsx';
 import {
@@ -51,6 +48,7 @@ import {
   AdminCollegeRegistrations,
   AdminRegistrationSettings,
 } from './pages/AdminRegistration.jsx';
+import AdminIdCardStudio from './pages/AdminIdCardStudio.jsx';
 import Login from './pages/Login.jsx';
 
 const PUBLIC_NAV = [
@@ -265,7 +263,6 @@ export default function App() {
   return (
     <>
       <ScrollToTop />
-      
       <a className="skip" href="#main">
         Skip to content
       </a>
@@ -429,6 +426,7 @@ export default function App() {
             <Route path="registrations" element={<AdminRegistrations />} />
             <Route path="registration" element={<AdminCollegeRegistrations />} />
             <Route path="registration-settings" element={<AdminRegistrationSettings />} />
+            <Route path="id-cards" element={<AdminIdCardStudio />} />
             <Route path="attendance" element={<AdminAttendance />} />
             <Route path="check-in" element={<AdminCheckin />} />
             <Route path="checkin" element={<AdminCheckin />} />

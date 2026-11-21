@@ -12,9 +12,14 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from app.core.errors import AppError
-from app.core.rate_limit import consume
+from app.core.rate_limit import _subject, consume
+from app.core.sessions import token_from_request
 from app.core.uploads import read_upload_limited
 from app.models.commerce import PaymentWebhookEvent
+from app.models.edition import ConventionEdition
+from app.models.registration import CollegeRegistration, RegistrationCategory
+from app.models.user import User
+from app.services.tickets import public_registration_code
 
 
 @pytest.mark.asyncio
@@ -138,6 +143,95 @@ async def test_razorpay_webhook_accepts_valid_signature(
         )
     )
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ignores_unverified_cookie_subject(db_session):
+    """A caller-chosen cookie must not buy a fresh rate-limit bucket."""
+    from starlette.requests import Request
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/me",
+            "query_string": b"",
+            "headers": [
+                (b"cookie", b"px_session=chosen-by-the-caller"),
+                (b"x-forwarded-for", b"203.0.113.44"),
+            ],
+            "client": ("127.0.0.1", 5555),
+        }
+    )
+    assert await _subject(db_session, request) == "ip:203.0.113.44"
+
+
+@pytest.mark.asyncio
+async def test_session_token_in_query_string_is_ignored():
+    """Session tokens must never be accepted from a URL."""
+    from starlette.requests import Request
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/me",
+            "query_string": b"token=leaked-session-token",
+            "headers": [],
+            "client": ("127.0.0.1", 5555),
+        }
+    )
+    assert token_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_credential_page_escapes_participant_html(client: AsyncClient, db_session):
+    """The public QR verification page must not render participant HTML."""
+    edition = await db_session.scalar(select(ConventionEdition).limit(1))
+    category = await db_session.scalar(
+        select(RegistrationCategory)
+        .where(RegistrationCategory.edition_id == edition.id)
+        .limit(1)
+    )
+    user = await db_session.scalar(select(User).limit(1))
+    assert user is not None
+    number = f"PX-ESC-{uuid.uuid4().hex[:6].upper()}"
+    db_session.add(
+        CollegeRegistration(
+            edition_id=edition.id,
+            user_id=user.id,
+            category_id=category.id,
+            category_code=category.code,
+            category_name="<b>ISTE</b>",
+            full_name="<script>alert('xss')</script>",
+            email="xss@test.local",
+            college_name="<img src=x onerror=alert(1)>",
+            payment_status="paid",
+            verification_status="approved",
+            registration_number=number,
+        )
+    )
+    await db_session.commit()
+
+    # A bare registration number must not resolve: the public page is only
+    # reachable through a signed code this server issued.
+    unsigned = await client.get(
+        f"/api/v1/public/c/{number}", headers={"Accept": "text/html"}
+    )
+    assert unsigned.status_code == 200
+    assert "<script>alert" not in unsigned.text
+    assert "&lt;script&gt;" not in unsigned.text
+    assert unsigned.json()["data"]["valid"] is False
+
+    response = await client.get(
+        f"/api/v1/public/c/{public_registration_code(number)}",
+        headers={"Accept": "text/html"},
+    )
+    assert response.status_code == 200
+    assert "<script>alert" not in response.text
+    assert "&lt;script&gt;" in response.text
+    assert "<img src=x" not in response.text
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 @pytest.mark.asyncio

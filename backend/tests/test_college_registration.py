@@ -92,6 +92,10 @@ async def _register_paid(
     await _profile(client, edition_id, category["id"], email)
     upload = await _upload(client, edition_id, "college_id")
     assert upload.status_code == 200, upload.text
+    # The printed pass needs a passport photo, so every paid registration must
+    # provide one before the server accepts payment.
+    upload = await _upload(client, edition_id, "photo", filename="photo.png")
+    assert upload.status_code == 200, upload.text
     if category_code == "iste_member":
         upload = await _upload(client, edition_id, "iste_card")
         assert upload.status_code == 200, upload.text
@@ -112,7 +116,11 @@ async def test_iste_member_registration_approval_and_notification(client: AsyncC
     config = await _config(client, edition_id)
     iste = next(item for item in config["categories"] if item["code"] == "iste_member")
     assert iste["feePaise"] == 50000
-    assert {doc["type"] for doc in iste["requiredDocuments"]} == {"college_id", "iste_card"}
+    assert {doc["type"] for doc in iste["requiredDocuments"]} == {
+        "college_id",
+        "iste_card",
+        "photo",
+    }
 
     registration = await _register_paid(
         client, edition_id, email="iste.student@test.local", category_code="iste_member"
@@ -139,7 +147,7 @@ async def test_iste_member_registration_approval_and_notification(client: AsyncC
     )
     assert detail.status_code == 200, detail.text
     body = detail.json()["data"]
-    assert len(body["documents"]) == 2
+    assert len(body["documents"]) == 3
     assert body["documents"][0]["mime"] == "image/png"
 
     # Documents are only readable through the authenticated route.
@@ -163,10 +171,11 @@ async def test_iste_member_registration_approval_and_notification(client: AsyncC
     assert mine["registration"]["verificationStatus"] == "approved"
     assert any(n["kind"] == "approved" for n in mine["notifications"])
     confirmation = await client.get(
-        f"/api/v1/editions/{edition_id}/registration/confirmation"
+        f"/api/v1/editions/{edition_id}/registration/confirmation",
+        follow_redirects=False,
     )
-    assert confirmation.status_code == 200
-    assert "Registration confirmation" in confirmation.text
+    assert confirmation.status_code == 303
+    assert confirmation.headers["location"] == "/portal/registration"
 
 
 @pytest.mark.asyncio
@@ -177,14 +186,20 @@ async def test_non_iste_and_polytechnic_pricing(client: AsyncClient):
         client, edition_id, email="noniste.student@test.local", category_code="non_iste"
     )
     assert non_iste["feePaise"] == 60000
-    assert {doc["type"] for doc in non_iste["documentRequirements"]} == {"college_id"}
+    assert {doc["type"] for doc in non_iste["documentRequirements"]} == {
+        "college_id",
+        "photo",
+    }
 
     await _login(client, "poly.student@test.local")
     poly = await _register_paid(
         client, edition_id, email="poly.student@test.local", category_code="polytechnic"
     )
     assert poly["feePaise"] == 29900
-    assert {doc["type"] for doc in poly["documentRequirements"]} == {"college_id"}
+    assert {doc["type"] for doc in poly["documentRequirements"]} == {
+        "college_id",
+        "photo",
+    }
 
 
 @pytest.mark.asyncio
@@ -298,6 +313,7 @@ async def test_server_side_amount_and_duplicate_callback(
     non_iste = next(item for item in config["categories"] if item["code"] == "non_iste")
     await _profile(client, edition_id, non_iste["id"], "amount.test@test.local")
     assert (await _upload(client, edition_id, "college_id")).status_code == 200
+    assert (await _upload(client, edition_id, "photo")).status_code == 200
 
     # A manipulated amount in the request body is ignored: the endpoint has no
     # amount input and the fee comes from the category row.
@@ -352,6 +368,7 @@ async def test_user_edits_resubmission_and_category_change(client: AsyncClient):
     # Complete payment in the polytechnic category (the cheapest tier).
     await _profile(client, edition_id, poly["id"], "edit.student@test.local")
     assert (await _upload(client, edition_id, "college_id")).status_code == 200
+    assert (await _upload(client, edition_id, "photo")).status_code == 200
     submitted = await client.post(f"/api/v1/editions/{edition_id}/registration/submit")
     payment = submitted.json()["data"]["payment"]
     paid = await client.post(
@@ -517,7 +534,14 @@ async def test_admin_configuration_persists_and_is_audited(client: AsyncClient):
         data = response.json()["data"]
         updated = next(c for c in data["categories"] if c["code"] == "non_iste")
         assert updated["feePaise"] == 65000
-        assert len(updated["requiredDocuments"]) == 2
+        # The printed-pass photo is always appended, even when a category is
+        # configured with only the college ID.
+        assert len(updated["requiredDocuments"]) == 3
+        assert {doc["type"] for doc in updated["requiredDocuments"]} == {
+            "college_id",
+            "iste_card",
+            "photo",
+        }
         poly = next(c for c in data["categories"] if c["code"] == "polytechnic")
         assert poly["enabled"] is False
         assert data["registration"]["allowResubmission"] is False
@@ -542,7 +566,6 @@ async def test_admin_configuration_persists_and_is_audited(client: AsyncClient):
         assert entry["before"]["feePaise"] == 60000
         assert entry["after"]["feePaise"] == 65000
     finally:
-        # Restore shared seed state for any later suite.
         restore = await client.patch(
             f"/api/v1/editions/{edition_id}/admin/registration/config",
             json={
@@ -582,3 +605,79 @@ async def test_participant_cannot_read_admin_registration_queue(client: AsyncCli
         f"/api/v1/editions/{edition_id}/admin/registration/config"
     )
     assert config_forbidden.status_code == 403, config_forbidden.text
+
+
+@pytest.mark.asyncio
+async def test_paid_registration_unlocks_pass_ticket_events_and_teams(
+    client: AsyncClient,
+):
+    """A paid college registration must behave exactly like an active pass.
+
+    This is the regression guard for the portal: buying the pass through the
+    registration checkout has to issue an entry ticket, unlock included-event
+    selection and allow team registration without a second purchase.
+    """
+    edition_id = await _edition_id(client)
+    await _login(client, "unlock.flow@test.local")
+    registration = await _register_paid(
+        client, edition_id, email="unlock.flow@test.local", category_code="polytechnic"
+    )
+    assert registration["paymentStatus"] == "paid"
+
+    # The registration is mirrored into an active convention pass.
+    pass_view = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
+    assert pass_view["status"] == "active"
+
+    # An entry ticket is issued for the pass.
+    tickets = (await client.get(f"/api/v1/editions/{edition_id}/tickets")).json()["data"]
+    assert any(ticket["kind"] == "pass" for ticket in tickets)
+
+    # Receipt and pass card redirect to the frontend portal where they render interactively.
+    receipt = await client.get(
+        f"/api/v1/editions/{edition_id}/registration/receipt",
+        follow_redirects=False,
+    )
+    assert receipt.status_code == 303
+    assert receipt.headers["location"] == "/portal/registration"
+
+    pass_card = await client.get(
+        f"/api/v1/editions/{edition_id}/registration/pass-card",
+        follow_redirects=False,
+    )
+    assert pass_card.status_code == 303
+    assert pass_card.headers["location"] == "/portal/registration"
+
+    # Included-event selection works with the activated pass.
+    slug = (await client.get("/api/v1/public/editions/current")).json()["data"]["slug"]
+    individual = [
+        event
+        for event in (
+            await client.get(
+                f"/api/v1/public/editions/{slug}/events?pageSize=100"
+            )
+        ).json()["data"]
+        if event["format"] == "individual"
+    ][:2]
+    assert individual
+    selection = await client.put(
+        f"/api/v1/editions/{edition_id}/pass/selections",
+        json={"eventIds": [event["id"] for event in individual]},
+    )
+    assert selection.status_code == 200, selection.text
+    assert selection.json()["data"]["count"] == 2
+
+    # Team registration works once the pass is active.
+    team_event = next(
+        event
+        for event in (
+            await client.get(
+                f"/api/v1/public/editions/{slug}/events?format=team&pageSize=100"
+            )
+        ).json()["data"]
+    )
+    created = await client.post(
+        f"/api/v1/editions/{edition_id}/teams",
+        json={"eventId": team_event["id"], "name": "Unlock Squad"},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["data"]["inviteCode"]

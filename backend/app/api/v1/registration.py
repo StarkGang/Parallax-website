@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-import html
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import RedirectResponse, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
 from app.core.errors import AppError, Conflict, NotFound
-from app.core.rate_limit import limiter
+from app.core.rate_limit import limiter, memory_limiter
 from app.core.text import safe_filename
 from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.integrations.storage import get_document_storage
-from app.models.commerce import PaymentOrder
+from app.models.commerce import ConventionPass, PaymentOrder
 from app.models.edition import ConventionEdition
+from app.models.registration import RegistrationDocument, RegistrationNotification
+from app.models.user import User
 from app.schemas.registration import (
     CategoryChangeRequest,
     PaymentVerification,
@@ -36,7 +39,10 @@ async def _edition(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition
     return await edition_service.edition_by_id(db, edition_id)
 
 
-@router.get("")
+@router.get(
+    "",
+    dependencies=[Depends(memory_limiter("registration_read", 120, 60))],
+)
 async def get_registration(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(current_context),
@@ -96,7 +102,9 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
-    data = await read_upload_limited(file, 512_000, label="Document")
+    max_bytes = 102_400 if doc_type == "photo" else 512_000
+    label = "Passport photo" if doc_type == "photo" else "Document"
+    data = await read_upload_limited(file, max_bytes, label=label)
     document = await service.save_document(
         db,
         request,
@@ -138,7 +146,10 @@ async def delete_document(
     }
 
 
-@router.get("/documents/{document_id}/content")
+@router.get(
+    "/documents/{document_id}/content",
+    dependencies=[Depends(memory_limiter("document_content", 120, 60))],
+)
 async def document_content(
     edition_id: uuid.UUID,
     document_id: uuid.UUID,
@@ -361,10 +372,6 @@ async def mark_notification_read(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    from datetime import datetime
-
-    from app.models.registration import RegistrationNotification
-
     row = await db.get(RegistrationNotification, notification_id)
     if (
         row is None
@@ -377,110 +384,74 @@ async def mark_notification_read(
     return {"data": {"read": True}}
 
 
-def _receipt_html(
-    row,
-    *,
-    title: str,
-    confirmation: bool,
-    instructions: str | None,
-    refund_policy: str | None,
+async def _qr_payload(
+    ctx: AuthContext, edition_id: uuid.UUID, request: Request, db: AsyncSession
 ) -> str:
-    from app.services.editions import aware
+    """Text the participant's pass QR must contain.
 
-    paid_at = aware(row.paid_at).strftime("%d %b %Y, %H:%M UTC") if row.paid_at else "-"
-    amount = f"INR {(row.fee_paise + (row.additional_paid_paise or 0)) / 100:,.2f}"
-    safe = lambda value: html.escape(str(value or "-"))  # noqa: E731
-    status_note = (
-        "Your documents have been verified and your registration is approved."
-        if confirmation
-        else "Your payment is received. Your seat is confirmed only after the registration desk verifies your documents."
-    )
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"/>
-<title>{html.escape(title)} · {safe(row.registration_number)}</title>
-<style>
-body{{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;background:#071018;color:#e8f4ff;margin:0;padding:40px}}
-.card{{max-width:720px;margin:0 auto;border:1px solid #1c3b52;border-radius:18px;padding:32px;background:#0b1a26}}
-h1{{font-size:22px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 4px;color:#38bdf8}}
-p.sub{{color:#8fb0c6;margin:0 0 24px}} table{{width:100%;border-collapse:collapse;margin:16px 0}}
-td{{padding:9px 0;border-bottom:1px solid #163246;font-size:14px}} td:first-child{{color:#8fb0c6;width:44%}}
-.total{{font-size:18px;color:#38bdf8}} .note{{font-size:13px;color:#8fb0c6;line-height:1.6;margin-top:18px}}
-.badge{{display:inline-block;padding:4px 10px;border-radius:99px;border:1px solid #38bdf8;color:#38bdf8;font-size:11px;letter-spacing:.1em;text-transform:uppercase}}
-</style></head>
-<body><div class="card">
-<span class="badge">{'Registration confirmation' if confirmation else 'Payment receipt'}</span>
-<h1>{html.escape(title)}</h1>
-<p class="sub">PARALLAX · ISTE State Student Convention</p>
-<table>
-<tr><td>Registration ID</td><td><b>{safe(row.registration_number)}</b></td></tr>
-<tr><td>Participant</td><td>{safe(row.full_name)}<br/><span style="color:#8fb0c6">{safe(row.email)}</span></td></tr>
-<tr><td>College</td><td>{safe(row.college_name)}</td></tr>
-<tr><td>Category</td><td>{safe(row.category_name)}</td></tr>
-<tr><td>Payment transaction</td><td>{safe(row.transaction_id)}</td></tr>
-<tr><td>Paid on</td><td>{paid_at}</td></tr>
-<tr><td>Payment status</td><td>{safe(row.payment_status)}</td></tr>
-<tr><td>Verification status</td><td>{safe(row.verification_status)}</td></tr>
-<tr><td class="total">Amount paid</td><td class="total">{amount}</td></tr>
-</table>
-<p class="note">{html.escape(status_note)}</p>
-{ f'<p class="note"><b>Payment instructions:</b> {html.escape(instructions)}</p>' if instructions else '' }
-{ f'<p class="note"><b>Refund policy:</b> {html.escape(refund_policy)}</p>' if refund_policy else '' }
-<p class="note">This document is generated from the Parallax registration database. Amounts are in INR and include all applicable taxes.</p>
-</div></body></html>"""
-
-
-async def _receipt_response(
-    ctx: AuthContext,
-    db: AsyncSession,
-    edition_id: uuid.UUID,
-    *,
-    confirmation: bool,
-) -> Response:
+    The server decides *what* the code says (a signed token); drawing the code
+    is a frontend concern, so no SVG is generated or served here.
+    """
+    from app.services import tickets as ticket_service
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    if row is None:
-        raise NotFound("Registration not found.")
-    if confirmation and row.verification_status != "approved":
-        raise Conflict(
-            "Your registration is not approved yet, so a confirmation cannot be issued.",
-            code="NOT_APPROVED",
-        )
-    if row.payment_status not in {"paid", "refunded"}:
-        raise Conflict("A receipt is available only after payment.", code="PAYMENT_REQUIRED")
-    db_settings = await service.settings_for(db, edition_id)
-    title = "Registration confirmation" if confirmation else "Payment receipt"
-    body = _receipt_html(
-        row,
-        title=title,
-        confirmation=confirmation,
-        instructions=db_settings.payment_instructions if db_settings else None,
-        refund_policy=db_settings.refund_policy if db_settings else None,
-    )
-    filename = f"{'confirmation' if confirmation else 'receipt'}-{row.registration_number or row.id}.html"
-    return HTMLResponse(
-        content=body,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "private, no-store",
-        },
-    )
+    reg_num = row.registration_number if row and row.registration_number else f"PRX-{str(ctx.user.id)[:6].upper()}"
+    base_url = str(request.base_url).rstrip("/")
+    # Signed code, not the bare registration number: the public verification
+    # page must not be enumerable.
+    token = f"{base_url}/c/{ticket_service.public_registration_code(reg_num)}"
+    if row and row.payment_status in {"paid", "completed"}:
+        from app.models.commerce import ConventionPass
+        user_pass = (
+            await db.execute(
+                select(ConventionPass).where(
+                    ConventionPass.user_id == ctx.user.id,
+                    ConventionPass.edition_id == edition_id,
+                ).order_by(ConventionPass.created_at.desc()).limit(1)
+            )
+        ).scalars().first()
+        if user_pass:
+            ticket = await ticket_service._existing_for_pass(db, ctx.user.id, user_pass.id)
+            if ticket:
+                token = f"{base_url}/c/{ticket_service.ticket_token_for(ticket.id)}"
+    return token
+
+
+@router.get(
+    "/qr-token",
+    dependencies=[Depends(memory_limiter("registration_qr", 60, 60))],
+)
+async def registration_qr_token(
+    edition_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return the signed payload for the pass QR so the browser draws it."""
+    return {"data": {"payload": await _qr_payload(ctx, edition_id, request, db)}}
+
+
+@router.get("/pass-card")
+async def pass_card(
+    edition_id: uuid.UUID,
+) -> RedirectResponse:
+    """Redirect to the frontend portal where the ID card is rendered interactively."""
+    return RedirectResponse(url="/portal/registration", status_code=303)
 
 
 @router.get("/receipt")
 async def receipt(
     edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> Response:
-    return await _receipt_response(ctx, db, edition_id, confirmation=False)
+) -> RedirectResponse:
+    """Redirect to the frontend portal where the receipt is rendered interactively."""
+    return RedirectResponse(url="/portal/registration", status_code=303)
 
 
 @router.get("/confirmation")
 async def confirmation(
     edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> Response:
-    return await _receipt_response(ctx, db, edition_id, confirmation=True)
+) -> RedirectResponse:
+    """Redirect to the frontend portal where the confirmation is rendered interactively."""
+    return RedirectResponse(url="/portal/registration", status_code=303)
 
 
 __all__ = ["router"]

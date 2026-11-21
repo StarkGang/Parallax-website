@@ -94,7 +94,7 @@ export default function Login() {
               <ShieldCheck size={16} strokeWidth={1.5} /> Secure Google authentication
             </span>
             <span>
-              <CheckCircle2 size={16} strokeWidth={1.5} /> NSSCE Palakkad convention network
+              <CheckCircle2 size={16} strokeWidth={1.5} /> Payments Powered by RazorPay
             </span>
           </div>
         </div>

@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react';
-import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, Navigate, NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import {
   ArrowUpRight,
   BadgeCheck,
   CalendarDays,
+  Camera,
+  CameraOff,
   LayoutDashboard,
   Check,
   ClipboardCheck,
   CreditCard,
+  Download,
   FileText,
+  FlipHorizontal,
   IdCard,
   Image,
   LogOut,
   Megaphone,
   Menu,
   Plus,
+  QrCode,
   RefreshCw,
   Search,
   Settings,
@@ -72,7 +77,9 @@ const NAV = [
   ['Events', '/manage/events', CalendarDays],
   ['Policy', '/manage/policy', ShieldCheck],
   ['Registrations', '/manage/registrations', Ticket],
+  ['Cancelled & Refunds', '/manage/registrations?status=cancelled', Wallet],
   ['Registration desk', '/manage/registration', IdCard],
+  ['ID Card Studio', '/manage/id-cards', CreditCard],
   ['Users', '/manage/users', Users],
   ['Verifications', '/manage/verifications', BadgeCheck],
   ['Payments', '/manage/payments', Wallet],
@@ -400,6 +407,14 @@ export function AdminOverview() {
           note="Awaiting review"
           tone={data?.verificationsPending ? 'warn' : ''}
         />
+        <Link to="/manage/registrations?status=cancelled" style={{ textDecoration: 'none', display: 'block' }}>
+          <Stat
+            label="CANCELLATIONS / REFUNDS"
+            value={data?.registrationsCancelled ?? 0}
+            note={`${money(data?.refundedPaise || 0)} refunded · Click to review`}
+            tone={data?.registrationsCancelled ? 'warn' : ''}
+          />
+        </Link>
         <Stat
           label="LATEST DAY SALES"
           value={
@@ -1270,6 +1285,20 @@ export function AdminEvents() {
                 >
                   {busyId === row.id ? 'Loading' : 'Edit'}
                 </button>
+                <Link
+                  to={`/manage/registrations?eventId=${row.id}`}
+                  className="table-action"
+                  title="View event attendee list, cancellations & refunds"
+                >
+                  Registrations
+                </Link>
+                <Link
+                  to={`/manage/check-in?eventId=${row.id}`}
+                  className="table-action"
+                  title="Live room attendance roster"
+                >
+                  Room Roster
+                </Link>
               </div>
             </td>
           </tr>
@@ -1583,24 +1612,169 @@ export function AdminPolicy() {
 
 export function AdminRegistrations() {
   const { editionId } = useSite();
-  const [status, setStatus] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [status, setStatus] = useState(searchParams.get('status') || '');
+  const [selectedEventId, setSelectedEventId] = useState(searchParams.get('eventId') || '');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [forceCancelTarget, setForceCancelTarget] = useState(null);
+  const [forceCancelForm, setForceCancelForm] = useState({
+    reason: 'Removed from event by administration',
+    issueRefund: true,
+    refundMode: 'full',
+    customAmount: '',
+    refundReason: '',
+  });
+  const [refundTarget, setRefundTarget] = useState(null);
+  const [refundForm, setRefundForm] = useState({
+    amount: '',
+    reasonNote: '',
+  });
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionMessage, setActionMessage] = useState(null);
+
+  useEffect(() => {
+    setStatus(searchParams.get('status') || '');
+    setSelectedEventId(searchParams.get('eventId') || '');
+    setPage(1);
+  }, [searchParams]);
+
+  const updateFilters = (newStatus, newEventId) => {
+    const s = newStatus !== undefined ? newStatus : status;
+    const e = newEventId !== undefined ? newEventId : selectedEventId;
+    setStatus(s);
+    setSelectedEventId(e);
+    setPage(1);
+    const params = new URLSearchParams();
+    if (s) params.set('status', s);
+    if (e) params.set('eventId', e);
+    setSearchParams(params);
+  };
+
+  const eventsQuery = useAsync(() => adminApi.events(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const eventsList = eventsQuery.data?.data || [];
+
   const debounced = useDebounced(query);
   const rows = useAsync(
     () =>
       adminApi.registrations(editionId, {
-        status,
+        status: status || undefined,
+        event_id: selectedEventId || undefined,
         q: debounced,
         page,
         page_size: 50,
       }),
-    [editionId, status, debounced, page],
+    [editionId, status, selectedEventId, debounced, page],
     { enabled: Boolean(editionId) },
   );
   const list = rows.data?.data || [];
   const total = rows.data?.total ?? list.length;
   const pages = Math.max(1, Math.ceil(total / 50));
+
+  const openForceCancel = (row) => {
+    setForceCancelTarget(row);
+    setForceCancelForm({
+      reason: 'Removed from event by administration',
+      issueRefund: Boolean(!row.isIncluded && row.feePaise > 0 && row.isRefundable),
+      refundMode: 'full',
+      customAmount: row.refundableAmountPaise ? String(row.refundableAmountPaise / 100) : '',
+      refundReason: 'Event registration force-cancelled by admin',
+    });
+    setActionMessage(null);
+  };
+
+  const submitForceCancel = async () => {
+    if (!forceCancelTarget) return;
+    setActionBusy(true);
+    setActionMessage(null);
+    try {
+      const isPaid = !forceCancelTarget.isIncluded && forceCancelTarget.feePaise > 0;
+      let refundPaise = null;
+      if (isPaid && forceCancelForm.issueRefund) {
+        if (forceCancelForm.refundMode === 'full') {
+          refundPaise = forceCancelTarget.refundableAmountPaise;
+        } else {
+          const amt = Number(forceCancelForm.customAmount);
+          if (isNaN(amt) || amt <= 0) {
+            throw new Error('Please enter a valid refund amount greater than 0.');
+          }
+          refundPaise = Math.round(amt * 100);
+          if (refundPaise > forceCancelTarget.feePaise) {
+            throw new Error(
+              `Refund cannot exceed the paid fee of ₹${forceCancelTarget.feePaise / 100}.`,
+            );
+          }
+          if (refundPaise > forceCancelTarget.refundableAmountPaise) {
+            throw new Error(
+              `Refund cannot exceed the remaining refundable amount of ₹${
+                forceCancelTarget.refundableAmountPaise / 100
+              }.`,
+            );
+          }
+        }
+      }
+
+      await adminApi.forceCancelEventRegistration(editionId, forceCancelTarget.id, {
+        reason: forceCancelForm.reason.trim() || 'Removed from event by administration',
+        issueRefund: Boolean(isPaid && forceCancelForm.issueRefund),
+        refundAmountPaise: refundPaise,
+        refundReasonNote: forceCancelForm.refundReason.trim() || null,
+      });
+
+      setForceCancelTarget(null);
+      rows.reload();
+    } catch (err) {
+      setActionMessage({ tone: 'error', text: err.message });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const openRefund = (row) => {
+    setRefundTarget(row);
+    setRefundForm({
+      amount: row.refundableAmountPaise ? String(row.refundableAmountPaise / 100) : '',
+      reasonNote: 'Registration refund issued by admin',
+    });
+    setActionMessage(null);
+  };
+
+  const submitRefund = async () => {
+    if (!refundTarget) return;
+    setActionBusy(true);
+    setActionMessage(null);
+    try {
+      const amt = Number(refundForm.amount);
+      if (isNaN(amt) || amt <= 0) {
+        throw new Error('Please enter a valid refund amount greater than 0.');
+      }
+      const amtPaise = Math.round(amt * 100);
+      if (amtPaise > refundTarget.feePaise) {
+        throw new Error(`Refund cannot exceed the paid fee of ₹${refundTarget.feePaise / 100}.`);
+      }
+      if (amtPaise > refundTarget.refundableAmountPaise) {
+        throw new Error(
+          `Refund cannot exceed the remaining refundable amount of ₹${
+            refundTarget.refundableAmountPaise / 100
+          }.`,
+        );
+      }
+
+      await adminApi.refundEventRegistration(editionId, refundTarget.id, {
+        amountPaise: amtPaise,
+        reasonNote: refundForm.reasonNote.trim() || null,
+      });
+
+      setRefundTarget(null);
+      rows.reload();
+    } catch (err) {
+      setActionMessage({ tone: 'error', text: err.message });
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   return (
     <>
@@ -1616,16 +1790,26 @@ export function AdminRegistrations() {
             placeholder="Name, email, PX-..., or event title..."
           />
         </Field>
+        <Field label="Filter by Event">
+          <select
+            value={selectedEventId}
+            onChange={(e) => updateFilters(status, e.target.value)}
+          >
+            <option value="">All Events</option>
+            {eventsList.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.title} {ev.venueRoom ? `(Room ${ev.venueRoom})` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label="Status filter">
           <select
             value={status}
-            onChange={(event) => {
-              setStatus(event.target.value);
-              setPage(1);
-            }}
+            onChange={(event) => updateFilters(event.target.value, selectedEventId)}
           >
             <option value="">All statuses</option>
-            {['confirmed', 'reserved', 'pending', 'cancelled'].map((value) => (
+            {['confirmed', 'reserved', 'cancelled'].map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -1635,11 +1819,123 @@ export function AdminRegistrations() {
         <Button variant="ghost" onClick={rows.reload} icon={RefreshCw}>
           Refresh
         </Button>
+        <Button
+          variant="ghost"
+          icon={Download}
+          onClick={() => {
+            if (!list.length) return;
+            const headers = [
+              'Reg #',
+              'Participant',
+              'Email',
+              'Phone',
+              'College',
+              'Event',
+              'Type',
+              'Fee (INR)',
+              'Status',
+              'Refund Status',
+              'Cancelled By',
+              'Reason',
+              'Date',
+            ];
+            const csvRows = list.map((r) => [
+              r.registrationNumber || '',
+              `"${(r.userName || '').replace(/"/g, '""')}"`,
+              `"${(r.userEmail || '').replace(/"/g, '""')}"`,
+              `"${(r.userPhone || '').replace(/"/g, '""')}"`,
+              `"${(r.userCollege || '').replace(/"/g, '""')}"`,
+              `"${(r.eventTitle || '').replace(/"/g, '""')}"`,
+              r.isIncluded ? 'Included (Free)' : 'Paid Add-on',
+              (r.feePaise / 100).toFixed(2),
+              r.status,
+              r.refundedAmountPaise > 0
+                ? `Refunded ₹${r.refundedAmountPaise / 100}`
+                : r.isRefundable
+                  ? 'Refund Eligible'
+                  : 'N/A',
+              r.cancelledBy || '',
+              `"${(r.cancellationReason || '').replace(/"/g, '""')}"`,
+              r.createdAt ? new Date(r.createdAt).toISOString() : '',
+            ]);
+            const csvContent =
+              'data:text/csv;charset=utf-8,' +
+              [headers.join(','), ...csvRows.map((e) => e.join(','))].join('\n');
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement('a');
+            link.setAttribute('href', encodedUri);
+            link.setAttribute(
+              'download',
+              `parallax_registrations_${status || 'all'}_${Date.now()}.csv`,
+            );
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }}
+        >
+          Export CSV
+        </Button>
       </div>
+
+      {/* Quick Status Filter Tabs */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          marginBottom: '14px',
+        }}
+      >
+        <button
+          type="button"
+          className={`button ${status === '' ? 'primary' : 'ghost'} small`}
+          onClick={() => updateFilters('', selectedEventId)}
+        >
+          All Registrations
+        </button>
+        <button
+          type="button"
+          className={`button ${status === 'confirmed' ? 'primary' : 'ghost'} small`}
+          onClick={() => updateFilters('confirmed', selectedEventId)}
+        >
+          Confirmed Active
+        </button>
+        <button
+          type="button"
+          className={`button ${status === 'reserved' ? 'primary' : 'ghost'} small`}
+          onClick={() => updateFilters('reserved', selectedEventId)}
+        >
+          Reserved
+        </button>
+        <button
+          type="button"
+          className={`button ${status === 'cancelled' ? 'primary' : 'ghost'} small`}
+          style={
+            status === 'cancelled'
+              ? {
+                  background: 'rgba(239, 68, 68, 0.2)',
+                  border: '1px solid #ef4444',
+                  color: '#fca5a5',
+                  fontWeight: 600,
+                }
+              : { color: '#f87171' }
+          }
+          onClick={() => updateFilters('cancelled', selectedEventId)}
+        >
+          ❌ Cancelled &amp; Removed (View Refunds)
+        </button>
+      </div>
+
+      {actionMessage ? (
+        <InlineMessage tone={actionMessage.tone}>{actionMessage.text}</InlineMessage>
+      ) : null}
+
       {rows.loading ? <Loading label="Loading registrations" rows={2} /> : null}
       {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
+
       <DataTable
-        head={['Reg #', 'Participant', 'Event', 'Kind', 'Fee', 'Status', 'Date']}
+        head={['Reg #', 'Participant', 'Event', 'Type', 'Fee', 'Status', 'Date', 'Actions']}
         empty={!list.length && !rows.loading ? 'No registrations match.' : null}
       >
         {list.map((row) => (
@@ -1648,17 +1944,348 @@ export function AdminRegistrations() {
             <td>
               <b>{row.userName}</b>
               <div className="table-sub">{row.userEmail}</div>
+              {row.userCollege ? (
+                <div className="table-sub" style={{ opacity: 0.8 }}>
+                  🏛️ {row.userCollege}
+                </div>
+              ) : null}
             </td>
-            <td>{row.eventTitle}</td>
-            <td>{row.kind}</td>
-            <td>{money(row.feePaise)}</td>
             <td>
-              <StatusBadge status={row.status} />
+              <b>{row.eventTitle}</b>
+              {row.venueRoom ? <div className="table-sub">📍 Room {row.venueRoom}</div> : null}
+            </td>
+            <td>
+              {row.isIncluded ? (
+                <Badge tone="muted">Included (Free)</Badge>
+              ) : (
+                <Badge tone="accent">Paid Add-on</Badge>
+              )}
+            </td>
+            <td>
+              <b>{money(row.feePaise)}</b>
+              {row.refundedAmountPaise > 0 ? (
+                <div className="table-sub" style={{ color: 'var(--color-good, #2bb673)' }}>
+                  Refunded: {money(row.refundedAmountPaise)}
+                </div>
+              ) : null}
+            </td>
+            <td>
+              {row.status === 'confirmed' ? (
+                <Badge tone="good">Confirmed</Badge>
+              ) : row.status === 'reserved' ? (
+                <Badge tone="warn">Reserved</Badge>
+              ) : row.status === 'cancelled' ? (
+                <div>
+                  {row.cancelledBy === 'admin' ? (
+                    <Badge tone="bad">Removed by Admin</Badge>
+                  ) : (
+                    <Badge tone="muted">Cancelled by User</Badge>
+                  )}
+                  {row.cancellationReason ? (
+                    <div className="table-sub" style={{ fontSize: '11px', marginTop: '2px' }}>
+                      {row.cancellationReason}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <StatusBadge status={row.status} />
+              )}
             </td>
             <td>{date(row.createdAt)}</td>
+            <td>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {row.canCancel ? (
+                  <button
+                    type="button"
+                    className="table-action"
+                    style={{ color: '#f87171' }}
+                    onClick={() => openForceCancel(row)}
+                  >
+                    Force Remove
+                  </button>
+                ) : null}
+
+                {row.status === 'cancelled' && row.isRefundable ? (
+                  <button
+                    type="button"
+                    className="table-action"
+                    style={{ color: '#38bdf8' }}
+                    onClick={() => openRefund(row)}
+                  >
+                    Issue Refund
+                  </button>
+                ) : null}
+
+                {row.status === 'cancelled' && row.isIncluded ? (
+                  <span className="mono-note" style={{ fontSize: '11px', opacity: 0.6 }}>
+                    Free (Seat Freed)
+                  </span>
+                ) : null}
+              </div>
+            </td>
           </tr>
         ))}
       </DataTable>
+
+      {/* Force Cancel Sheet */}
+      <Sheet
+        open={Boolean(forceCancelTarget)}
+        title="Force Remove Attendee from Event"
+        onClose={() => setForceCancelTarget(null)}
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          Remove <b>{forceCancelTarget?.userName}</b> from <b>{forceCancelTarget?.eventTitle}</b>?
+          This immediately revokes their ticket and releases the seat for other attendees.
+        </p>
+
+        {forceCancelTarget?.isIncluded ? (
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: '8px',
+              background: 'rgba(56, 189, 248, 0.08)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              margin: '12px 0 16px 0',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            ℹ️ <b>Free Included Event Selection:</b> This registration was part of the attendee's
+            pass quota with no additional fee (₹0). Removing them will release the seat immediately
+            and restore their included event credit quota so they can choose another event. No
+            refund is applicable.
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              margin: '12px 0 16px 0',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span className="muted">Registration Fee Paid:</span>
+              <b>{money(forceCancelTarget?.feePaise || 0)}</b>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span className="muted">Available to Refund:</span>
+              <b style={{ color: '#2bb673' }}>
+                {money(forceCancelTarget?.refundableAmountPaise || 0)}
+              </b>
+            </div>
+
+            {forceCancelTarget?.isRefundable ? (
+              <div style={{ marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={forceCancelForm.issueRefund}
+                    onChange={(e) =>
+                      setForceCancelForm({ ...forceCancelForm, issueRefund: e.target.checked })
+                    }
+                  />
+                  <span>Process refund for this cancellation</span>
+                </label>
+
+                {forceCancelForm.issueRefund ? (
+                  <div style={{ marginTop: '12px', paddingLeft: '24px' }}>
+                    <div style={{ display: 'flex', gap: '16px', marginBottom: '10px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                        <input
+                          type="radio"
+                          name="refundMode"
+                          checked={forceCancelForm.refundMode === 'full'}
+                          onChange={() =>
+                            setForceCancelForm({ ...forceCancelForm, refundMode: 'full' })
+                          }
+                        />
+                        <span>Full refund ({money(forceCancelTarget.refundableAmountPaise)})</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                        <input
+                          type="radio"
+                          name="refundMode"
+                          checked={forceCancelForm.refundMode === 'custom'}
+                          onChange={() =>
+                            setForceCancelForm({
+                              ...forceCancelForm,
+                              refundMode: 'custom',
+                              customAmount: String(forceCancelTarget.refundableAmountPaise / 100),
+                            })
+                          }
+                        />
+                        <span>Custom amount</span>
+                      </label>
+                    </div>
+
+                    {forceCancelForm.refundMode === 'custom' ? (
+                      <Field
+                        label={`Custom Refund Amount in ₹ (Max: ₹${
+                          forceCancelTarget.refundableAmountPaise / 100
+                        })`}
+                        hint="Cannot exceed the paid amount"
+                      >
+                        <input
+                          type="number"
+                          min="1"
+                          max={forceCancelTarget.refundableAmountPaise / 100}
+                          step="0.01"
+                          value={forceCancelForm.customAmount}
+                          onChange={(e) =>
+                            setForceCancelForm({
+                              ...forceCancelForm,
+                              customAmount: e.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                    ) : null}
+
+                    <Field label="Refund Note (for records)">
+                      <input
+                        value={forceCancelForm.refundReason}
+                        onChange={(e) =>
+                          setForceCancelForm({
+                            ...forceCancelForm,
+                            refundReason: e.target.value,
+                          })
+                        }
+                        placeholder="e.g. Host initiated cancellation"
+                      />
+                    </Field>
+                  </div>
+                ) : (
+                  <p className="table-sub" style={{ margin: '8px 0 0 24px', color: '#f59e0b' }}>
+                    ⚠️ No refund will be issued immediately. You can still issue a refund later from the registrations list.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="table-sub" style={{ margin: '8px 0 0', color: '#f59e0b' }}>
+                Order is already refunded or payment was not completed.
+              </p>
+            )}
+          </div>
+        )}
+
+        <Field
+          label="Removal Reason (Visible to Attendee in Portal)"
+          hint="This note will be shown to the attendee in their user portal."
+        >
+          <input
+            value={forceCancelForm.reason}
+            onChange={(e) =>
+              setForceCancelForm({ ...forceCancelForm, reason: e.target.value })
+            }
+            placeholder="Reason for removal..."
+            required
+          />
+        </Field>
+
+        <div className="sheet-actions">
+          <Button variant="ghost" onClick={() => setForceCancelTarget(null)}>
+            Keep Registration
+          </Button>
+          <Button
+            variant="danger"
+            onClick={submitForceCancel}
+            disabled={actionBusy || !forceCancelForm.reason.trim()}
+          >
+            {actionBusy ? 'Removing...' : 'Confirm Force Removal'}
+          </Button>
+        </div>
+      </Sheet>
+
+      {/* Issue Refund Sheet */}
+      <Sheet
+        open={Boolean(refundTarget)}
+        title="Issue Refund for Cancelled Registration"
+        onClose={() => setRefundTarget(null)}
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          Refund for <b>{refundTarget?.userName}</b> · {refundTarget?.eventTitle}
+        </p>
+
+        <div
+          style={{
+            padding: '12px 14px',
+            borderRadius: '8px',
+            background: 'rgba(255, 255, 255, 0.04)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            margin: '12px 0 16px 0',
+            fontSize: '13px',
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span className="muted">Registration Fee Paid:</span>
+            <b>{money(refundTarget?.feePaise || 0)}</b>
+          </div>
+          {refundTarget?.refundedAmountPaise > 0 ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span className="muted">Already Refunded:</span>
+              <span style={{ color: '#2bb673' }}>
+                {money(refundTarget?.refundedAmountPaise || 0)}
+              </span>
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span className="muted">Max Refundable Amount:</span>
+            <b style={{ color: '#38bdf8' }}>
+              {money(refundTarget?.refundableAmountPaise || 0)}
+            </b>
+          </div>
+        </div>
+
+        <Field
+          label={`Refund Amount in ₹ (Max: ₹${
+            (refundTarget?.refundableAmountPaise || 0) / 100
+          })`}
+          hint="Defaults to full refundable amount. Strictly capped at paid fee."
+        >
+          <input
+            type="number"
+            min="1"
+            max={(refundTarget?.refundableAmountPaise || 0) / 100}
+            step="0.01"
+            value={refundForm.amount}
+            onChange={(e) => setRefundForm({ ...refundForm, amount: e.target.value })}
+            required
+          />
+        </Field>
+
+        <Field label="Refund Reason Note">
+          <input
+            value={refundForm.reasonNote}
+            onChange={(e) => setRefundForm({ ...refundForm, reasonNote: e.target.value })}
+            placeholder="e.g. Cancelled attendee refund"
+          />
+        </Field>
+
+        <div className="sheet-actions">
+          <Button variant="ghost" onClick={() => setRefundTarget(null)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={submitRefund}
+            disabled={
+              actionBusy ||
+              !refundForm.amount ||
+              Number(refundForm.amount) <= 0 ||
+              Number(refundForm.amount) > (refundTarget?.refundableAmountPaise || 0) / 100
+            }
+          >
+            {actionBusy
+              ? 'Processing...'
+              : `Issue Refund (${money(Math.round(Number(refundForm.amount || 0) * 100))})`}
+          </Button>
+        </div>
+      </Sheet>
+
       <div
         style={{
           display: 'flex',
@@ -1993,6 +2620,35 @@ export function AdminPayments() {
   return (
     <>
       <SectionHead kicker="FINANCE" title="Payments and refunds" />
+      {/* Quick link to Cancelled Event Registrations & Refunds */}
+      <div
+        style={{
+          background: 'rgba(239, 68, 68, 0.08)',
+          border: '1px solid rgba(239, 68, 68, 0.25)',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div>
+          <b style={{ color: '#fca5a5' }}>Looking for Cancelled Event Registrations &amp; Attendee Refunds?</b>
+          <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '2px' }}>
+            Participant event cancellations, force-removals, seat releases, and custom partial/full refund controls are located under <b>Registrations</b>.
+          </div>
+        </div>
+        <Link
+          to="/manage/registrations?status=cancelled"
+          className="button primary small"
+          style={{ background: '#ef4444', borderColor: '#ef4444', color: '#fff', whiteSpace: 'nowrap' }}
+        >
+          View Cancelled Registrations &amp; Refunds →
+        </Link>
+      </div>
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       {payments.loading ? <Loading label="Loading payments" rows={2} /> : null}
       {payments.error ? <ErrorBox error={payments.error} onRetry={payments.reload} /> : null}
@@ -2103,12 +2759,33 @@ export function AdminPayments() {
 }
 
 export function AdminCheckin() {
-  const { editionId } = useSite();
+  const { editionId, slug } = useSite();
+  const [searchParams] = useSearchParams();
   const [token, setToken] = useState('');
+  const [selectedEventId, setSelectedEventId] = useState(searchParams.get('eventId') || '');
   const [day, setDay] = useState(new Date().toISOString().slice(0, 10));
   const [result, setResult] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [facingMode, setFacingMode] = useState('environment');
+  const [rosterFilter, setRosterFilter] = useState('all');
+  const [rosterSearch, setRosterSearch] = useState('');
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const scanIntervalRef = useRef(null);
+
+  useEffect(() => {
+    const evId = searchParams.get('eventId');
+    if (evId) setSelectedEventId(evId);
+  }, [searchParams]);
+
+  const eventsList = useAsync(
+    () => (slug ? publicApi.events(slug, { pageSize: 100 }) : Promise.resolve({ data: [] })),
+    [slug],
+    { enabled: Boolean(slug) }
+  );
+
   const recent = useAsync(() => adminApi.recentCheckins(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
@@ -2116,17 +2793,44 @@ export function AdminCheckin() {
     enabled: Boolean(editionId),
   });
 
-  const scan = async (event) => {
-    event.preventDefault();
+  const rosterAsync = useAsync(
+    () =>
+      selectedEventId
+        ? adminApi.eventRoster(editionId, selectedEventId, { day })
+        : Promise.resolve({ data: null }),
+    [editionId, selectedEventId, day],
+    { enabled: Boolean(editionId && selectedEventId) }
+  );
+
+  const performCheckin = async (rawToken) => {
+    const cleanToken = (rawToken || token || '').trim();
+    if (!cleanToken) return;
     setBusy(true);
     setMessage(null);
     setResult(null);
     try {
-      const body = await adminApi.checkin(editionId, { token: token.trim(), day: day || null });
+      const body = await adminApi.checkin(editionId, {
+        token: cleanToken,
+        day: day || null,
+        eventId: selectedEventId || null,
+      });
       setResult(body.data);
       setToken('');
       recent.reload();
       attendance.reload();
+      if (selectedEventId) {
+        rosterAsync.reload();
+      }
+      // Audible chime
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+        osc.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch {}
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     } finally {
@@ -2134,34 +2838,301 @@ export function AdminCheckin() {
     }
   };
 
+  const scan = async (event) => {
+    event.preventDefault();
+    await performCheckin(token);
+  };
+
+  const handleManualMark = async (userId) => {
+    setMessage(null);
+    try {
+      await adminApi.markAttendance(editionId, {
+        userId,
+        eventId: selectedEventId || null,
+        day,
+        note: 'host_manual_roster',
+      });
+      if (selectedEventId) rosterAsync.reload();
+      attendance.reload();
+      recent.reload();
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message });
+    }
+  };
+
+  const handleUndoAttendance = async (attendanceId) => {
+    if (!attendanceId) return;
+    setMessage(null);
+    try {
+      await adminApi.deleteAttendance(editionId, attendanceId);
+      if (selectedEventId) rosterAsync.reload();
+      attendance.reload();
+      recent.reload();
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message });
+    }
+  };
+
+  // Camera video stream lifecycle
+  useEffect(() => {
+    if (!cameraActive) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+      return undefined;
+    }
+
+    let active = true;
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode } },
+          audio: false,
+        });
+        if (!active) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play();
+        }
+
+        if ('BarcodeDetector' in window) {
+          const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          scanIntervalRef.current = setInterval(async () => {
+            if (
+              videoRef.current &&
+              videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
+            ) {
+              try {
+                const barcodes = await barcodeDetector.detect(videoRef.current);
+                if (barcodes && barcodes.length > 0) {
+                  const scannedVal = barcodes[0].rawValue;
+                  if (scannedVal) {
+                    performCheckin(scannedVal);
+                  }
+                }
+              } catch {
+                // Ignore detector frame error
+              }
+            }
+          }, 400);
+        }
+      } catch (err) {
+        setMessage({
+          tone: 'error',
+          text: `Camera permission denied or camera unavailable: ${err.message}. You can still paste or scan using a handheld barcode scanner.`,
+        });
+        setCameraActive(false);
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      active = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+    };
+  }, [cameraActive, facingMode]);
+
   const recentRows = recent.data?.data || [];
   const attendanceRows = attendance.data?.data || [];
+  const rosterData = rosterAsync.data?.data || null;
+  const rawRosterList = rosterData?.roster || [];
+
+  const filteredRoster = rawRosterList.filter((row) => {
+    if (rosterFilter === 'present' && !row.attended) return false;
+    if (rosterFilter === 'pending' && row.attended) return false;
+    if (rosterSearch.trim()) {
+      const term = rosterSearch.trim().toLowerCase();
+      const match =
+        (row.userName && row.userName.toLowerCase().includes(term)) ||
+        (row.userEmail && row.userEmail.toLowerCase().includes(term)) ||
+        (row.registrationNumber && row.registrationNumber.toLowerCase().includes(term)) ||
+        (row.userCollege && row.userCollege.toLowerCase().includes(term)) ||
+        (row.teamName && row.teamName.toLowerCase().includes(term));
+      if (!match) return false;
+    }
+    return true;
+  });
 
   return (
     <>
-      <SectionHead kicker="DOOR DESK" title="Check-in" />
+      <SectionHead kicker="DOOR DESK &amp; EVENT CHECK-IN" title="Check-in &amp; Scanner Station" />
       <Panel className="checkin-panel">
+        {/* Live Camera Scanner Box */}
+        {cameraActive ? (
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              maxWidth: '380px',
+              margin: '0 auto 20px auto',
+              borderRadius: '14px',
+              overflow: 'hidden',
+              border: '2px solid rgba(56, 189, 248, 0.5)',
+              background: '#09090b',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.8)',
+            }}
+          >
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              style={{ width: '100%', height: '240px', objectFit: 'cover' }}
+            />
+            {/* Visual targeting grid */}
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none',
+              }}
+            >
+              <div
+                style={{
+                  width: '180px',
+                  height: '180px',
+                  border: '2px dashed rgba(56, 189, 248, 0.9)',
+                  borderRadius: '12px',
+                  boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)',
+                }}
+              />
+            </div>
+            {/* Camera Controls Overlay */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '10px',
+                left: 0,
+                right: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                gap: '8px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setFacingMode((m) => (m === 'environment' ? 'user' : 'environment'))}
+                style={{
+                  background: 'rgba(15, 23, 42, 0.85)',
+                  color: '#fff',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <FlipHorizontal size={13} /> Switch Camera
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraActive(false)}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.85)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <CameraOff size={13} /> Stop Camera
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+          <Button
+            type="button"
+            variant={cameraActive ? 'primary' : 'ghost'}
+            onClick={() => setCameraActive((v) => !v)}
+            icon={cameraActive ? CameraOff : Camera}
+          >
+            {cameraActive ? 'Close Camera Scanner' : 'Open Camera QR Scanner'}
+          </Button>
+        </div>
+
         <form onSubmit={scan} className="checkin-form">
           <Field
-            label="Ticket token"
-            hint="Scan the QR, or type the PX-… token from the participant portal."
+            label="Check-in Station / Event"
+            hint="Pick an event for workshop / competition verification, or General Pass for door turnstile admission."
+          >
+            <select
+              value={selectedEventId}
+              onChange={(e) => setSelectedEventId(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255,255,255,0.05)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: '8px',
+                padding: '9px 12px',
+                fontSize: '14px',
+              }}
+            >
+              <option value="">🎟️ General Fest Turnstile Admission (All Passes)</option>
+              {(eventsList.data?.data || []).map((ev) => (
+                <option key={ev.id} value={ev.id}>
+                  🎯 {ev.title} {ev.venueRoom ? `· Room ${ev.venueRoom}` : ''} ({ev.categoryName || ev.category})
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field
+            label="Ticket token or Registration code"
+            hint="Scan QR with camera or barcode gun, or paste the attendee's code (e.g. PX-26-EA130B)."
           >
             <input
               value={token}
               onChange={(event) => setToken(event.target.value)}
-              placeholder="PX-…"
+              placeholder="Scan QR or paste PX-…"
               autoFocus
               required
             />
           </Field>
-          <Field label="Convention day">
+
+          <Field label="Convention Day">
             <input type="date" value={day} onChange={(event) => setDay(event.target.value)} />
           </Field>
+
           <Button type="submit" disabled={busy || !token.trim()} icon={ClipboardCheck}>
-            {busy ? 'Checking' : 'Admit participant'}
+            {busy ? 'Verifying…' : 'Admit & Check-in'}
           </Button>
         </form>
+
         {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+
         {result ? (
           <div className={`checkin-result ${result.result}`}>
             <div
@@ -2172,7 +3143,9 @@ export function AdminCheckin() {
                 marginBottom: 8,
               }}
             >
-              <span>{result.result}</span>
+              <span style={{ textTransform: 'uppercase', fontWeight: 800 }}>
+                {result.result === 'admitted' ? '✓ ADMITTED' : result.result}
+              </span>
               <button
                 type="button"
                 className="button ghost small"
@@ -2182,10 +3155,50 @@ export function AdminCheckin() {
                 Scan next
               </button>
             </div>
-            <h3>{result.participantName}</h3>
+
+            <h3 style={{ margin: '4px 0' }}>{result.participantName}</h3>
+
+            {result.team ? (
+              <div
+                style={{
+                  margin: '8px 0',
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  color: '#38bdf8',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                👥 Team: <b>{result.team.teamName}</b>{' '}
+                {result.team.isLeader ? '(Team Leader)' : '(Team Member)'}
+              </div>
+            ) : null}
+
+            {result.warning ? (
+              <div
+                style={{
+                  margin: '10px 0',
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  background: 'rgba(234, 179, 8, 0.15)',
+                  border: '1px solid rgba(234, 179, 8, 0.5)',
+                  color: '#facc15',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                }}
+              >
+                ⚠️ {result.warning}
+              </div>
+            ) : null}
+
             <p>
-              {result.eventTitle || 'Convention pass'} ·{' '}
-              {result.registrationNumber || 'no registration number'} ·{' '}
+              {result.eventTitle || 'Convention Pass'} ·{' '}
+              {result.registrationNumber || 'Registered Attendee'} ·{' '}
               {dateTime(result.checkedInAt)}
             </p>
             {result.message ? <p className="muted">{result.message}</p> : null}
@@ -2193,7 +3206,186 @@ export function AdminCheckin() {
         ) : null}
       </Panel>
 
-      <div className="portal-columns">
+      {/* Dedicated Event Room Host Roster */}
+      {selectedEventId && rosterData ? (
+        <Panel style={{ marginTop: '20px' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              paddingBottom: '14px',
+              marginBottom: '16px',
+            }}
+          >
+            <div>
+              <Eyebrow>ROOM HOST LIVE ATTENDANCE ROSTER</Eyebrow>
+              <h3 style={{ margin: '4px 0 2px 0' }}>{rosterData.event.title}</h3>
+              <p className="table-sub" style={{ margin: 0 }}>
+                {rosterData.event.venueRoom ? `📍 Room ${rosterData.event.venueRoom} · ` : ''}
+                Format: {rosterData.event.format} · Capacity: {rosterData.event.capacity}
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', opacity: 0.7 }}>
+                  Checked In Today
+                </div>
+                <b style={{ fontSize: '18px', color: '#2bb673' }}>
+                  {rosterData.totalAttended} / {rosterData.totalRegistered}
+                </b>
+              </div>
+              <Button variant="ghost" size="small" onClick={() => rosterAsync.reload()} icon={RefreshCw}>
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              marginBottom: '14px',
+            }}
+          >
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                className={`button ${rosterFilter === 'all' ? 'primary' : 'ghost'} small`}
+                onClick={() => setRosterFilter('all')}
+              >
+                All ({rosterData.totalRegistered})
+              </button>
+              <button
+                type="button"
+                className={`button ${rosterFilter === 'present' ? 'primary' : 'ghost'} small`}
+                onClick={() => setRosterFilter('present')}
+              >
+                Present ({rosterData.totalAttended})
+              </button>
+              <button
+                type="button"
+                className={`button ${rosterFilter === 'pending' ? 'primary' : 'ghost'} small`}
+                onClick={() => setRosterFilter('pending')}
+              >
+                Pending ({rosterData.totalRegistered - rosterData.totalAttended})
+              </button>
+            </div>
+
+            <input
+              type="text"
+              placeholder="Filter roster by attendee or team..."
+              value={rosterSearch}
+              onChange={(e) => setRosterSearch(e.target.value)}
+              style={{
+                flex: 1,
+                minWidth: '200px',
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                fontSize: '13px',
+                color: '#fff',
+              }}
+            />
+          </div>
+
+          <DataTable
+            head={['Participant', 'College', 'Team / Group', 'Status', 'Attendance', 'Actions']}
+            empty={!filteredRoster.length ? 'No participants match the filter.' : null}
+          >
+            {filteredRoster.map((item) => (
+              <tr key={item.registrationId}>
+                <td>
+                  <b>{item.userName}</b>
+                  <div className="table-sub">{item.userEmail}</div>
+                  <div className="mono-note" style={{ fontSize: '11px' }}>
+                    {item.registrationNumber}
+                  </div>
+                </td>
+                <td>
+                  {item.userCollege ? (
+                    <div style={{ fontSize: '13px' }}>{item.userCollege}</div>
+                  ) : (
+                    <span className="muted">-</span>
+                  )}
+                </td>
+                <td>
+                  {item.teamName ? (
+                    <div>
+                      <Badge tone="accent">👥 {item.teamName}</Badge>
+                      {item.isTeamLeader ? (
+                        <span style={{ fontSize: '11px', color: '#ff9f2e', marginLeft: '6px' }}>
+                          ★ Leader
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="muted">Individual</span>
+                  )}
+                </td>
+                <td>
+                  {item.status === 'confirmed' ? (
+                    <Badge tone="good">Confirmed</Badge>
+                  ) : item.status === 'cancelled' ? (
+                    <Badge tone="bad">Cancelled</Badge>
+                  ) : (
+                    <StatusBadge status={item.status} />
+                  )}
+                </td>
+                <td>
+                  {item.attended ? (
+                    <div>
+                      <Badge tone="good">✓ Present</Badge>
+                      {item.checkedInAt ? (
+                        <div className="table-sub" style={{ fontSize: '11px' }}>
+                          {dateTime(item.checkedInAt)}
+                        </div>
+                      ) : null}
+                      {item.checkedInByName ? (
+                        <div className="table-sub" style={{ fontSize: '11px', opacity: 0.7 }}>
+                          Host: {item.checkedInByName}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <Badge tone="muted">Not Checked In</Badge>
+                  )}
+                </td>
+                <td>
+                  {item.attended ? (
+                    <button
+                      type="button"
+                      className="table-action"
+                      style={{ color: '#f87171' }}
+                      onClick={() => handleUndoAttendance(item.attendanceId)}
+                    >
+                      Undo
+                    </button>
+                  ) : item.status !== 'cancelled' ? (
+                    <button
+                      type="button"
+                      className="table-action"
+                      style={{ color: '#2bb673', fontWeight: 600 }}
+                      onClick={() => handleManualMark(item.userId)}
+                    >
+                      Mark Present
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </DataTable>
+        </Panel>
+      ) : null}
+
+      <div className="portal-columns" style={{ marginTop: '20px' }}>
         <Panel>
           <Eyebrow>RECENT CHECK-INS</Eyebrow>
           {recentRows.length ? (
@@ -2214,11 +3406,16 @@ export function AdminCheckin() {
           )}
         </Panel>
         <Panel>
-          <Eyebrow>ATTENDANCE · {day}</Eyebrow>
+          <Eyebrow>ATTENDANCE LOGS · {day}</Eyebrow>
           <p className="mono-note">{attendanceRows.length} records</p>
           {attendanceRows.slice(0, 8).map((row) => (
             <div className="detail-row" key={row.id}>
-              <span>{row.participantName}</span>
+              <span>
+                {row.participantName}{' '}
+                {row.eventTitle && row.eventTitle !== 'Convention Pass Gate' ? (
+                  <small className="muted">({row.eventTitle})</small>
+                ) : null}
+              </span>
               <b>{row.result}</b>
             </div>
           ))}
@@ -2396,42 +3593,114 @@ export function AdminAnnouncements() {
 }
 
 export function AdminAttendance() {
-  const { editionId } = useSite();
+  const { editionId, slug } = useSite();
   const [day, setDay] = useState('');
-  const rows = useAsync(() => adminApi.attendance(editionId, { day }), [editionId, day], {
-    enabled: Boolean(editionId),
-  });
+  const [selectedEventId, setSelectedEventId] = useState('');
+  const [query, setQuery] = useState('');
+  const debounced = useDebounced(query);
+
+  const eventsList = useAsync(
+    () => (slug ? publicApi.events(slug, { pageSize: 100 }) : Promise.resolve({ data: [] })),
+    [slug],
+    { enabled: Boolean(slug) }
+  );
+
+  const rows = useAsync(
+    () =>
+      adminApi.attendance(editionId, {
+        day: day || undefined,
+        event_id: selectedEventId || undefined,
+        q: debounced || undefined,
+      }),
+    [editionId, day, selectedEventId, debounced],
+    {
+      enabled: Boolean(editionId),
+    }
+  );
   const list = rows.data?.data || [];
+
+  const handleRevoke = async (attendanceId) => {
+    if (!window.confirm('Revoke this attendance record?')) return;
+    try {
+      await adminApi.deleteAttendance(editionId, attendanceId);
+      rows.reload();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   return (
     <>
-      <SectionHead kicker="DOOR RECORDS" title="Attendance" />
+      <SectionHead kicker="DOOR &amp; ROOM RECORDS" title="Attendance Records" />
       <div className="table-filters">
+        <Field label="Search participant or event">
+          <input
+            type="text"
+            placeholder="Search name, email, event..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </Field>
+        <Field label="Event / Station Filter">
+          <select
+            value={selectedEventId}
+            onChange={(e) => setSelectedEventId(e.target.value)}
+          >
+            <option value="">All Stations &amp; Events</option>
+            {(eventsList.data?.data || []).map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.title} {ev.venueRoom ? `· Room ${ev.venueRoom}` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label="Day">
           <input type="date" value={day} onChange={(event) => setDay(event.target.value)} />
         </Field>
-        <Button variant="ghost" onClick={rows.reload}>
+        <Button variant="ghost" onClick={rows.reload} icon={RefreshCw}>
           Refresh
         </Button>
       </div>
       {rows.loading ? <Loading label="Loading attendance" rows={2} /> : null}
       {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
       <DataTable
-        head={['Participant', 'Event', 'Day', 'Result', 'Checked in', 'By']}
-        empty={!list.length && !rows.loading ? 'No attendance records.' : null}
+        head={['Participant', 'Station / Event', 'Room / Venue', 'Day', 'Result', 'Checked In', 'Host / Staff', 'Actions']}
+        empty={!list.length && !rows.loading ? 'No attendance records match.' : null}
       >
         {list.map((row) => (
           <tr key={row.id}>
             <td>
               <b>{row.participantName}</b>
+              <div className="table-sub">{row.participantEmail}</div>
             </td>
-            <td>{row.eventTitle || 'Convention pass'}</td>
+            <td>
+              <b>{row.eventTitle || 'Convention Pass Gate'}</b>
+            </td>
+            <td>
+              <span className="mono-note">{row.venueRoom || '-'}</span>
+            </td>
             <td>{row.day || '-'}</td>
             <td>
               <StatusBadge status={row.result} />
             </td>
             <td>{dateTime(row.checkedInAt)}</td>
-            <td>{row.checkedInByName || '-'}</td>
+            <td>
+              {row.checkedInByName ? (
+                <span>{row.checkedInByName}</span>
+              ) : (
+                <span className="muted">-</span>
+              )}
+            </td>
+            <td>
+              <button
+                type="button"
+                className="table-action"
+                style={{ color: '#f87171' }}
+                onClick={() => handleRevoke(row.id)}
+              >
+                Revoke
+              </button>
+            </td>
           </tr>
         ))}
       </DataTable>

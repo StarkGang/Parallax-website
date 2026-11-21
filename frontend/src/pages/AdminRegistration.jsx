@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -50,6 +51,10 @@ import {
 } from '../components/ui.jsx';
 
 const REJECTION_REASONS = [
+  ['fake_id', 'Fake ID / Unverifiable Student Credentials'],
+  ['wrong_category', 'Wrong Category (e.g. Non-ISTE registered as ISTE)'],
+  ['unclear_proof', 'Unclear / Illegible Document Proof (Request Re-upload)'],
+  ['duplicate', 'Duplicate Registration'],
   ['invalid_college_id', 'Invalid college ID card'],
   ['invalid_iste_card', 'Invalid ISTE membership card'],
   ['iste_without_proof', 'ISTE membership selected without valid proof'],
@@ -61,6 +66,7 @@ const REJECTION_REASONS = [
 const DOC_OPTIONS = [
   ['college_id', 'College / University ID card'],
   ['iste_card', 'ISTE Membership Card'],
+  ['photo', 'Passport-size photo'],
 ];
 
 const STATE_LABELS = {
@@ -111,7 +117,8 @@ function DocLightbox({ document, url, onClose }) {
   useEffect(() => setZoom(1), [document?.id]);
   if (!document) return null;
   const isPdf = document.mime === 'application/pdf';
-  return (
+  // Portal to <body> so the admin shell/footer cannot clip the review overlay.
+  return createPortal(
     <div className="doc-lightbox" role="dialog" aria-modal="true" aria-label={document.label}>
       <div className="doc-lightbox-card">
         <div className="doc-lightbox-head">
@@ -166,7 +173,8 @@ function DocLightbox({ document, url, onClose }) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1148,7 +1156,7 @@ function categoryToForm(category) {
       return {
         type,
         included: Boolean(existing),
-        required: existing ? existing.required !== false : type === 'college_id',
+        required: existing ? existing.required !== false : (type === 'college_id' || type === 'photo'),
         label: existing?.label || label,
       };
     }),
@@ -1178,6 +1186,7 @@ export function AdminRegistrationSettings() {
       acceptedFormats: settings.acceptedFormats || ['pdf', 'jpg', 'jpeg', 'png'],
       maxUploadMb: String(Math.round((settings.maxUploadBytes || 5242880) / 1048576)),
       allowResubmission: Boolean(settings.allowResubmission),
+      helpdeskPhone: settings.helpdeskPhone || '+91 94460 00000',
       paymentInstructions: settings.paymentInstructions || '',
       refundPolicy: settings.refundPolicy || '',
       approvalMessage: settings.approvalMessage || '',
@@ -1205,6 +1214,7 @@ export function AdminRegistrationSettings() {
       acceptedFormats: form.acceptedFormats,
       maxUploadBytes: Math.max(1024, Math.round(Number(form.maxUploadMb || 5) * 1048576)),
       allowResubmission: form.allowResubmission,
+      helpdeskPhone: form.helpdeskPhone || '+91 94460 00000',
       paymentInstructions: form.paymentInstructions || null,
       refundPolicy: form.refundPolicy || null,
       approvalMessage: form.approvalMessage || null,
@@ -1394,7 +1404,7 @@ export function AdminRegistrationSettings() {
                         })
                       }
                     />
-                    <span>Require {DOC_OPTIONS.find(([type]) => type === document.type)?.[1]}</span>
+                    <span>Require {DOC_OPTIONS.find(([type]) => type === document.type)?.[1] || document.label || document.type}</span>
                   </label>
                   {document.included ? (
                     <div className="reg-doc-config-controls">
@@ -1463,6 +1473,14 @@ export function AdminRegistrationSettings() {
               rows="2"
               value={form.rejectionMessage}
               onChange={(event) => set('rejectionMessage', event.target.value)}
+            />
+          </Field>
+          <Field label="Helpdesk / Emergency Phone (ID Card & Receipt)">
+            <input
+              type="text"
+              value={form.helpdeskPhone || ''}
+              onChange={(event) => set('helpdeskPhone', event.target.value)}
+              placeholder="+91 94460 00000"
             />
           </Field>
         </FieldGrid>
