@@ -56,7 +56,6 @@ import './TeamFrame.css';
 import HeroOdyssey from '../components/HeroOdyssey.jsx';
 import PageScene from '../components/PageScene.jsx';
 import { MascotEasterEggBubble, useMascotEasterEgg } from '../components/MascotEasterEgg.jsx';
-import { RazorpayCheckoutButton } from '../components/RazorpayCheckoutButton.jsx';
 
 const TIER_SHORT_LABELS = {
   iste_member: 'ISTE',
@@ -1586,14 +1585,6 @@ export function PassPage() {
                 <ArrowRight size={14} strokeWidth={2.4} />
               </span>
             </Link>
-
-            <div style={{ marginTop: '12px', width: '100%' }}>
-              <RazorpayCheckoutButton
-                amount={50000}
-                description={`${edition?.name || 'Parallax'} Convention Pass`}
-                buttonText={`Quick Razorpay Checkout (From ${money(minPrice * 100)})`}
-              />
-            </div>
 
             {registrationTiers.length ? (
               <a className="apple-registration-strip" href="#registration">
