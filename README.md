@@ -169,9 +169,23 @@ The backend in `backend/app/` provides:
 
 ## Run locally
 
-Run the backend and frontend in separate terminals from the repository root. Python 3.12 is recommended; Node.js and npm are needed for the frontend.
+The app runs as a single service: the FastAPI backend serves the built React app and the API from the same port, so there is no separate frontend server to run. Python 3.12 is recommended; Node.js and npm are needed to build the frontend once.
 
-### 1. Start the backend
+On Windows, `start.bat` does every step below (installs, seeds, builds, then opens <http://localhost:8000>).
+
+### 1. Build the frontend
+
+```sh
+cd frontend
+npm install
+npm run build
+```
+
+This writes `frontend/dist`, which the backend serves. Rebuild it after changing frontend code.
+
+### 2. Start the app
+
+One process serves the pages, `/api`, `/health`, and the sign-in callbacks.
 
 **Windows (PowerShell):**
 
@@ -201,15 +215,9 @@ Wait for `Application startup complete`. Useful URLs:
 
 **Demo accounts:** `participant@parallax.local` and `owner@parallax.local` (staff). They use no passwords in the local development login flow. Development login is disabled outside development/test and is controlled by `DEV_AUTH_ENABLED` and `ALLOW_DIRECT_LOGIN`. Google OAuth requires valid client credentials.
 
-### 2. Start the frontend
+Open <http://127.0.0.1:8000> for the app. If `frontend/dist` is missing, the root URL returns the API's JSON banner instead of the site, so run the build in step 1 first.
 
-```sh
-cd frontend
-npm install
-npm run dev
-```
-
-Vite normally serves the app at <http://localhost:5173>. Its proxy forwards `/api` and `/health` to `http://127.0.0.1:8000`; set `VITE_API_PROXY` if the backend is elsewhere. Frontend and backend origin settings must agree for development session and CSRF checks. The app expects the backend's current edition to load before it renders routes.
+For frontend hot reload while developing, `cd frontend && npm run dev` still works: Vite serves the app at <http://localhost:5173> and proxies `/api` and `/health` to the backend. Set `VITE_API_PROXY` if the backend is elsewhere. Frontend and backend origin settings must agree for development session and CSRF checks. The app expects the backend's current edition to load before it renders routes.
 
 ### Frontend scripts
 
@@ -304,7 +312,7 @@ Do not hard-code a displayed price or policy in a page when it should come from 
 
 ## Deployment and assets
 
-`frontend/vite.config.js` uses `VITE_BASE_PATH` for the static asset base, proxies local API requests, and copies selected brand files into the build. Deployment config lives in `frontend/vercel.json`, root `vercel.json`, `render.yaml`, and `Dockerfile`.
+The app deploys as **one service**. Root `vercel.json` builds `frontend/dist`, serves it from the CDN, and routes `/api`, `/health`, `/auth` and `/google/callback` to `api/index.py` (the FastAPI app); every other path falls back to `index.html`, while missing asset paths return a real 404. The root `Dockerfile` builds the SPA and serves it from FastAPI on one port, and `backend/app/main.py` does the same for any local or VPS run. `frontend/vite.config.js` uses `VITE_BASE_PATH` for the static asset base, proxies local API requests, and copies selected brand files into the build. There is one deployment config (`vercel.json`) and it deploys from the repository root.
 
 Deployment is not automatic from local development. Read [DEPLOY.md](DEPLOY.md) and the relevant hosting guide before publishing or changing base URLs, origins, cookies, storage, or secrets.
 

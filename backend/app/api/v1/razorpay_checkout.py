@@ -106,7 +106,9 @@ async def create_razorpay_order(
             client = razorpay.Client(auth=(key_id, key_secret))
             order = client.order.create(data=order_data)
         else:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(8.0, connect=4.0, read=6.0)
+            ) as client:
                 res = await client.post(
                     "https://api.razorpay.com/v1/orders",
                     auth=(key_id, key_secret),

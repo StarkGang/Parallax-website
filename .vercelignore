@@ -1,6 +1,7 @@
 .venv/
 node_modules/
 frontend/node_modules/
+frontend/dist/
 backend/tests/
 var/
 .git/
@@ -9,3 +10,9 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+.agents/
+.claude/
+.freebuff/
+.cloud-attachments/
+audit-frontend.log
+ss/

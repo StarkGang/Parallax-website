@@ -82,6 +82,74 @@ function StatusPill({ value, labels = STATE_LABELS }) {
   );
 }
 
+const PAY_STEPS = [
+  ['preparing', 'Payment order created'],
+  ['gateway', 'Paid in Razorpay'],
+  ['verifying', 'Signature verified'],
+];
+
+const PAY_COPY = {
+  preparing: {
+    title: 'Securing your payment',
+    detail: 'Creating a Razorpay order for your pass. This takes a couple of seconds.',
+  },
+  gateway: {
+    title: 'Complete payment in Razorpay',
+    detail: 'Finish the payment in the secure window. Do not refresh or close this page.',
+  },
+  verifying: {
+    title: 'Confirming your payment',
+    detail: 'Razorpay has accepted the payment. Verifying the signature with our server now.',
+  },
+  success: {
+    title: 'Payment successful',
+    detail: 'Generating your convention pass and QR entry ticket.',
+  },
+};
+
+function PaymentProgress({ stage, amount, slow }) {
+  if (!stage) return null;
+  const copy = PAY_COPY[stage];
+  const activeIndex = PAY_STEPS.findIndex(([key]) => key === stage);
+  return (
+    <div className="pay-progress" role="status" aria-live="polite">
+      <div className={`pay-progress-card ${stage === 'success' ? 'is-success' : ''}`}>
+        <div className="pay-progress-icon">
+          {stage === 'success' ? (
+            <Check size={26} strokeWidth={2.6} />
+          ) : (
+            <RefreshCw size={24} className="is-spinning" />
+          )}
+        </div>
+        <h3>{copy.title}</h3>
+        <p>{copy.detail}</p>
+        {amount ? <span className="pay-progress-amount">{money(amount)}</span> : null}
+        <ol className="pay-progress-steps">
+          {PAY_STEPS.map(([key, label], index) => {
+            const done = stage === 'success' || index < activeIndex;
+            const active = !done && index === activeIndex;
+            return (
+              <li key={key} className={done ? 'is-done' : active ? 'is-active' : ''}>
+                <span className="pay-progress-dot">
+                  {done ? <Check size={11} strokeWidth={3} /> : index + 1}
+                </span>
+                {label}
+                {active ? <RefreshCw size={11} className="is-spinning" /> : null}
+              </li>
+            );
+          })}
+        </ol>
+        {slow && stage !== 'success' ? (
+          <small className="pay-progress-hint">
+            Still waiting on Razorpay. Slow connections can take a few extra seconds — please keep this
+            page open.
+          </small>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function DocumentPreview({ open, document, editionId, onClose }) {
   const [zoom, setZoom] = useState(1);
   const [blobUrl, setBlobUrl] = useState(null);
@@ -428,6 +496,19 @@ export function PortalRegistration() {
   const [localRegistration, setLocalRegistration] = useState(null);
   const [changeSheet, setChangeSheet] = useState(false);
   const [changeForm, setChangeForm] = useState({ categoryId: '', note: '' });
+  const [payStage, setPayStage] = useState(null);
+  const [slowPayment, setSlowPayment] = useState(false);
+
+  // Reassure the attendee if the gateway takes longer than expected instead of
+  // leaving a frozen screen with no explanation.
+  useEffect(() => {
+    if (!payStage) {
+      setSlowPayment(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setSlowPayment(true), 7000);
+    return () => clearTimeout(timer);
+  }, [payStage]);
 
   const query = useAsync(() => registrationApi.get(editionId), [editionId, version], {
     enabled: Boolean(editionId),
@@ -628,8 +709,10 @@ export function PortalRegistration() {
   };
 
   const startCheckout = async () => {
+    if (busy) return;
     setBusy('checkout');
     setMessage(null);
+    setPayStage('preparing');
     try {
       if (
         !form.fullName?.trim() ||
@@ -647,6 +730,7 @@ export function PortalRegistration() {
       setPayment(order);
 
       if (order.mock) {
+        setPayStage('verifying');
         await registrationApi.mockPay(editionId, order.orderId);
         setPayment(null);
         refresh('Payment confirmed! Your convention ticket has been generated.');
@@ -659,10 +743,11 @@ export function PortalRegistration() {
         email: form.email?.trim() || user?.email || '',
         phone: form.phone?.trim() || user?.phone || '',
       };
+      setPayStage('gateway');
       const response = await openCheckout(
         order,
         attendeeUser,
-        `${selectedCategory?.name || 'Convention Pass'} - Parallax 2026`
+        `${selectedCategory?.name || 'Convention Pass'} - Parallax 2027`
       );
       if (!response) {
         setMessage({
@@ -679,18 +764,29 @@ export function PortalRegistration() {
         return;
       }
 
-      await registrationApi.verifyPayment(editionId, {
+      setPayStage('verifying');
+      // The verify response already contains the paid registration, so the
+      // ticket can render immediately without a second round trip.
+      const verified = await registrationApi.verifyPayment(editionId, {
         orderId: order.orderId,
         razorpayPaymentId: response.razorpay_payment_id,
         razorpaySignature: response.razorpay_signature,
       });
-
+      if (verified?.data) setLocalRegistration(verified.data);
+      setPayStage('success');
       setPayment(null);
-      refresh('Payment verified successfully! Welcome to Parallax 2026.');
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The verify response is authoritative, so show the paid ticket straight
+      // away instead of waiting for another full reload of the page data.
+      setMessage({
+        tone: 'success',
+        text: 'Payment verified successfully! Welcome to Parallax 2027.',
+      });
     } catch (err) {
       setMessage({ tone: 'error', text: err.message || 'Checkout failed.' });
     } finally {
       setBusy('');
+      setPayStage(null);
     }
   };
 
@@ -1377,7 +1473,13 @@ export function PortalRegistration() {
                       boxShadow: '0 4px 20px rgba(14, 165, 233, 0.4)',
                     }}
                   >
-                    {busy === 'checkout' ? 'Connecting Gateway...' : `Pay ${money(fee)} with Razorpay`}
+                    {busy !== 'checkout'
+                      ? `Pay ${money(fee)} with Razorpay`
+                      : payStage === 'preparing'
+                        ? 'Preparing secure checkout…'
+                        : payStage === 'verifying'
+                          ? 'Verifying payment…'
+                          : 'Complete payment in Razorpay'}
                   </Button>
                 </div>
               </div>
@@ -1401,6 +1503,8 @@ export function PortalRegistration() {
       />
 
       {/* Category Change Modal (If user wants to change category after booking) */}
+      <PaymentProgress stage={payStage} amount={fee} slow={slowPayment} />
+
       <Sheet
         open={changeSheet}
         title="Request a Category Change"
