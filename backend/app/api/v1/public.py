@@ -1,5 +1,6 @@
 """Public, cacheable catalogue. No cookies are read and no PII is returned."""
 
+import json
 import uuid
 from typing import Annotated
 
@@ -313,7 +314,6 @@ class ContactInquiryRequest(BaseModel):
 async def submit_inquiry(
     request: Request,
 ) -> dict:
-    import json
     raw = await request.body()
     data: dict = {}
     try:

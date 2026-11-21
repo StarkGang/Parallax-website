@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role, STAFF_ROLES
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
+from app.core.sessions import revoke_all_sessions
 from app.models.commerce import ConventionPass, Registration
 from app.models.edition import ConventionEdition, EligibilityVerification
 from app.models.user import (
@@ -416,8 +417,6 @@ async def set_status(
         raise NotFound("User not found.")
     user.status = status
     if status == "suspended":
-        from app.core.sessions import revoke_all_sessions
-
         await revoke_all_sessions(db, user_id)
     await record(
         db,

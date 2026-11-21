@@ -181,14 +181,23 @@
   align-items: center;
   justify-content: center;
   gap: 0.5em;
-  margin: 0;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0.45em 0.8em 0.4em;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(4, 10, 18, 0.82), rgba(6, 17, 29, 0.68));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 3px 12px rgba(0, 0, 0, 0.28);
   font-family: var(--mono);
-  font-size: clamp(7.5px, 2.7cqw, 10px);
-  font-weight: 600;
-  letter-spacing: 0.13em;
+  font-size: clamp(8px, 3.2cqw, 11px);
+  font-weight: 650;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
-  color: rgba(216, 236, 251, 0.85);
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+  color: #f4fcff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -200,10 +209,11 @@
   height: 0.55em;
   border-radius: 50%;
   background: var(--exc-accent);
+  box-shadow: 0 0 7px var(--exc-accent);
 }
 
 .exc-sep {
-  opacity: 0.45;
+  opacity: 0.68;
 }
 
 .exc-title {

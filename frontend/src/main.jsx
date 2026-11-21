@@ -9,6 +9,7 @@ import './style.css';
 import './theme.css';
 import './styles/poi.css';
 import './styles/nav.css';
+import './styles/inner-pages.css';
 
 // Automatically migrate legacy hash URLs (e.g. /#/manage/policy -> /manage/policy)
 if (typeof window !== 'undefined' && window.location.hash && window.location.hash.startsWith('#/')) {

@@ -17,6 +17,7 @@ from app.models.commerce import (
     PaymentOrder,
     Registration,
     Team,
+    TeamMember,
 )
 from app.models.edition import ConventionEdition, Event, EventCategory
 from app.schemas.participant import RegistrationView
@@ -311,8 +312,6 @@ async def expire_reservations(db: AsyncSession) -> int:
 
 
 async def team_member_count(db: AsyncSession, team_id: uuid.UUID) -> int:
-    from app.models.commerce import TeamMember
-
     return (
         await db.execute(
             select(func.count(TeamMember.id)).where(TeamMember.team_id == team_id)

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import AppError, ValidationFailed
-from app.core.security import hash_pii, hash_token, new_token, token_matches_hash
+from app.core.security import decrypt_pii, hash_pii, hash_token, new_token, token_matches_hash
 from app.integrations import email as email_outbox
 from app.integrations.storage import document_key, get_storage
 from app.models.edition import (
@@ -142,8 +142,6 @@ async def submit(
                 code="PROFILE_INCOMPLETE",
                 status_code=409,
             )
-        from app.core.security import decrypt_pii
-
         student_id = decrypt_pii(profile.student_identifier_enc) or ""
         student_hash = hash_pii(student_id)
         email_hash = hash_pii(user.email)

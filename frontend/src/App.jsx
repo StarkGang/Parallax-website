@@ -265,7 +265,6 @@ export default function App() {
   return (
     <>
       <ScrollToTop />
-      
       <a className="skip" href="#main">
         Skip to content
       </a>

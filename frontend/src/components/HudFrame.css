@@ -19,7 +19,8 @@
   padding: 0 !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  overflow: visible;
+  overflow: hidden;
+  overflow: clip;
 }
 
 /* host selectors in style.css carry !important chrome — out-specify them */
@@ -31,6 +32,11 @@
   padding: 0 !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* No inner panel: the artwork is the only container surface. */
+.hud::before {
+  display: none;
 }
 
 .hud-art {

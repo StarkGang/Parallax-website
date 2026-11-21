@@ -54,6 +54,8 @@ from app.core.security import (
 
     constant_compare,
 
+    decrypt_secret,
+
     encrypt_secret,
 
     hash_token,
@@ -88,15 +90,21 @@ from app.db.session import get_db
 
 from app.models.user import (
 
+    EditionMembership,
+
     MfaCredential,
 
     MfaRecoveryCode,
+
+    ParticipantProfile,
 
     Session,
 
     User,
 
 )
+
+from app.models.edition import ConventionEdition
 
 from app.schemas.auth import (
 
@@ -433,8 +441,6 @@ async def google_callback(
 
 async def user_service_roles(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
 
-    from app.models.user import EditionMembership
-
 
 
     return list(
@@ -498,10 +504,6 @@ async def dev_login(
 
 async def ensure_dev_admin(db: AsyncSession, user: User) -> None:
 
-    from app.models.edition import ConventionEdition
-
-    from app.models.user import EditionMembership
-
 
 
     edition = await db.scalar(
@@ -553,8 +555,6 @@ async def ensure_dev_admin(db: AsyncSession, user: User) -> None:
 
 
 async def ensure_dev_participant(db: AsyncSession, user: User) -> None:
-
-    from app.models.user import ParticipantProfile
 
 
 
@@ -788,10 +788,6 @@ async def mfa_verify(
 
     credential = await _staff_credential(db, ctx.user.id)
 
-    from app.core.security import decrypt_secret
-
-
-
     secret = decrypt_secret(credential.secret_encrypted)
 
     if not secret or not _verify_totp(secret, payload.code):
@@ -879,10 +875,6 @@ async def mfa_challenge(
 
     elif payload.code:
 
-        from app.core.security import decrypt_secret
-
-
-
         secret = decrypt_secret(credential.secret_encrypted)
 
         ok = bool(secret and _verify_totp(secret, payload.code))
@@ -929,10 +921,6 @@ async def mfa_step_up(
 ) -> dict:
 
     credential = await _staff_credential(db, ctx.user.id)
-
-    from app.core.security import decrypt_secret
-
-
 
     secret = decrypt_secret(credential.secret_encrypted)
 

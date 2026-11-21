@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#0b2133"/>
+      <stop offset="0.55" stop-color="#071421"/>
+      <stop offset="1" stop-color="#040b13"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="38%" r="52%">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="figure" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fdcff" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#3185ad" stop-opacity="0.08"/>
+    </linearGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="#7dd3fc" stroke-opacity="0.055" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="800" height="1000" fill="url(#bg)"/>
+  <rect width="800" height="1000" fill="url(#grid)"/>
+  <rect width="800" height="1000" fill="url(#glow)"/>
+
+  <g fill="none" stroke="#7dd3fc" stroke-opacity="0.24">
+    <circle cx="400" cy="340" r="188"/>
+    <circle cx="400" cy="340" r="228" stroke-opacity="0.1"/>
+    <path d="M140 700C182 566 278 506 400 506S618 566 660 700" stroke-width="2"/>
+  </g>
+
+  <circle cx="400" cy="326" r="104" fill="url(#figure)" stroke="#7dd3fc" stroke-opacity="0.38" stroke-width="2"/>
+  <path d="M228 690c20-112 82-166 172-166s152 54 172 166v62H228z" fill="url(#figure)" stroke="#7dd3fc" stroke-opacity="0.3" stroke-width="2"/>
+
+  <g fill="#7dd3fc" fill-opacity="0.45">
+    <path d="M88 250h34v2H88zM678 250h34v2h-34zM88 748h34v2H88zM678 748h34v2h-34z"/>
+  </g>
+
+  <text x="400" y="884" text-anchor="middle" fill="#9edcf8" fill-opacity="0.62"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="17" letter-spacing="8">PARALLAX CREW</text>
+  <text x="400" y="920" text-anchor="middle" fill="#7dd3fc" fill-opacity="0.38"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" letter-spacing="3.5">PORTRAIT COMING SOON</text>
+</svg>

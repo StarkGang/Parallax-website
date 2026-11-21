@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
@@ -20,6 +20,7 @@ from app.db.session import get_db
 from app.integrations.storage import get_document_storage
 from app.models.commerce import PaymentOrder
 from app.models.edition import ConventionEdition
+from app.models.registration import RegistrationNotification
 from app.schemas.registration import (
     CategoryChangeRequest,
     PaymentVerification,
@@ -361,10 +362,6 @@ async def mark_notification_read(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    from datetime import datetime
-
-    from app.models.registration import RegistrationNotification
-
     row = await db.get(RegistrationNotification, notification_id)
     if (
         row is None
@@ -385,9 +382,11 @@ def _receipt_html(
     instructions: str | None,
     refund_policy: str | None,
 ) -> str:
-    from app.services.editions import aware
-
-    paid_at = aware(row.paid_at).strftime("%d %b %Y, %H:%M UTC") if row.paid_at else "-"
+    paid_at = (
+        edition_service.aware(row.paid_at).strftime("%d %b %Y, %H:%M UTC")
+        if row.paid_at
+        else "-"
+    )
     amount = f"INR {(row.fee_paise + (row.additional_paid_paise or 0)) / 100:,.2f}"
     safe = lambda value: html.escape(str(value or "-"))  # noqa: E731
     status_note = (

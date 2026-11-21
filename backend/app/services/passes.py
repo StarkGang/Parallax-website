@@ -18,6 +18,12 @@ from app.models.commerce import (
 from app.models.edition import ConventionEdition, EditionPolicy, Event
 from app.schemas.participant import SelectedEvent, SelectionState
 from app.services.editions import aware, registration_open
+from app.services.events import seats_taken
+from app.services.tickets import (
+    issue_for_pass,
+    issue_for_registration,
+    revoke_for_registration,
+)
 
 
 async def get_pass(
@@ -88,8 +94,6 @@ async def selection_state(
             )
         ).scalars()
     )
-
-    from app.services.events import seats_taken
 
     taken = await seats_taken(db, [e.id for e in events]) if events else {}
     deadline = aware(policy.selection_change_deadline)
@@ -287,8 +291,6 @@ async def sync_included_registrations(
     if user_pass.status != "active":
         return
 
-    from app.services.tickets import issue_for_registration, revoke_for_registration
-
     keep = set(event_ids)
     existing = list(
         (
@@ -406,8 +408,6 @@ async def create_pass_order(
 async def activate_mock_pass(db: AsyncSession, user_pass: ConventionPass) -> None:
     user_pass.status = "active"
     user_pass.paid_at = datetime.now(UTC)
-    from app.services.tickets import issue_for_pass
-
     await issue_for_pass(db, user_pass)
     # Selections made before payment become real included registrations and tickets.
     await sync_included_registrations(

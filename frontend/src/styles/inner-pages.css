@@ -1,0 +1,1252 @@
+/* ==========================================================================
+   INNER PAGE SYSTEM
+   The public landing and events pages already sit inside an illustrated scene.
+   These pages reuse the same depth language: a deep orbital field behind,
+   glass in front, cyan edges, and content that fills its frame.
+   ========================================================================== */
+
+#root {
+  position: relative;
+  isolation: isolate;
+  min-height: 100svh;
+  background: transparent !important;
+}
+
+main,
+#root > footer {
+  position: relative;
+  z-index: 1;
+}
+
+body {
+  background-color: #040810 !important;
+  background-image:
+    radial-gradient(90% 70% at 50% -20%, #0b2135 0%, #070f1c 46%, #040810 100%) !important;
+}
+
+/* The night-sky grid and orbital field replace the old iframe backdrop. It is
+   pure CSS, fixed to the viewport, and sits behind every route. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 14% 9%, rgba(0, 184, 255, 0.2), transparent 28%),
+    radial-gradient(circle at 86% 18%, rgba(124, 92, 255, 0.16), transparent 30%),
+    linear-gradient(115deg, transparent 38%, rgba(56, 189, 248, 0.045) 50%, transparent 62%),
+    repeating-linear-gradient(90deg, rgba(125, 211, 252, 0.032) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(125, 211, 252, 0.026) 0 1px, transparent 1px 72px);
+  -webkit-mask-image: radial-gradient(ellipse 95% 88% at 50% 34%, #000 18%, rgba(0, 0, 0, 0.52) 58%, transparent 100%);
+  mask-image: radial-gradient(ellipse 95% 88% at 50% 34%, #000 18%, rgba(0, 0, 0, 0.52) 58%, transparent 100%);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  left: -10vw;
+  right: -10vw;
+  bottom: -24vh;
+  height: 92vh;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    repeating-radial-gradient(
+      ellipse 92% 74% at 50% 100%,
+      transparent 0 70px,
+      rgba(56, 189, 248, 0.075) 71px 72px,
+      transparent 73px 140px
+    ),
+    radial-gradient(ellipse 54% 46% at 50% 100%, rgba(0, 180, 255, 0.16), transparent 70%);
+  -webkit-mask-image: linear-gradient(0deg, #000 8%, rgba(0, 0, 0, 0.4) 54%, transparent 88%);
+  mask-image: linear-gradient(0deg, #000 8%, rgba(0, 0, 0, 0.4) 54%, transparent 88%);
+}
+
+/* The scene hero already owns its artwork; everything below it opens onto the
+   fixed orbital field. */
+.page-scene-page {
+  background: transparent !important;
+}
+
+/* The roaming widget overlaps the card copy on the inner pages; their hero
+   already contains its own mascot artwork. */
+body:has(.page-scene-page) .mascot-layer {
+  display: none !important;
+}
+
+.page-scene-page > .section:first-of-type {
+  padding-top: clamp(56px, 6vw, 88px) !important;
+}
+
+section[id],
+.page-scene-page {
+  scroll-margin-top: 100px;
+}
+
+/* ------------------------------------------------------------------ nav -- */
+
+.nav.is-scrolled::before {
+  height: 100%;
+  background: rgba(5, 9, 18, 0.84);
+  border-bottom: 1px solid rgba(125, 211, 252, 0.1);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+/* ------------------------------------------------------------- surfaces -- */
+
+.section {
+  position: relative;
+}
+
+.apple-pass-page-section,
+.apple-faq-section,
+.apple-schedule-section,
+.venue-grid,
+.prose-grid {
+  isolation: isolate;
+}
+
+/* --------------------------------------------------------------- about --- */
+
+.prose-grid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.72fr) !important;
+  gap: clamp(20px, 2.4vw, 32px) !important;
+  align-items: stretch !important;
+}
+
+.about-main-card,
+.host-card {
+  min-width: 0;
+}
+
+.about-main-card .hud-body,
+.host-card .hud-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.about-main-card .hud-body > h2 {
+  text-wrap: balance;
+}
+
+.about-stats {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin-top: auto;
+  padding-top: clamp(24px, 3vw, 38px);
+  border-top: 0;
+}
+
+.about-stats::before,
+.apple-pass-copy-cta::before,
+.faq-aside-facts::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(125, 211, 252, 0.28),
+    rgba(125, 211, 252, 0.07) 42%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+.about-stat {
+  min-width: 0;
+  padding: 2px 18px 0;
+  border-right: 1px solid rgba(148, 200, 228, 0.12);
+}
+
+.about-stat:first-child {
+  padding-left: 0;
+}
+
+.about-stat:last-child {
+  border-right: 0;
+}
+
+.about-stat b {
+  display: block;
+  font-family: var(--display);
+  font-size: clamp(26px, 2.6vw, 38px);
+  line-height: 1;
+  color: #f4fbff;
+  letter-spacing: -0.04em;
+}
+
+.about-stat span {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.4;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(168, 204, 226, 0.62);
+}
+
+.host-card .hud-body {
+  align-items: flex-start;
+}
+
+.host-card .hud-body > img {
+  margin-bottom: clamp(18px, 2vw, 28px);
+}
+
+.host-facts {
+  display: grid;
+  width: 100%;
+  margin: 4px 0 2px;
+}
+
+.host-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(148, 200, 228, 0.07);
+}
+
+.host-facts > div:last-child {
+  border-bottom: 0;
+}
+
+.host-facts span {
+  flex: none;
+  color: rgba(168, 204, 226, 0.52);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.host-facts b {
+  min-width: 0;
+  color: #eaf8ff;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.host-countdown {
+  width: 100%;
+  margin-top: auto;
+  padding: 14px;
+  border: 1px solid rgba(125, 211, 252, 0.13);
+  border-radius: 13px;
+  background:
+    radial-gradient(90% 100% at 50% 0%, rgba(56, 189, 248, 0.08), transparent 70%),
+    linear-gradient(150deg, rgba(8, 20, 34, 0.8), rgba(5, 12, 22, 0.66));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.host-countdown-kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(168, 204, 226, 0.56);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.host-countdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.host-countdown-grid > div {
+  padding: 9px 5px 8px;
+  border: 1px solid rgba(148, 200, 228, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  text-align: center;
+}
+
+.host-countdown-grid b {
+  display: block;
+  color: #f2fbff;
+  font-family: var(--display);
+  font-size: clamp(20px, 2vw, 25px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.host-countdown-grid span {
+  display: block;
+  margin-top: 5px;
+  color: rgba(168, 204, 226, 0.5);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.host-countdown.is-live {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-color: rgba(74, 222, 128, 0.18);
+  background:
+    radial-gradient(90% 100% at 50% 0%, rgba(74, 222, 128, 0.09), transparent 72%),
+    linear-gradient(150deg, rgba(8, 24, 28, 0.82), rgba(5, 12, 22, 0.68));
+}
+
+.host-countdown.is-live .host-countdown-kicker i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1), 0 0 12px rgba(74, 222, 128, 0.45);
+}
+
+.host-countdown.is-live > b {
+  color: #ebfff5;
+  font-family: var(--display);
+  font-size: 20px;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.host-countdown-date {
+  color: rgba(184, 220, 200, 0.6);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+}
+
+.host-card .hud-body > p {
+  margin-bottom: 0;
+}
+
+.host-card-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  width: 100%;
+  margin-top: 18px;
+  padding-top: 0;
+}
+
+.host-card-cta .button {
+  flex: 1 1 150px;
+}
+
+.host-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(190, 225, 244, 0.72);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition: color 180ms ease;
+}
+
+.host-card-link:hover {
+  color: #7dd3fc;
+}
+
+/* ---------------------------------------------------------------- pass --- */
+
+.apple-pass-page-grid {
+  align-items: stretch !important;
+  gap: clamp(22px, 3vw, 38px) !important;
+}
+
+.apple-pass-page-card,
+.apple-pass-copy-card {
+  min-width: 0;
+}
+
+.apple-pass-page-card {
+  max-width: none !important;
+}
+
+.apple-pass-page-card .hud-body,
+.apple-pass-copy-card .hud-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.apple-pass-copy-cta {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  width: 100%;
+  margin-top: auto;
+  padding-top: clamp(24px, 3vw, 34px);
+  border-top: 0;
+}
+
+.apple-pass-copy-cta .button {
+  flex: 1 1 160px;
+}
+
+.apple-pass-copy-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(190, 225, 244, 0.68);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition: color 180ms ease;
+}
+
+.apple-pass-copy-link:hover {
+  color: #7dd3fc;
+}
+
+/* Pass card: a compact live price ledger and left-aligned benefit rows read
+   more deliberately than floating centred lines. */
+.apple-tier-panel {
+  width: 100%;
+  margin: 20px 0 22px;
+  padding: 15px 16px 8px;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 14px;
+  background:
+    radial-gradient(100% 90% at 0% 0%, rgba(56, 189, 248, 0.07), transparent 62%),
+    linear-gradient(150deg, rgba(8, 20, 34, 0.84), rgba(5, 12, 22, 0.7));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  text-align: left;
+}
+
+.apple-tier-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+  color: rgba(168, 204, 226, 0.6);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.apple-tier-head span:last-child {
+  color: rgba(125, 211, 252, 0.62);
+  letter-spacing: 0.08em;
+}
+
+.apple-tier-list {
+  display: grid;
+}
+
+.apple-tier-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(148, 200, 228, 0.06);
+}
+
+.apple-tier-row:last-child {
+  border-bottom: 0;
+}
+
+.apple-tier-name {
+  color: #eaf8ff;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.apple-tier-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #7dd3fc;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.apple-tier-tag {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.13);
+  color: #fbbf24;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.apple-pass-benefits {
+  width: 100%;
+  margin: 0 0 24px !important;
+  padding-top: 20px !important;
+  border-top: 1px solid rgba(148, 200, 228, 0.08) !important;
+  gap: 12px !important;
+}
+
+.apple-benefit-row {
+  align-items: flex-start !important;
+  gap: 10px !important;
+  color: rgba(214, 232, 243, 0.78) !important;
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
+  text-align: left;
+}
+
+.apple-benefit-copy {
+  min-width: 0;
+}
+
+.apple-check-icon {
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px;
+  margin-top: 1px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.08);
+  color: #7dd3fc !important;
+}
+
+/* The standalone checkout and college-registration strip used to be plain
+   rectangles inside the shaped HUD. Give them the same glass edge language. */
+.razorpay-checkout-btn {
+  border-radius: 999px !important;
+  border: 1px solid rgba(125, 211, 252, 0.28) !important;
+  background:
+    linear-gradient(135deg, rgba(10, 29, 49, 0.92), rgba(7, 18, 34, 0.86)) !important;
+  color: #e6f8ff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 24px -16px rgba(0, 0, 0, 0.85) !important;
+}
+
+.razorpay-checkout-btn:hover:not(:disabled) {
+  border-color: rgba(125, 211, 252, 0.54) !important;
+  background:
+    linear-gradient(135deg, rgba(12, 49, 78, 0.94), rgba(8, 25, 46, 0.9)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 12px 28px -16px rgba(14, 165, 233, 0.5) !important;
+}
+
+.rzp-btn-icon {
+  color: #7dd3fc !important;
+}
+
+.apple-registration-strip {
+  position: relative;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center !important;
+  gap: 8px 12px !important;
+  padding: 13px 15px !important;
+  border-radius: 14px !important;
+  border-color: rgba(125, 211, 252, 0.14) !important;
+  background: linear-gradient(145deg, rgba(8, 20, 34, 0.78), rgba(5, 13, 24, 0.62)) !important;
+}
+
+.apple-registration-strip:hover {
+  border-color: rgba(125, 211, 252, 0.3) !important;
+  background: linear-gradient(145deg, rgba(10, 27, 45, 0.84), rgba(6, 17, 31, 0.7)) !important;
+}
+
+.apple-registration-label {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 9px !important;
+  letter-spacing: 0.14em !important;
+}
+
+.apple-registration-prices {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 6px !important;
+  line-height: 1.35 !important;
+}
+
+.apple-registration-prices > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 1px solid rgba(148, 200, 228, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(206, 230, 244, 0.7);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.apple-registration-prices b {
+  color: #7dd3fc !important;
+  font-weight: 600;
+}
+
+.apple-registration-strip > svg {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+}
+
+/* ---------------------------------------------------------------- venue -- */
+
+.venue-grid {
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr) !important;
+  gap: clamp(20px, 2.4vw, 32px) !important;
+  align-items: stretch !important;
+}
+
+.venue-map-card,
+.venue-copy {
+  min-width: 0;
+}
+
+.venue-map-card .hud-body,
+.venue-copy .hud-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.venue-copy .venue-actions {
+  margin-top: auto;
+  padding-top: clamp(22px, 2.6vw, 32px);
+}
+
+.venue-copy .detail-row {
+  border-bottom-color: rgba(148, 200, 228, 0.07);
+}
+
+.venue-copy .detail-row:last-of-type {
+  border-bottom: 0;
+}
+
+.venue-copy .detail-row span {
+  flex: none;
+}
+
+.venue-copy .detail-row b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.venue-map-card .hud-body {
+  padding-bottom: calc(170px * var(--s));
+}
+
+.venue-map-card .map-toolbar {
+  flex: none;
+  padding: 0 2px 12px;
+  border: 0;
+  background: none;
+  gap: 12px;
+}
+
+.map-status {
+  min-width: 0;
+  color: rgba(210, 236, 250, 0.78);
+  font-size: 10.5px;
+}
+
+.map-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-ext-link {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.venue-map-card .map-frame-wrapper {
+  position: relative;
+  flex: 1 1 300px;
+  min-height: 300px;
+  height: auto;
+  overflow: hidden;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 14px;
+  background:
+    radial-gradient(80% 70% at 50% 0%, rgba(56, 189, 248, 0.1), transparent 70%),
+    #07111d;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    inset 0 0 42px rgba(0, 0, 0, 0.36);
+}
+
+.venue-map-card .map-frame-wrapper iframe {
+  filter: invert(0.9) hue-rotate(178deg) saturate(0.62) brightness(0.84) contrast(1.06);
+}
+
+.venue-map-card .map-frame-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(4, 12, 22, 0.28), transparent 22%, transparent 74%, rgba(4, 10, 18, 0.36)),
+    radial-gradient(90% 90% at 50% 50%, transparent 58%, rgba(3, 9, 17, 0.4));
+  box-shadow: inset 0 0 36px rgba(0, 0, 0, 0.34);
+}
+
+.venue-map-card .map-caption {
+  flex: none;
+  align-items: flex-start;
+  padding: 11px 2px 0;
+  border: 0;
+  background: none;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(188, 216, 233, 0.64);
+}
+
+.venue-map-card .map-caption span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.venue-notes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding-top: 0 !important;
+  padding-bottom: 88px !important;
+}
+
+.venue-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 22px 22px 24px;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(8, 18, 32, 0.72), rgba(5, 12, 22, 0.58));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+}
+
+.venue-note-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+  color: #9bd9f6;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+}
+
+.venue-note b {
+  display: block;
+  margin: 0 0 6px;
+  color: #f2fbff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.venue-note-copy {
+  min-width: 0;
+}
+
+.venue-note-kicker {
+  display: block;
+  margin: 0 0 4px;
+  color: rgba(125, 211, 252, 0.48);
+  font-family: var(--mono);
+  font-size: 7.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.venue-note p {
+  margin: 0;
+  color: rgba(188, 212, 228, 0.68);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.venue-note .venue-note-route {
+  display: grid;
+  gap: 6px;
+}
+
+.venue-note-route span {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.venue-note-route em {
+  color: rgba(148, 188, 212, 0.46);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-style: normal;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.venue-note-route strong {
+  min-width: 0;
+  color: rgba(216, 235, 247, 0.8);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.venue-note-route i {
+  color: #9edcf8;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.venue-note-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 9px;
+}
+
+.venue-note-tags span {
+  padding: 3px 6px;
+  border: 1px solid rgba(125, 211, 252, 0.11);
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.055);
+  color: rgba(188, 218, 236, 0.62);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ faq -- */
+
+.apple-faq-section {
+  max-width: 1240px !important;
+  padding-top: clamp(32px, 4vw, 56px) !important;
+}
+
+.apple-faq-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
+  gap: clamp(22px, 3vw, 40px);
+  align-items: start;
+}
+
+.faq-aside {
+  position: sticky;
+  top: 100px;
+  padding: 28px;
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  border-radius: 20px;
+  background:
+    radial-gradient(100% 120% at 0% 0%, rgba(56, 189, 248, 0.09), transparent 62%),
+    linear-gradient(160deg, rgba(8, 20, 34, 0.82), rgba(5, 12, 21, 0.7));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 22px 50px -24px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+}
+
+.faq-aside h2 {
+  margin: 14px 0 10px;
+  color: #f4fbff;
+  font-family: var(--display);
+  font-size: clamp(24px, 2.4vw, 32px);
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.faq-aside h2 em {
+  color: #7dd3fc;
+  font-style: normal;
+}
+
+.faq-aside p {
+  margin: 0;
+  color: rgba(184, 210, 226, 0.68);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.faq-aside-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.faq-aside-facts {
+  position: relative;
+  display: grid;
+  gap: 0;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 0;
+}
+
+.faq-aside-facts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(148, 200, 228, 0.07);
+}
+
+.faq-aside-facts li:last-child {
+  border-bottom: 0;
+}
+
+.faq-aside-facts span {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(168, 204, 226, 0.56);
+}
+
+.faq-aside-facts b {
+  color: #e9f7ff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.apple-faq-list {
+  border-top: 0 !important;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 20px;
+  padding: 6px 26px;
+  background: linear-gradient(160deg, rgba(7, 17, 29, 0.74), rgba(5, 11, 20, 0.62));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 22px 50px -30px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+}
+
+.apple-faq-card {
+  background: none !important;
+}
+
+/* -------------------------------------------------------------- schedule -- */
+
+.apple-schedule-section {
+  padding-top: clamp(28px, 3vw, 42px) !important;
+}
+
+.sched-board .hud-body {
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------- mobile --- */
+
+@media (max-width: 900px) {
+  /* The roaming guide covers the single-column cards on phones. */
+  .mascot-layer {
+    display: none !important;
+  }
+
+  .prose-grid,
+  .venue-grid,
+  .apple-faq-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .faq-aside {
+    position: relative;
+    top: auto;
+  }
+
+  .about-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .about-stat {
+    padding: 2px 12px 0;
+  }
+
+  .venue-notes {
+    grid-template-columns: 1fr;
+    padding-bottom: 64px !important;
+  }
+
+  .apple-faq-list {
+    padding: 4px 18px;
+  }
+}
+
+@media (max-width: 640px) {
+  .apple-pass-btn {
+    gap: 8px;
+    padding: 13px 16px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  .apple-btn-arrow {
+    flex: 0 0 24px;
+  }
+
+  .about-stats {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .about-stat,
+  .about-stat:first-child {
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 200, 228, 0.12);
+  }
+
+  .about-stat:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .host-card-cta,
+  .apple-pass-copy-cta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .host-card-cta .button,
+  .apple-pass-copy-cta .button {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+}
+
+/* Backdrop blur is the expensive part on a phone; keep the glass tint. */
+@media (max-width: 760px) {
+  .hud::before,
+  .faq-aside,
+  .apple-faq-list,
+  .venue-note {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* --------------------------------------------------------------- footer -- */
+
+.footer {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: clamp(42px, 4.5vw, 64px) 7% 22px;
+  border-top: 1px solid rgba(125, 211, 252, 0.12);
+  background:
+    radial-gradient(58% 110% at 10% 0%, rgba(56, 189, 248, 0.09), transparent 66%),
+    radial-gradient(48% 90% at 90% 100%, rgba(124, 92, 255, 0.08), transparent 66%),
+    linear-gradient(180deg, #07101c 0%, #040810 100%) !important;
+}
+
+.footer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(125, 211, 252, 0.035) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(125, 211, 252, 0.026) 0 1px, transparent 1px 72px);
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 78%);
+  mask-image: linear-gradient(180deg, #000, transparent 78%);
+}
+
+.footer > * {
+  position: relative;
+  z-index: 1;
+}
+
+.footer-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(22px, 4vw, 48px);
+  padding-bottom: 24px;
+  border-bottom: 1px solid rgba(148, 200, 228, 0.08);
+}
+
+.footer-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.footer-brand {
+  flex: none;
+}
+
+.footer-iste-logo {
+  width: 52px;
+  height: 52px;
+}
+
+.footer-identity-copy,
+.footer-host-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.footer-kicker {
+  color: rgba(125, 211, 252, 0.56);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.footer-identity-copy strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 12px;
+  color: #f1fbff;
+  font-family: var(--display);
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.footer-identity-copy strong span {
+  color: rgba(174, 208, 228, 0.5);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+.footer-host {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 0;
+  padding-left: 24px;
+  border-left: 1px solid rgba(148, 200, 228, 0.1);
+}
+
+.footer-host img {
+  width: 42px;
+  height: 42px;
+}
+
+.footer-host-copy > span:last-child {
+  color: rgba(184, 210, 228, 0.64);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.footer-links {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 4px 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(148, 200, 228, 0.06);
+}
+
+.footer-links a {
+  padding: 7px 0;
+  border-bottom: 1px solid transparent;
+  color: rgba(174, 205, 224, 0.58);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.footer-links a:hover {
+  border-bottom-color: rgba(125, 211, 252, 0.35);
+  color: #dff5ff;
+}
+
+.footer-bottom {
+  border-top: 0;
+  padding-top: 16px;
+  padding-bottom: 0;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.footer-copy,
+.footer-credits {
+  color: rgba(168, 198, 218, 0.45);
+}
+
+@media (max-width: 900px) {
+  .footer {
+    padding-inline: 6%;
+  }
+
+  .footer-top {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 20px;
+  }
+
+  .footer-host {
+    padding-top: 16px;
+    padding-left: 0;
+    border-top: 1px solid rgba(148, 200, 228, 0.07);
+    border-left: 0;
+  }
+
+  .footer-links {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .footer-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
