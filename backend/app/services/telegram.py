@@ -133,6 +133,98 @@ async def send_telegram_inquiry(
         return {"sent": False, "error": str(exc)}
 
 
+def _format_alert(title: str, fields: list[tuple[str, object]]) -> str:
+    """Build one well-formed HTML message, escaping every value."""
+    lines = [f"<b>{html.escape(str(title))}</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+    for label, value in fields:
+        if value is None or value == "" or value == []:
+            continue
+        lines.append(f"<b>{html.escape(str(label))}:</b> {html.escape(str(value))}")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(
+        "🕒 <i>"
+        + datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+        + "</i>"
+    )
+    return "\n".join(lines)
+
+
+def _split_message(text: str, limit: int = TELEGRAM_MAX_TEXT_LEN) -> list[str]:
+    """Split on line boundaries so every chunk is still valid Telegram HTML."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        # A single pathological line is trimmed rather than sent malformed.
+        while len(line) > limit:
+            if current:
+                chunks.append("\n".join(current))
+                current, size = [], 0
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if size + len(line) + 1 > limit and current:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+async def send_telegram_message(
+    title: str,
+    fields: list[tuple[str, object]],
+    *,
+    tag: str = "ops",
+) -> dict:
+    """Send a formatted operational alert to the organising desk.
+
+    Silently no-ops when Telegram is not configured; never raises, because a
+    failed alert must not fail the money movement that triggered it.
+    """
+    settings = get_settings()
+    bot_token = settings.effective_telegram_bot_token
+    chat_id = settings.effective_telegram_chat_id
+
+    if not bot_token or not chat_id:
+        logger.info("telegram_notification_skipped", reason="not_configured", tag=tag)
+        return {"sent": False, "reason": "not_configured"}
+
+    text = _format_alert(title, fields)
+    base_url = f"https://api.telegram.org/bot{bot_token}"
+    sent_ids: list[int] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            for chunk in _split_message(text):
+                res = await client.post(
+                    f"{base_url}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": chunk,
+                        "parse_mode": "HTML",
+                        "link_preview_options": {"is_disabled": True},
+                    },
+                )
+                data = res.json()
+                if not data.get("ok"):
+                    logger.warning(
+                        "telegram_alert_error",
+                        tag=tag,
+                        status_code=res.status_code,
+                        response=data.get("description"),
+                    )
+                    return {"sent": False, "error": data.get("description")}
+                sent_ids.append(data.get("result", {}).get("message_id"))
+        return {"sent": True, "messageIds": sent_ids}
+    except Exception as exc:
+        logger.warning("telegram_alert_failed", tag=tag, error=str(exc))
+        return {"sent": False, "error": str(exc)}
+
+
 async def send_telegram_registration(
     full_name: str,
     email: str,

@@ -9,7 +9,7 @@ import { contextLine, readPageContext } from './PageContext.js';
 
 export const REST_YAW = -0.18;
 
-/** Arrival beats after a stroll, cycled so every clip gets screen time. */
+/** Beats cycled on tap, so every clip gets screen time. */
 const STROLL_BEATS = ['wave', 'point', 'jump'];
 
 export const MASCOT_STATES = {
@@ -86,13 +86,7 @@ export class MascotBrain {
     this.hoverId = null;
     this.bubbleSource = null;
 
-    this.strollTimer = null;
-    this.strollIndex = 0;
     this.hoverTimer = null;
-    this.hoverHoldTimer = null;
-
-    this.actTimer = null;
-    this.pointRelease = null;
     this.context = null;
     this.contextAt = 0;
   }
@@ -277,11 +271,8 @@ export class MascotBrain {
     this.ambientTimer = null;
     this.userHighlightTimer = null;
     this.tourTimer = null;
-    this.strollTimer = null;
     this.hoverTimer = null;
     this.hoverHoldTimer = null;
-    this.actTimer = null;
-    this.pointRelease = null;
   }
 
   say(text, source = 'ambient', ttlOverride) {
@@ -340,118 +331,21 @@ export class MascotBrain {
     return Math.hypot(x, y);
   }
 
-  pickGuidance({ ignoreCooldown = false } = {}) {
-    if (!this.route) return null;
-    const { size, viewport } = this.getLayout();
-
-    if (this.route.group) {
-      const cfg = this.route.group;
-      const entries = this.registry
-        .getGroup(cfg.prefix)
-        .filter((target) => target.visible)
-        .filter(
-          (target) =>
-            ignoreCooldown ||
-            this.canShow(target.id, {
-              maxShows: cfg.maxShows,
-              cooldownMs: cfg.cooldownMs,
-            }),
-        )
-        .sort(
-          (a, b) =>
-            Number(b.featured) - Number(a.featured) || this.centerScore(a) - this.centerScore(b),
-        );
-
-      let fallback = null;
-      for (const entry of entries) {
-        const spot = this.registry.findSafeSpot(entry, size, viewport);
-        if (spot) return { entry, cfg, spot };
-        if (!fallback) fallback = entry;
-      }
-      return fallback ? { entry: fallback, cfg, spot: null } : null;
-    }
-
-    const behaviors = [...(this.route.behaviors || [])];
-    behaviors.sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2));
-    let fallback = null;
-    for (const cfg of behaviors) {
-      const entry = this.registry.getTarget(cfg.target);
-      if (!entry?.visible) continue;
-      if (!ignoreCooldown && !this.canShow(cfg.target, cfg)) continue;
-      const spot = this.registry.findSafeSpot(entry, size, viewport);
-      if (spot) return { entry, cfg, spot };
-      if (!fallback) fallback = { entry, cfg };
-    }
-    return fallback ? { ...fallback, spot: null } : null;
-  }
-
   evaluate() {
     if (!this.active || !this.route || this.paused || this.destroyed) return;
     if (this.state !== MASCOT_STATES.IDLE) return;
     if (typeof document !== 'undefined' && document.hidden) return;
 
-    // A page tour runs before any ad-hoc pointing: it is the page's own story.
+    // A page tour is the only thing that opens on its own, and only after the
+    // reader has scrolled into the section (see maybeStartTour).
     if (this.maybeStartTour()) return;
 
-    if (this.reducedMotion) {
-      if (!this.routeLineShown && this.route.line) {
-        this.routeLineShown = true;
-        this.say(this.route.line, 'ambient');
-      }
-      return;
-    }
-
-    if (Date.now() - this.lastGuideAt < MASCOT_TIMING.globalCooldownMs) return;
-
-    const candidate = this.pickGuidance();
-    if (candidate) {
-      this.guideTo(candidate);
-      return;
-    }
-
-    if (!this.routeLineShown && this.route.line) {
+    // One short line on arrival, then the guide waits to be asked. It never
+    // wanders the page or points at things unprompted any more.
+    if (!this.routeLineShown && this.route.line && !this.bubbleOpen) {
       this.routeLineShown = true;
       this.say(this.route.line, 'ambient');
     }
-  }
-
-  guideTo(candidate, userInitiated = false) {
-    if (!candidate?.entry) return false;
-    const { entry, cfg } = candidate;
-    const spot = candidate.spot || null;
-    const message = entry.message || cfg.message || this.nextTip();
-    const { viewport, size } = this.getLayout();
-
-    this.guidedId = entry.id;
-    this.guidingMessage = message;
-    this.routeLineShown = true;
-    this.ambientShown = true;
-    this.lastGuideAt = Date.now();
-    this.markShown(entry.id);
-    this.clearBubble();
-
-    const rect = entry.el?.getBoundingClientRect?.() || entry.rect;
-    const facing = spot ? this.facingFor(spot, rect) : this.pose.facing;
-    const isMobile = viewport.w < 760;
-
-    // Mobile, reduced-motion and dense layouts never roam: a ring + bubble
-    // from the resting corner is used instead.
-    if (this.reducedMotion || isMobile || !spot) {
-      this.beginGuide(entry, message, null);
-      return true;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 8) {
-      this.applyPose(this.pose, 0, facing);
-      this.beginGuide(entry, message, spot);
-      return true;
-    }
-
-    const duration = clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 380, 2600);
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, facing, () => this.beginGuide(entry, message, spot), duration);
-    return true;
   }
 
   beginGuide(entry, message, spot) {
@@ -596,21 +490,9 @@ export class MascotBrain {
         return;
       }
 
+      // The ring follows the card; the guide itself stays put. Only a tour
+      // moves it, and that walk belongs to the tour.
       this.onHighlight?.(entry);
-
-      if (this.state === MASCOT_STATES.GUIDING && !this.reducedMotion) {
-        const { size, viewport } = this.getLayout();
-        if (viewport.w < 760) return;
-        const spot = this.registry.findSafeSpot(entry, size, viewport);
-        if (!spot) return;
-        const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-        if (distance > 70) {
-          this.setState(MASCOT_STATES.WALKING);
-          this.walkTo(spot, this.facingFor(spot, entry.el.getBoundingClientRect()), () =>
-            this.beginGuide(entry, this.guidingMessage, spot),
-          );
-        }
-      }
       return;
     }
 
@@ -644,19 +526,38 @@ export class MascotBrain {
     return steps;
   }
 
+  hasScrolled() {
+    if (typeof window === 'undefined') return false;
+    return (window.scrollY || document.documentElement?.scrollTop || 0) > 160;
+  }
+
   /**
    * Tours belong to a section, not to page load: the route is walked only once
-   * the reader scrolls the first card into view.
+   * the reader scrolls into it, and only once per browser session.
    */
   maybeStartTour() {
     if (!this.active || !this.route?.tour || this.paused || this.destroyed) return false;
+    // Reduced motion keeps the page quiet: no walking tour, no auto bubbles.
+    if (this.reducedMotion) return false;
     if (this.tourActive || this.tourDone) return false;
     if (this.state !== MASCOT_STATES.IDLE || this.bubbleOpen) return false;
+    if (!this.hasScrolled()) return false;
 
     const steps = this.resolveTourSteps();
     if (!steps.length) return false;
     const first = this.registry.getTarget(steps[0].id);
     if (!first?.visible) return false;
+
+    const key = `parallax.mascot.tour.${this.route.id}`;
+    try {
+      if (window.sessionStorage.getItem(key) === '1') {
+        this.tourDone = true;
+        return false;
+      }
+      window.sessionStorage.setItem(key, '1');
+    } catch {
+      /* storage can be unavailable in private modes */
+    }
 
     this.beginTour(steps);
     return true;
@@ -791,54 +692,38 @@ export class MascotBrain {
     const entry = this.registry.getTarget(id);
     if (!entry?.el) return;
 
-    // A new hover replaces the previous one, including its pending walk.
     this.hoverId = id;
     this.clearLater(this.hoverTimer);
     this.hoverTimer = null;
-    this.clearLater(this.hoverHoldTimer);
-    this.hoverHoldTimer = null;
 
-    // Hold the tour while the reader is reading a card themselves.
+    // Answer from where it stands: turn towards the card instead of marching
+    // across the page after the pointer.
+    const rect = entry.el.getBoundingClientRect();
+    this.applyPose(this.pose, 0, this.facingFor(this.pose, rect));
+
+    // Hold any running tour while the reader is reading a card themselves.
     this.clearLater(this.tourTimer);
     this.tourTimer = null;
 
-    const { size, viewport } = this.getLayout();
-    const rect = entry.el.getBoundingClientRect();
-    const spot =
-      this.reducedMotion || viewport.w < 760 ? null : this.approachSpot(entry, size, viewport);
-
-    const speak = () => {
+    this.hoverTimer = this.later(() => {
       this.hoverTimer = null;
-      // The pointer moved on before arriving: stay quiet.
       if (this.hoverId !== id) return;
 
       const still = this.registry.getTarget(id) || entry;
       this.onHighlight?.(still);
-      this.setState(MASCOT_STATES.GUIDING);
+      if (this.state === MASCOT_STATES.IDLE) this.setState(MASCOT_STATES.GUIDING);
 
       const text =
         entry.hover ||
         entry.message ||
         (entry.label ? `${entry.label} — worth a closer look.` : '');
-      if (text) this.say(text, 'hover', 16000);
-    };
-
-    if (!spot) {
-      speak();
-      return;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 24) {
-      this.applyPose(this.pose, 0, this.facingFor(spot, rect));
-      speak();
-      return;
-    }
-
-    // Walk over to the card, then point at it while the reader reads.
-    this.clearLater(this.moveTimer);
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.facingFor(spot, rect), speak);
+      // Each card explains itself once. Re-hovering it should stay quiet.
+      const key = `hover:${id}`;
+      if (text && this.canShow(key, { maxShows: 1, cooldownMs: 60000 })) {
+        this.markShown(key);
+        this.say(text, 'hover', 9000);
+      }
+    }, 320);
   }
 
   unhoverTarget(id) {
@@ -862,189 +747,22 @@ export class MascotBrain {
     this.onHighlight?.(guided || null);
 
     if (!guided && this.state === MASCOT_STATES.GUIDING) {
-      // Release the point pose and hand control back to the stroll cycle.
+      // Release the point pose and settle back into idle.
       this.setState(MASCOT_STATES.IDLE);
       this.scheduleAmbient();
     }
   }
 
+  /**
+   * Calm mode: nothing is queued after a guide finishes. The rig keeps its own
+   * idle loop, so the guide is alive without performing at the page.
+   */
   scheduleAmbient() {
     this.clearLater(this.ambientTimer);
-    this.ambientTimer = this.later(() => {
-      this.ambientTimer = null;
-      this.ambient();
-    }, MASCOT_TIMING.ambientDelayMs);
-    this.scheduleAct();
+    this.ambientTimer = null;
   }
 
-  /* ----------------------------------------------------------------- stroll -- */
-
-  scheduleAct(delay) {
-    this.clearLater(this.actTimer);
-    if (!this.route || this.reducedMotion) return;
-    const wait = delay ?? 320 + Math.random() * 640;
-    this.actTimer = this.later(() => {
-      this.actTimer = null;
-      this.act();
-    }, wait);
-  }
-
-  /**
-   * The mascot performs: on every tick it walks somewhere, points at something
-   * it can name, waves or hops. Standing still is the rare outcome, used only
-   * when the page gives it nothing to do.
-   */
-  act() {
-    if (!this.active || !this.route || this.paused || this.destroyed) return;
-    if (this.reducedMotion || this.tourActive) return;
-    if (typeof document !== 'undefined' && document.hidden) return;
-    if (this.state !== MASCOT_STATES.IDLE || this.bubbleOpen) {
-      this.scheduleAct(450);
-      return;
-    }
-
-    const target = this.nearestVisibleTarget();
-    const roll = Math.random();
-
-    if (target && roll < 0.42) {
-      this.pointTarget(target);
-    } else if (roll < 0.72) {
-      if (!this.stroll()) {
-        this.onGesture?.('wave');
-        this.say(this.narrate(), 'ambient');
-      }
-    } else if (roll < 0.86) {
-      this.onGesture?.('wave');
-      this.say(this.narrate(), 'ambient');
-    } else if (roll < 0.95) {
-      this.onGesture?.('jump');
-    } else {
-      this.say(this.narrate(), 'ambient');
-    }
-
-    this.scheduleAct();
-  }
-
-  pageContext() {
-    const now = Date.now();
-    if (!this.context || now - this.contextAt > 6000) {
-      this.context = readPageContext();
-      this.contextAt = now;
-    }
-    return this.context;
-  }
-
-  /** Everything it says is grounded in the page it is standing on. */
-  narrate() {
-    const context = this.pageContext();
-    const visible = [...this.registry.targets.values()].filter((entry) => entry.visible);
-
-    if (visible.length && Math.random() < 0.65) {
-      const pick = visible[Math.floor(Math.random() * visible.length)];
-      const text = pick.hover || pick.message;
-      if (text) return text;
-      if (pick.label) return `${pick.label} — right there.`;
-    }
-
-    return contextLine(context, this.route?.ambient || this.nextTip());
-  }
-
-  /** Walk to a target and point at it while describing it. */
-  pointTarget(entry) {
-    const { size, viewport } = this.getLayout();
-    const rect = entry.el?.getBoundingClientRect?.();
-    const spot = viewport.w < 760 ? null : this.approachSpot(entry, size, viewport);
-
-    const speak = () => {
-      const still = this.registry.getTarget(entry.id) || entry;
-      this.onHighlight?.(still);
-      this.setState(MASCOT_STATES.GUIDING);
-      this.say(
-        entry.hover ||
-          entry.message ||
-          (entry.label ? `${entry.label} — this one.` : this.narrate()),
-        'ambient',
-      );
-      this.clearLater(this.pointRelease);
-      this.pointRelease = this.later(() => {
-        this.pointRelease = null;
-        if (this.state === MASCOT_STATES.GUIDING && !this.hoverId) {
-          this.onHighlight?.(null);
-          this.setState(MASCOT_STATES.IDLE);
-        }
-      }, 3200);
-    };
-
-    if (!spot) {
-      speak();
-      return;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 40) {
-      this.applyPose(this.pose, 0, this.facingFor(spot, rect));
-      speak();
-      return;
-    }
-
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.facingFor(spot, rect), speak);
-  }
-
-  /**
-   * Crossing the layout is the only way the Walk clip reads as walking, and the
-   * arrival beat is what puts Wave, Point and Jump on screen without the reader
-   * having to click the mascot.
-   */
-  stroll() {
-    if (!this.active || !this.route || this.paused || this.destroyed) return false;
-    if (this.reducedMotion || this.tourActive) return false;
-    if (this.state !== MASCOT_STATES.IDLE || this.bubbleOpen) return false;
-    if (typeof document !== 'undefined' && document.hidden) return false;
-
-    const { size, viewport } = this.getLayout();
-    if (viewport.w < 760) return false;
-
-    const spot = this.pickStrollSpot(size, viewport);
-    if (!spot) return false;
-
-    const target = this.nearestVisibleTarget(spot);
-    this.strollIndex += 1;
-
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.walkFacing(this.pose, spot), () => {
-      const roll = Math.random();
-
-      // Every arrival ends in an action, weighted so Wave and Jump actually
-      // appear instead of the mascot settling into a stand.
-      if (target && roll < 0.45) {
-        this.onHighlight?.(target);
-        this.setState(MASCOT_STATES.GUIDING);
-        this.say(
-          target.hover || target.message || `${target.label || 'This one'} — right there.`,
-          'ambient',
-        );
-        this.clearLater(this.pointRelease);
-        this.pointRelease = this.later(() => {
-          this.pointRelease = null;
-          if (this.state === MASCOT_STATES.GUIDING && !this.hoverId) {
-            this.onHighlight?.(null);
-            this.setState(MASCOT_STATES.IDLE);
-          }
-        }, MASCOT_TIMING.pointHighlightMs || 2600);
-      } else if (roll < 0.78) {
-        this.setState(MASCOT_STATES.IDLE);
-        this.onGesture?.('wave');
-        this.say(this.narrate(), 'ambient');
-      } else {
-        this.setState(MASCOT_STATES.IDLE);
-        this.onGesture?.('jump');
-      }
-
-      this.scheduleAmbient();
-    });
-    return true;
-  }
+  /* ------------------------------------------------------------ standpoints -- */
 
   /**
    * Where to stand to point at a card. Dense grids (the catalogue is all cards)
@@ -1079,75 +797,6 @@ export class MascotBrain {
       (a, b) => Math.abs(a.x + size.w / 2 - centerX) - Math.abs(b.x + size.w / 2 - centerX),
     );
     return pool[0];
-  }
-
-  nearestVisibleTarget(around = this.pose) {
-    let best = null;
-    let bestScore = Infinity;
-    const cx = around.x + this.getLayout().size.w / 2;
-    const cy = around.y + this.getLayout().size.h / 2;
-    for (const target of this.registry.targets.values()) {
-      if (!target.visible || !target.rect) continue;
-      const tx = target.rect.left + target.rect.width / 2;
-      const ty = target.rect.top + target.rect.height / 2;
-      const score = Math.hypot(tx - cx, ty - cy);
-      if (score < bestScore) {
-        bestScore = score;
-        best = target;
-      }
-    }
-    return best;
-  } /**
-   * Roam the whole viewport, not just the corners: a grid of lanes across the
-   * screen gives the Walk clip somewhere to go on every section of every page.
-   */
-  pickStrollSpot(size, viewport) {
-    const margin = 16;
-    const top = 96;
-    const bottom = viewport.h - size.h - 16;
-    const usableWidth = Math.max(1, viewport.w - size.w - margin * 2);
-    const columns = viewport.w < 1100 ? 3 : 5;
-    const rows = 3;
-    const candidates = [];
-
-    for (let column = 0; column < columns; column += 1) {
-      for (let row = 0; row < rows; row += 1) {
-        candidates.push({
-          x: margin + (usableWidth * column) / Math.max(1, columns - 1),
-          y: top + ((bottom - top) * row) / Math.max(1, rows - 1),
-        });
-      }
-    }
-
-    const far = candidates.filter(
-      (spot) =>
-        Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y) >
-          MASCOT_TIMING.strollMinDistancePx && this.registry.isPoseUsable(spot, size, viewport),
-    );
-    if (!far.length) return null;
-
-    // Favour the far half of the screen so each stroll reads as a real walk.
-    far.sort(
-      (a, b) =>
-        Math.hypot(b.x - this.pose.x, b.y - this.pose.y) -
-        Math.hypot(a.x - this.pose.x, a.y - this.pose.y),
-    );
-    const pool = far.slice(0, Math.max(1, Math.ceil(far.length * 0.6)));
-    return pool[Math.floor(Math.random() * pool.length)];
-  }
-
-  ambient() {
-    if (!this.active || !this.route || this.paused || this.reducedMotion) return;
-    if (this.state !== MASCOT_STATES.IDLE || this.bubbleOpen) return;
-    if (this.ambientShown) return;
-
-    this.ambientShown = true;
-    const candidate = this.pickGuidance();
-    if (candidate) {
-      this.guideTo(candidate);
-      return;
-    }
-    if (this.route.ambient) this.say(this.route.ambient, 'ambient');
   }
 
   destroy() {

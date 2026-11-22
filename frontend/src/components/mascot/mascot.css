@@ -102,7 +102,7 @@
   color: #cbd5e1;
   cursor: pointer;
   pointer-events: auto;
-  opacity: 0.62;
+  opacity: 0.9;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease;

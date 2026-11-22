@@ -15,6 +15,7 @@ from app.models.commerce import (
     ConventionPass,
     IncludedEventSelection,
     PaymentOrder,
+    PaymentTransaction,
     Registration,
     Team,
     TeamMember,
@@ -22,6 +23,7 @@ from app.models.commerce import (
 from app.models.edition import ConventionEdition, Event, EventCategory
 from app.models.user import User
 from app.schemas.participant import RegistrationView
+from app.services import notifications as notify_service
 from app.services.audit import record
 from app.services.editions import aware, current_policy
 from app.services.events import event_open, seats_taken
@@ -230,6 +232,7 @@ async def create_addon_registrations(
         # Free add-ons are confirmed immediately, so they need their tickets now.
         for r in regs:
             await issue_for_registration(db, r)
+        await notify_service.notify_free_registrations(db, regs)
 
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
@@ -306,6 +309,9 @@ async def cancel_registration(
         resource_id=str(reg.id),
         after={"reason": reason},
     )
+    await notify_service.notify_registration_cancelled(
+        db, reg, actor="participant", reason=reason
+    )
     await db.flush()
 
 
@@ -356,6 +362,88 @@ async def team_member_count(db: AsyncSession, team_id: uuid.UUID) -> int:
     ).scalar() or 0
 
 
+async def receipt_for_registration(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Payment slip data for one event registration.
+
+    Owners and teammates of a team registration may read it; anybody else gets
+    the same 404 as a missing row, so registration ids stay unenumerable.
+    """
+    reg = await db.get(Registration, registration_id)
+    if reg is None or reg.edition_id != edition_id:
+        raise NotFound("Registration not found.")
+
+    if reg.user_id != user_id:
+        allowed = False
+        if reg.team_id is not None:
+            member = (
+                await db.execute(
+                    select(TeamMember.id).where(
+                        TeamMember.team_id == reg.team_id,
+                        TeamMember.user_id == user_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            allowed = member is not None
+        if not allowed:
+            raise NotFound("Registration not found.")
+
+    event = await db.get(Event, reg.event_id)
+    owner = await db.get(User, reg.user_id)
+    edition = await db.get(ConventionEdition, edition_id)
+
+    transaction = None
+    if reg.order_id is not None:
+        transaction = (
+            (
+                await db.execute(
+                    select(PaymentTransaction)
+                    .where(PaymentTransaction.order_id == reg.order_id)
+                    .order_by(PaymentTransaction.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    paid_at = None
+    if transaction is not None:
+        paid_at = aware(transaction.captured_at)
+    elif reg.order_id is not None:
+        order = await db.get(PaymentOrder, reg.order_id)
+        paid_at = aware(order.paid_at) if order is not None else None
+
+    is_paid = (
+        reg.kind == "addon"
+        and reg.fee_paise > 0
+        and reg.status in {"confirmed", "reserved", "cancelled"}
+        and (transaction is not None or reg.status != "reserved")
+    )
+
+    return {
+        "registrationNumber": reg.registration_number,
+        "eventId": str(reg.event_id),
+        "eventTitle": event.title if event else "Event",
+        "eventVenue": event.venue_room if event else None,
+        "eventStartsAt": aware(event.starts_at).isoformat() if event and event.starts_at else None,
+        "kind": reg.kind,
+        "status": reg.status,
+        "feePaise": reg.fee_paise,
+        "paidPaise": reg.fee_paise if is_paid else 0,
+        "transactionId": transaction.gateway_payment_id if transaction else None,
+        "paidAt": paid_at.isoformat() if paid_at else None,
+        "participantName": owner.full_name if owner else None,
+        "participantEmail": owner.email if owner else None,
+        "editionName": edition.name if edition else None,
+        "issuedAt": datetime.now(UTC).isoformat(),
+    }
+
+
 __all__ = [
     "_number",
     "list_for_user",
@@ -366,5 +454,6 @@ __all__ = [
     "cancel_registration",
     "expire_reservations",
     "team_member_count",
+    "receipt_for_registration",
 ]
 

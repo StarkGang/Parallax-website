@@ -199,6 +199,24 @@ async def my_registrations(
     return {"data": [v.model_dump(by_alias=True) for v in views]}
 
 
+@router.get(
+    "/registrations/{registration_id}/receipt",
+    dependencies=[Depends(memory_limiter("registration_receipt", 60, 60))],
+)
+async def registration_receipt(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Payment slip for one event registration (owner or teammate)."""
+    return {
+        "data": await reg_service.receipt_for_registration(
+            db, ctx.user.id, edition_id, registration_id
+        )
+    }
+
+
 @router.delete(
     "/registrations/{registration_id}",
     dependencies=[Depends(limiter("registration_cancel", 20, 60))],

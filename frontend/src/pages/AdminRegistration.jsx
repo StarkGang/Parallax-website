@@ -303,6 +303,24 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     data.verificationStatus !== 'approved' &&
     data.refundStatus !== 'completed';
   const canRefund = data.paymentStatus === 'paid' || data.refundStatus === 'completed';
+  const [receipt, setReceipt] = useState(null);
+  const [receiptBusy, setReceiptBusy] = useState(false);
+  const [receiptError, setReceiptError] = useState('');
+
+  // The desk needs the payment receipt when a participant asks about a charge
+  // or a refund, without leaving the console.
+  const openReceipt = async () => {
+    setReceiptBusy(true);
+    setReceiptError('');
+    try {
+      const body = await adminApi.registrationReceipt(editionId, registrationId);
+      setReceipt(body?.data || null);
+    } catch (error) {
+      setReceiptError(error.message);
+    } finally {
+      setReceiptBusy(false);
+    }
+  };
 
   return (
     <>
@@ -326,8 +344,56 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
             }}
           />
           <Pill value={data.refundStatus} labels={REFUND_LABELS} />
+          <Button
+            variant="ghost"
+            onClick={openReceipt}
+            disabled={receiptBusy || !['paid', 'refunded'].includes(data.paymentStatus)}
+            title="Payment receipt for this registration"
+          >
+            {receiptBusy ? 'Loading receipt…' : 'Receipt'}
+          </Button>
         </div>
       </div>
+
+      <Sheet
+        open={Boolean(receipt) || Boolean(receiptError)}
+        title="Payment receipt"
+        eyebrow="REGISTRATION DESK"
+        onClose={() => {
+          setReceipt(null);
+          setReceiptError('');
+        }}
+      >
+        {receiptError ? <InlineMessage tone="error">{receiptError}</InlineMessage> : null}
+        {receipt ? (
+          <>
+            <div className="detail-row">
+              <span>Registration</span>
+              <b className="mono-note">{receipt.registrationNumber || '-'}</b>
+            </div>
+            <div className="detail-row">
+              <span>Amount paid</span>
+              <b>{money(receipt.amountPaise || 0)}</b>
+            </div>
+            <div className="detail-row">
+              <span>Transaction ID</span>
+              <b className="mono-note">{receipt.transactionId || '-'}</b>
+            </div>
+            <div className="detail-row">
+              <span>Payment status</span>
+              <b>{receipt.paymentStatus || '-'}</b>
+            </div>
+            <div className="detail-row">
+              <span>Refund status</span>
+              <b>{receipt.refundStatus || '-'}</b>
+            </div>
+            <div className="detail-row">
+              <span>Paid at</span>
+              <b>{receipt.paidAt ? dateTime(receipt.paidAt) : '-'}</b>
+            </div>
+          </>
+        ) : null}
+      </Sheet>
 
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       {isIste ? (

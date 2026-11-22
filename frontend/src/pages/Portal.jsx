@@ -991,8 +991,24 @@ export function PortalRegistrations() {
     enabled: Boolean(editionId),
   });
   const [confirm, setConfirm] = useState(null);
+  const [slip, setSlip] = useState(null);
+  const [slipBusy, setSlipBusy] = useState(null);
   const [message, setMessage] = useState(null);
   const rows = regs.data?.data || [];
+
+  // Payment slip for a paid add-on event, printable to PDF from the browser.
+  const openSlip = async (row) => {
+    setMessage(null);
+    setSlipBusy(row.id);
+    try {
+      const body = await portalApi.registrationReceipt(editionId, row.id);
+      setSlip(body?.data || null);
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setSlipBusy(null);
+    }
+  };
   const cancelCutoff = confirm?.eventStartsAt
     ? new Date(confirm.eventStartsAt).getTime() - 24 * 60 * 60 * 1000
     : null;
@@ -1090,6 +1106,18 @@ export function PortalRegistrations() {
                   ) : (
                     <StatusBadge status={row.status} />
                   )}
+                  {row.kind === 'addon' &&
+                  row.feePaise > 0 &&
+                  (row.status === 'confirmed' || row.status === 'cancelled') ? (
+                    <button
+                      className="table-action"
+                      style={{ marginTop: 6, display: 'block' }}
+                      onClick={() => openSlip(row)}
+                      disabled={slipBusy === row.id}
+                    >
+                      {slipBusy === row.id ? 'Loading…' : 'Payment slip'}
+                    </button>
+                  ) : null}
                 </div>
                 {row.status !== 'cancelled' ? (
                   <button className="table-action" onClick={() => setConfirm(row)}>
@@ -1099,6 +1127,152 @@ export function PortalRegistrations() {
               </div>
             ))}
           </div>
+          <Sheet
+            open={Boolean(slip)}
+            title={slip?.eventTitle ? `Payment slip · ${slip.eventTitle}` : 'Payment slip'}
+            onClose={() => setSlip(null)}
+            wide
+            eyebrow="EVENT PAYMENT RECEIPT"
+          >
+            {slip ? (
+              <div className="px-receipt-stage">
+                <div className="px-receipt-card px-printable-target">
+                  <div className="px-receipt-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      <img
+                        src={LOGO}
+                        alt="Parallax"
+                        style={{ height: '32px', width: 'auto', objectFit: 'contain' }}
+                      />
+                      <div className="px-receipt-title">
+                        <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>
+                          PARALLAX · EVENT PAYMENT SLIP
+                        </h2>
+                        <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#475569' }}>
+                          {slip.editionName || 'Convention'} · ISTE Student Chapter, NSSCE Palakkad
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <img src={ISTE} alt="ISTE" style={{ height: '20px', width: 'auto' }} />
+                        <img src={NSSCE} alt="NSSCE" style={{ height: '20px', width: 'auto' }} />
+                      </div>
+                      <span
+                        className={`badge ${slip.paidPaise > 0 ? 'good' : 'warn'}`}
+                        style={{ fontSize: '12px', fontWeight: '700' }}
+                      >
+                        {slip.paidPaise > 0 ? '✓ PAID' : 'PAYMENT PENDING'}
+                      </span>
+                      <p style={{ margin: 0, fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
+                        {slip.paidAt ? dateTime(slip.paidAt) : dateTime(slip.issuedAt)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="px-receipt-meta-grid">
+                    <div className="px-receipt-meta-item">
+                      <small>RECEIPT REF</small>
+                      <b>{slip.registrationNumber}</b>
+                    </div>
+                    <div className="px-receipt-meta-item">
+                      <small>PAYMENT ID</small>
+                      <b>{slip.transactionId || '—'}</b>
+                    </div>
+                    <div className="px-receipt-meta-item">
+                      <small>REGISTRATION</small>
+                      <b style={{ textTransform: 'capitalize' }}>{slip.status}</b>
+                    </div>
+                    <div className="px-receipt-meta-item">
+                      <small>EVENT DATE</small>
+                      <b>{slip.eventStartsAt ? dateTime(slip.eventStartsAt) : '—'}</b>
+                    </div>
+                  </div>
+
+                  <table className="px-receipt-table">
+                    <thead>
+                      <tr>
+                        <th>Item Description</th>
+                        <th>Attendee</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Amount (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>
+                          <b>{slip.eventTitle}</b>
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>
+                            {slip.eventVenue ? `Venue: ${slip.eventVenue}` : 'Event add-on registration'}
+                          </div>
+                        </td>
+                        <td>
+                          <div>{slip.participantName || '—'}</div>
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>
+                            {slip.participantEmail || ''}
+                          </div>
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              color: slip.paidPaise > 0 ? '#16a34a' : '#b45309',
+                              fontWeight: '700',
+                            }}
+                          >
+                            {slip.paidPaise > 0 ? 'PAID' : 'PENDING'}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                          {money(slip.paidPaise || slip.feePaise || 0)}
+                        </td>
+                      </tr>
+                      <tr className="px-receipt-total-row">
+                        <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
+                          Total Amount Paid:
+                        </td>
+                        <td style={{ textAlign: 'right', padding: '12px 4px', color: '#0284c7' }}>
+                          {money(slip.paidPaise || 0)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <div
+                    style={{
+                      borderTop: '1px solid #e2e8f0',
+                      paddingTop: '12px',
+                      fontSize: '11px',
+                      color: '#64748b',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                    }}
+                  >
+                    <div>
+                      <b>Issuer:</b> ISTE Student Chapter, NSS College of Engineering, Palakkad - 678008
+                    </div>
+                    <div>This slip covers one event add-on payment. Keep it for your records.</div>
+                  </div>
+                </div>
+
+                <div
+                  className="no-print"
+                  style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', justifyContent: 'center' }}
+                >
+                  <Button onClick={() => window.print()} icon={Printer} variant="primary">
+                    Save as PDF
+                  </Button>
+                  <Button onClick={() => setSlip(null)} variant="ghost">
+                    Close
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Loading label="Loading payment slip" rows={2} />
+            )}
+          </Sheet>
+
           <Sheet open={Boolean(confirm)} title="Cancel registration" onClose={() => setConfirm(null)}>
             <p className="muted">
               Cancel the registration for <b>{confirm?.eventTitle}</b>? Your seat is released

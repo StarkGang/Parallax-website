@@ -195,6 +195,8 @@ export const portalApi = {
   saveSelections: (editionId, eventIds) =>
     api(`/editions/${editionId}/pass/selections`, { method: 'PUT', body: { eventIds } }),
   registrations: (editionId) => api(`/editions/${editionId}/registrations`),
+  registrationReceipt: (editionId, registrationId) =>
+    api(`/editions/${editionId}/registrations/${registrationId}/receipt`),
   registerAddons: (editionId, eventIds) =>
     api(`/editions/${editionId}/registrations`, { method: 'POST', body: { eventIds } }),
   cancelRegistration: (editionId, registrationId) =>
@@ -321,6 +323,8 @@ export const adminApi = {
   users: (editionId, params = {}) => api(`${adminBase(editionId)}/users${query(params)}`),
   setUserStatus: (editionId, userId, payload) =>
     api(`${adminBase(editionId)}/users/${userId}/status`, { method: 'PATCH', body: payload }),
+  resetUserMfa: (editionId, userId) =>
+    api(`${adminBase(editionId)}/users/${userId}/reset-mfa`, { method: 'POST' }),
   memberships: (editionId) => api(`${adminBase(editionId)}/memberships`),
   grantMembership: (editionId, payload) =>
     api(`${adminBase(editionId)}/memberships`, { method: 'POST', body: payload }),
@@ -402,6 +406,8 @@ export const adminApi = {
       method: 'POST',
       body: payload,
     }),
+  registrationReceipt: (editionId, registrationId) =>
+    api(`${registrationAdminBase(editionId)}/${registrationId}/receipt`),
   registrationDocumentUrl: (editionId, registrationId, documentId, download = false) =>
     `${API_BASE}/editions/${editionId}/admin/registration/${registrationId}/documents/${documentId}/content${
       download ? '?download=true' : ''
