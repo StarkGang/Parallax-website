@@ -133,3 +133,15 @@ async def test_admin_force_cancel_and_refund_and_roster(
     assert refund_more.status_code == 200, refund_more.text
     assert refund_more.json()["data"]["amountPaise"] == 25000
     assert refund_more.json()["data"]["remainingRefundablePaise"] == 0
+
+    # 6. Test GET /registrations with status=cancelled
+    list_cancelled = await admin_client.get(
+        f"/api/v1/editions/{edition_id}/admin/registrations?status=cancelled"
+    )
+    assert list_cancelled.status_code == 200, list_cancelled.text
+    cancelled_data = list_cancelled.json()["data"]
+    assert len(cancelled_data) >= 1
+    target_row = next(r for r in cancelled_data if r["id"] == reg_id)
+    assert target_row["status"] == "cancelled"
+    assert target_row["cancelledBy"] == "admin"
+    assert target_row["refundedAmountPaise"] == 50000

@@ -1934,10 +1934,11 @@ export function AdminRegistrations() {
       {rows.loading ? <Loading label="Loading registrations" rows={2} /> : null}
       {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
 
-      <DataTable
-        head={['Reg #', 'Participant', 'Event', 'Type', 'Fee', 'Status', 'Date', 'Actions']}
-        empty={!list.length && !rows.loading ? 'No registrations match.' : null}
-      >
+      {!rows.error && (
+        <DataTable
+          head={['Reg #', 'Participant', 'Event', 'Type', 'Fee', 'Status', 'Date', 'Actions']}
+          empty={!list.length && !rows.loading ? 'No registrations match.' : null}
+        >
         {list.map((row) => (
           <tr key={row.id}>
             <td className="mono-note">{row.registrationNumber}</td>
@@ -2026,6 +2027,7 @@ export function AdminRegistrations() {
           </tr>
         ))}
       </DataTable>
+      )}
 
       {/* Force Cancel Sheet */}
       <Sheet
@@ -2286,39 +2288,41 @@ export function AdminRegistrations() {
         </div>
       </Sheet>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px',
-          marginTop: '12px',
-        }}
-      >
-        <span className="table-sub">
-          {total
-            ? `Showing ${(page - 1) * 50 + 1}-${Math.min(page * 50, total)} of ${total}`
-            : 'No registrations'}
-        </span>
-        {pages > 1 ? (
-          <div style={{ display: 'inline-flex', gap: '8px' }}>
-            <Button
-              variant="ghost"
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-              disabled={page <= 1}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => setPage((value) => Math.min(pages, value + 1))}
-              disabled={page >= pages}
-            >
-              Next
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      {!rows.error && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginTop: '12px',
+          }}
+        >
+          <span className="table-sub">
+            {total
+              ? `Showing ${(page - 1) * 50 + 1}-${Math.min(page * 50, total)} of ${total}`
+              : 'No registrations'}
+          </span>
+          {pages > 1 ? (
+            <div style={{ display: 'inline-flex', gap: '8px' }}>
+              <Button
+                variant="ghost"
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                disabled={page <= 1}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setPage((value) => Math.min(pages, value + 1))}
+                disabled={page >= pages}
+              >
+                Next
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      )}
     </>
   );
 }
@@ -2620,35 +2624,6 @@ export function AdminPayments() {
   return (
     <>
       <SectionHead kicker="FINANCE" title="Payments and refunds" />
-      {/* Quick link to Cancelled Event Registrations & Refunds */}
-      <div
-        style={{
-          background: 'rgba(239, 68, 68, 0.08)',
-          border: '1px solid rgba(239, 68, 68, 0.25)',
-          borderRadius: '8px',
-          padding: '12px 16px',
-          marginBottom: '20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <b style={{ color: '#fca5a5' }}>Looking for Cancelled Event Registrations &amp; Attendee Refunds?</b>
-          <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '2px' }}>
-            Participant event cancellations, force-removals, seat releases, and custom partial/full refund controls are located under <b>Registrations</b>.
-          </div>
-        </div>
-        <Link
-          to="/manage/registrations?status=cancelled"
-          className="button primary small"
-          style={{ background: '#ef4444', borderColor: '#ef4444', color: '#fff', whiteSpace: 'nowrap' }}
-        >
-          View Cancelled Registrations &amp; Refunds →
-        </Link>
-      </div>
       {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
       {payments.loading ? <Loading label="Loading payments" rows={2} /> : null}
       {payments.error ? <ErrorBox error={payments.error} onRetry={payments.reload} /> : null}
