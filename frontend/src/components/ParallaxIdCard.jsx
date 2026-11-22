@@ -7,7 +7,7 @@ export const OFFICIAL_PARALLAX_PATH =
 
 /* Curated harmonious tone-on-tone triads */
 export const PALETTES = [
-  { name: 'Parallax Emerald', dark: '#0a3d42', mid: '#2bb673', light: '#b8f23d' },
+  { name: 'Parallax Sapphire', dark: '#061a3a', mid: '#1e6fe0', light: '#9ed8ff' },
   { name: 'Cosmic Indigo', dark: '#14124a', mid: '#5a4bff', light: '#ff9a62' },
   { name: 'Deep Royal', dark: '#0b1d3a', mid: '#2f6bff', light: '#ffd23f' },
   { name: 'Velvet Purple', dark: '#2a0b3a', mid: '#a23df2', light: '#ff7ab8' },
@@ -25,10 +25,10 @@ export const ROLE_CONFIGS = {
     paletteIdx: 0,
     roleTitle: 'College Student',
     tierPill: 'Convention Delegate',
-    paletteName: 'Parallax Emerald',
-    dark: '#0a3d42',
-    mid: '#2bb673',
-    light: '#b8f23d',
+    paletteName: 'Parallax Sapphire',
+    dark: '#061a3a',
+    mid: '#1e6fe0',
+    light: '#9ed8ff',
     label: 'Convention Delegate',
   },
   volunteer: {
@@ -528,6 +528,12 @@ export default function ParallaxIdCard({
   const isVerified = customData?.isVerified !== undefined ? customData.isVerified : registration?.verificationStatus === 'approved';
 
   const baseUrl = import.meta.env.BASE_URL || '/';
+  // Stored photos are repo-relative ("images/team/x.jpg"). Prefix the app base
+  // so the card does not request them under the current route.
+  const photoSrc =
+    resolvedPhoto && !/^(https?:|data:|blob:|\/)/.test(resolvedPhoto)
+      ? `${baseUrl}${resolvedPhoto}`
+      : resolvedPhoto;
   const isteLogo = `${baseUrl}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png`;
   const nssceLogo = `${baseUrl}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp`;
 
@@ -565,7 +571,7 @@ export default function ParallaxIdCard({
           <div className="slot" />
           <label className={`photo ${allowPhotoUpload ? 'is-clickable' : ''}`} title={allowPhotoUpload ? 'Click to change photo' : ''}>
             {resolvedPhoto ? (
-              <img src={resolvedPhoto} alt={fullName} />
+              <img src={photoSrc} alt={fullName} />
             ) : (
               <svg viewBox="0 0 100 117" aria-hidden="true">
                 <circle cx="50" cy="48" r="19" />

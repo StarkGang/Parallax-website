@@ -19,7 +19,7 @@ const FRAGMENT_SRC = `
   uniform float uIntensity;
   uniform float uSize;
 
-  #define OCTAVE_COUNT 8
+  #define OCTAVE_COUNT 3
 
   vec3 hsv2rgb(vec3 c) {
     vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -85,8 +85,15 @@ function Lightning({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const gl = canvas?.getContext("webgl", { antialias: false, alpha: false });
+    const gl = canvas?.getContext("webgl", {
+      antialias: false,
+      alpha: false,
+      powerPreference: "low-power",
+    });
     if (!canvas || !gl) return undefined;
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 
     const compile = (source, type) => {
       const shader = gl.createShader(type);
@@ -138,11 +145,38 @@ function Lightning({
     const start = performance.now();
     let frame = 0;
     let visible = true;
+    let inView = true;
+    let lastDraw = 0;
+    let scrolling = false;
+    let scrollTimer = 0;
 
+    // During a scroll the beam is frozen: the sequence and page need the whole
+    // frame budget, and the slow drift is invisible while the view moves.
+    const scrollHandler = () => {
+      scrolling = true;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => {
+        scrolling = false;
+        lastDraw = 0;
+      }, 150);
+    };
+    window.addEventListener('scroll', scrollHandler, { passive: true });
+
+    // The beam is a soft, full-bleed effect: rendering it at ~960px wide and
+    // letting CSS scale it up looks identical but cuts fragment work by 3-5x.
+    const MAX_RENDER_WIDTH = 560;
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-      const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+      const cssWidth = Math.max(1, canvas.clientWidth);
+      const scale = Math.min(
+        window.devicePixelRatio || 1,
+        1.5,
+        MAX_RENDER_WIDTH / cssWidth,
+      );
+      const width = Math.max(1, Math.floor(cssWidth * scale));
+      const height = Math.max(
+        1,
+        Math.floor(canvas.clientHeight * (width / cssWidth)),
+      );
       if (canvas.width === width && canvas.height === height) return;
       canvas.width = width;
       canvas.height = height;
@@ -150,7 +184,21 @@ function Lightning({
     };
 
     const render = (now) => {
-      if (!visible) return;
+      if (!visible || !inView) {
+        frame = 0;
+        return;
+      }
+      if (scrolling) {
+        frame = requestAnimationFrame(render);
+        return;
+      }
+      // Ambient lightning does not need 60 fps; 24 fps halves GPU time and
+      // leaves headroom for scrolling and the image sequence.
+      if (now - lastDraw < 1000 / 24) {
+        frame = requestAnimationFrame(render);
+        return;
+      }
+      lastDraw = now;
       resize();
       gl.uniform2f(resolution, canvas.width, canvas.height);
       gl.uniform1f(time, (now - start) / 1000);
@@ -167,15 +215,46 @@ function Lightning({
     observer.observe(canvas);
     const visibilityHandler = () => {
       visible = !document.hidden;
-      if (visible && !frame) frame = requestAnimationFrame(render);
+      if (visible && inView && !frame) frame = requestAnimationFrame(render);
     };
     document.addEventListener("visibilitychange", visibilityHandler);
-    frame = requestAnimationFrame(render);
+
+    const intersection =
+      typeof IntersectionObserver !== "undefined"
+        ? new IntersectionObserver(
+            ([entry]) => {
+              inView = entry.isIntersecting;
+              if (inView && visible && !frame && !reducedMotion) {
+                frame = requestAnimationFrame(render);
+              }
+            },
+            { threshold: 0.01 },
+          )
+        : null;
+    intersection?.observe(canvas);
+
+    if (reducedMotion) {
+      // One static frame, then leave the GPU alone.
+      resize();
+      gl.uniform2f(resolution, canvas.width, canvas.height);
+      gl.uniform1f(time, 0);
+      gl.uniform1f(hueUniform, hue);
+      gl.uniform1f(xOffsetUniform, xOffset);
+      gl.uniform1f(speedUniform, speed);
+      gl.uniform1f(intensityUniform, intensity);
+      gl.uniform1f(sizeUniform, size);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    } else {
+      frame = requestAnimationFrame(render);
+    }
 
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      intersection?.disconnect();
       document.removeEventListener("visibilitychange", visibilityHandler);
+      window.removeEventListener('scroll', scrollHandler);
+      clearTimeout(scrollTimer);
       gl.deleteProgram(program);
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);

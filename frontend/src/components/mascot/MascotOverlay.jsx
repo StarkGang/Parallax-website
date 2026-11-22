@@ -43,6 +43,7 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
   const [hovered, setHovered] = useState(false);
   const [gesture, setGesture] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [spriteMode, setSpriteMode] = useState(false);
 
   const tapCountRef = useRef(0);
   const eggTimerRef = useRef(null);
@@ -209,16 +210,27 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
         }}
       >
         <div className={`mascot-float${hovered ? ' is-hovered' : ''}`}>
-          <MascotCanvas
-            facing={pose.facing}
-            state={mascotState}
-            gesture={gesture}
-            paused={canvasPaused}
-            reducedMotion={settings.reducedMotion}
-            lowPower={settings.lowPower}
-            dprCap={settings.lowPower ? 1 : viewport.w < 760 ? 1.25 : 1.5}
-            onFail={handleFail}
-          />
+          {spriteMode ? (
+            <img
+              className="mascot-static"
+              src={`${import.meta.env.BASE_URL}images/mascot.png`}
+              alt=""
+              aria-hidden="true"
+              draggable="false"
+            />
+          ) : (
+            <MascotCanvas
+              facing={pose.facing}
+              state={mascotState}
+              gesture={gesture}
+              paused={canvasPaused}
+              reducedMotion={settings.reducedMotion}
+              lowPower={settings.lowPower}
+              dprCap={1}
+              onFail={handleFail}
+              onSlow={() => setSpriteMode(true)}
+            />
+          )}
 
           <SpeechBubble bubble={bubble} side={bubbleSide} align={bubbleAlign} />
 

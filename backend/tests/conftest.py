@@ -35,6 +35,10 @@ os.environ["MFA_ENFORCED"] = "false"
 os.environ["ALLOW_DIRECT_LOGIN"] = "true"
 os.environ["DEV_AUTH_ENABLED"] = "true"
 os.environ["PAYMENTS_ENABLED"] = "false"
+# The legacy Razorpay checkout tests need configured credentials even though
+# every gateway call is mocked; without them the routes correctly return 401.
+os.environ["RAZORPAY_KEY_ID"] = "rzp_test_ci"
+os.environ["RAZORPAY_KEY_SECRET"] = "ci-test-secret"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["SERVER_SECRET_KEY"] = "test-secret-key-that-is-at-least-32-bytes-long"

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
+import { printWhenReady } from '../lib/print.js';
 import ParallaxIdCard, {
   ADMIN_PRESETS,
   PALETTES,
@@ -93,7 +94,7 @@ export default function AdminIdCardStudio() {
   };
 
   const handlePrint = () => {
-    window.print();
+    printWhenReady();
   };
 
   return (

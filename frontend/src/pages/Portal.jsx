@@ -32,6 +32,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { useTheme } from '../lib/theme.jsx';
 import { date, dateRange, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
+import { printWhenReady } from '../lib/print.js';
 import {
   Badge,
   Button,
@@ -1260,7 +1261,7 @@ export function PortalRegistrations() {
                   className="no-print"
                   style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', justifyContent: 'center' }}
                 >
-                  <Button onClick={() => window.print()} icon={Printer} variant="primary">
+                  <Button onClick={() => printWhenReady()} icon={Printer} variant="primary">
                     Save as PDF
                   </Button>
                   <Button onClick={() => setSlip(null)} variant="ghost">
@@ -1358,7 +1359,7 @@ export function PortalTickets() {
   };
 
   const printBadge = () => {
-    window.print();
+    printWhenReady();
   };
 
   const downloadQr = (ticket) => {

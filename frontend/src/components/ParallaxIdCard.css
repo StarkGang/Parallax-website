@@ -120,13 +120,13 @@
   right: 0;
   top: 76cqw;
   bottom: 0;
-  padding: 5cqw 5.5cqw 4.5cqw;
+  padding: 4.6cqw 5.5cqw 6.6cqw;
   display: flex;
   flex-direction: column;
   z-index: 4;
 }
 .px-card-root .name {
-  font-size: 8.6cqw;
+  font-size: 8.1cqw;
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.025em;
@@ -137,16 +137,16 @@
   text-overflow: ellipsis;
 }
 .px-card-root .role {
-  margin-top: 1cqw;
-  font-size: 3.8cqw;
+  margin-top: 0.8cqw;
+  font-size: 3.4cqw;
   font-weight: 700;
   color: var(--dark);
   letter-spacing: -0.01em;
 }
 .px-card-root .sub {
-  font-size: 2.85cqw;
+  font-size: 2.65cqw;
   color: var(--soft);
-  margin-top: 0.4cqw;
+  margin-top: 0.3cqw;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -156,14 +156,14 @@
   display: flex;
   align-items: center;
   gap: 2.5cqw;
-  margin-top: 2.8cqw;
+  margin-top: 1.9cqw;
 }
 .px-card-root .pill {
   background: var(--light);
   color: var(--dark);
-  font-size: 2.9cqw;
+  font-size: 2.7cqw;
   font-weight: 700;
-  padding: 1.4cqw 3cqw;
+  padding: 1.2cqw 2.7cqw;
   border-radius: 99px;
   white-space: nowrap;
   letter-spacing: 0.01em;
@@ -192,16 +192,16 @@
   font-size: 2.4cqw;
 }
 .px-card-root .row2 {
-  margin-top: 3.2cqw;
-  padding-top: 3cqw;
+  margin-top: 2cqw;
+  padding-top: 1.9cqw;
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 1fr 21cqw;
-  gap: 3cqw;
+  grid-template-columns: 1fr 20cqw;
+  gap: 2.6cqw;
   align-items: center;
 }
 .px-card-root .f + .f {
-  margin-top: 1.2cqw;
+  margin-top: 0.9cqw;
 }
 .px-card-root .f small {
   display: block;
@@ -213,7 +213,7 @@
 }
 .px-card-root .f b {
   display: block;
-  font-size: 2.9cqw;
+  font-size: 2.75cqw;
   font-weight: 700;
   line-height: 1.25;
 }
@@ -239,7 +239,8 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  padding-top: 2cqw;
+  gap: 2cqw;
+  padding-top: 1.1cqw;
 }
 .px-card-root .wm {
   display: flex;
@@ -247,14 +248,15 @@
   justify-content: flex-end;
 }
 .px-card-root .wm .px-vector {
-  height: 3.8cqw;
+  height: 4.3cqw;
   width: auto;
+  max-width: 100%;
   display: block;
   color: var(--dark);
 }
 .px-card-root .wm span {
   display: block;
-  margin-top: 0.6cqw;
+  margin-top: 0.5cqw;
   font-size: 1.9cqw;
   color: var(--soft);
   font-weight: 600;
@@ -274,22 +276,22 @@
   margin-bottom: 0.8cqw;
 }
 .px-card-root .org-badge {
-  height: 4.8cqw;
+  height: 4.1cqw;
   width: auto;
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
 }
 .px-card-root .fr b {
   display: block;
-  font-size: 2.9cqw;
+  font-size: 2.55cqw;
   font-weight: 700;
   letter-spacing: 0.02em;
   line-height: 1;
 }
 .px-card-root .fr span {
   display: block;
-  margin-top: 0.5cqw;
-  font-size: 1.7cqw;
+  margin-top: 0.35cqw;
+  font-size: 1.5cqw;
   letter-spacing: 0.16em;
   color: var(--soft);
   text-transform: uppercase;
@@ -327,12 +329,14 @@
   z-index: 3;
 }
 .px-card-root .back .wm .px-vector {
-  height: 4.8cqw;
+  height: 9.5cqw;
+  width: auto;
+  max-width: 100%;
   color: var(--ivory);
 }
 .px-card-root .back .wm span {
-  font-size: 2.3cqw;
-  margin-top: 0.8cqw;
+  font-size: 2.4cqw;
+  margin-top: 0.9cqw;
 }
 .px-card-root .rows {
   margin-top: 3.5cqw;
@@ -458,6 +462,8 @@
     width: 54mm !important;
     height: 85.6mm !important;
     margin: 4mm auto !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 

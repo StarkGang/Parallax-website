@@ -715,10 +715,13 @@ h3 {
 }
 
 .px-loader-p {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
   transform-style: preserve-3d;
-  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.5));
+  filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.55));
   animation: px-loader-flip 3.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 
