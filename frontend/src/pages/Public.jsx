@@ -97,7 +97,9 @@ const ABOUT_ART = `${import.meta.env.BASE_URL}images/about.webp`;
 // Homepage scene: the animated rooftop backdrop and the character that stands
 // at the base of the three framed cards.
 const SCENE_BG = `${import.meta.env.BASE_URL}images/bg.gif`;
-const SCENE_MASCOT = `${import.meta.env.BASE_URL}images/mascot.gif`;
+// Static art on the homepage stage: the animated GIF pulled focus away from the
+// three entry cards, so the mascot now sits still and only drifts on hover.
+const SCENE_MASCOT = `${import.meta.env.BASE_URL}images/mascot.png`;
 
 // Inner page scenes: the events catalogue uses the arena with the event
 // character, the remaining pages share the valley backdrop and mascot.

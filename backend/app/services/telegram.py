@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import io
+import time
+import logging
 from datetime import datetime, timezone
 import structlog
 import httpx
@@ -191,3 +194,282 @@ async def send_telegram_registration(
         logger.warning("telegram_registration_alert_failed", error=str(exc))
         return {"sent": False, "error": str(exc)}
 
+
+_payment_alerts_seen: dict[str, float] = {}
+
+
+async def send_telegram_payment_notification(
+    event_type: str,  # 'initiated' | 'success' | 'failed'
+    order_id: str,
+    amount_paise: int,
+    purpose: str,
+    payment_id: str | None = None,
+    gateway_order_id: str | None = None,
+    attendee_name: str | None = None,
+    attendee_email: str | None = None,
+    error_message: str | None = None,
+) -> dict:
+    """Send real-time payment alerts (initiated, success, failed) to Telegram with deduplication and low timeout."""
+    settings = get_settings()
+    bot_token = settings.effective_telegram_bot_token
+    chat_id = settings.effective_telegram_chat_id
+    if not bot_token or not chat_id:
+        return {"sent": False, "reason": "not_configured"}
+
+    # Deduplicate: prevent spamming duplicate alerts for the same order and event
+    dedup_key = f"{order_id}:{event_type}"
+    now = time.monotonic()
+    if dedup_key in _payment_alerts_seen:
+        if now - _payment_alerts_seen[dedup_key] < 300.0:
+            return {"sent": False, "reason": "duplicate_suppressed"}
+    _payment_alerts_seen[dedup_key] = now
+    if len(_payment_alerts_seen) > 300:
+        for k in list(_payment_alerts_seen)[:150]:
+            _payment_alerts_seen.pop(k, None)
+
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    amount_inr = f"₹{amount_paise / 100:.2f}" if amount_paise else "₹0.00"
+
+    safe_name = html.escape(attendee_name or "Attendee")
+    safe_email = html.escape(attendee_email or "")
+    safe_purpose = html.escape(purpose.replace("_", " ").title())
+    safe_order_id = html.escape(str(order_id))
+    safe_gateway_order = html.escape(str(gateway_order_id or "—"))
+    safe_pay_id = html.escape(str(payment_id or "—"))
+
+    if event_type == "initiated":
+        header = "💳 <b>Payment Initiated</b>"
+        body = (
+            f"👤 <b>Attendee:</b> {safe_name}\n"
+            f"📧 <b>Email:</b> {safe_email}\n"
+            f"💰 <b>Amount:</b> {amount_inr}\n"
+            f"🎯 <b>Purpose:</b> {safe_purpose}\n"
+            f"📦 <b>Order ID:</b> <code>{safe_order_id}</code>\n"
+            f"🌐 <b>Gateway Order:</b> <code>{safe_gateway_order}</code>\n"
+            f"⏰ <b>Started At:</b> {now_utc}"
+        )
+    elif event_type == "success":
+        header = "✅ <b>Payment Successful</b>"
+        body = (
+            f"👤 <b>Attendee:</b> {safe_name}\n"
+            f"📧 <b>Email:</b> {safe_email}\n"
+            f"💰 <b>Amount:</b> {amount_inr}\n"
+            f"🎯 <b>Purpose:</b> {safe_purpose}\n"
+            f"🆔 <b>Payment ID:</b> <code>{safe_pay_id}</code>\n"
+            f"📦 <b>Order ID:</b> <code>{safe_order_id}</code>\n"
+            f"⏰ <b>Confirmed At:</b> {now_utc}"
+        )
+    elif event_type == "failed":
+        safe_err = html.escape(str(error_message or "Bank declined or transaction cancelled")[:200])
+        header = "⚠️ <b>Payment Attempt Failed</b>"
+        body = (
+            f"👤 <b>Attendee:</b> {safe_name}\n"
+            f"💰 <b>Amount:</b> {amount_inr}\n"
+            f"🎯 <b>Purpose:</b> {safe_purpose}\n"
+            f"🆔 <b>Payment ID:</b> <code>{safe_pay_id}</code>\n"
+            f"📦 <b>Order ID:</b> <code>{safe_order_id}</code>\n"
+            f"❌ <b>Reason:</b> {safe_err}\n"
+            f"⏰ <b>Failed At:</b> {now_utc}"
+        )
+    else:
+        return {"sent": False, "reason": "unknown_event_type"}
+
+    text = f"{header}\n━━━━━━━━━━━━━━━━━━━━━━\n{body}\n━━━━━━━━━━━━━━━━━━━━━━"
+    base_url = f"https://api.telegram.org/bot{bot_token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            res = await client.post(
+                f"{base_url}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "link_preview_options": {"is_disabled": True},
+                },
+            )
+            return {"sent": res.is_success, "status_code": res.status_code}
+    except Exception as exc:
+        logger.warning("telegram_payment_notification_failed", error=str(exc))
+        return {"sent": False, "error": str(exc)}
+
+
+def dispatch_payment_telegram_alert(
+    event_type: str,
+    order_id: str,
+    amount_paise: int,
+    purpose: str,
+    payment_id: str | None = None,
+    gateway_order_id: str | None = None,
+    attendee_name: str | None = None,
+    attendee_email: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Non-blocking, deduplicated payment dispatch suitable for Vercel/serverless environments."""
+    async def _safe_dispatch_runner() -> None:
+        try:
+            res = await send_telegram_payment_notification(
+                event_type=event_type,
+                order_id=order_id,
+                amount_paise=amount_paise,
+                purpose=purpose,
+                payment_id=payment_id,
+                gateway_order_id=gateway_order_id,
+                attendee_name=attendee_name,
+                attendee_email=attendee_email,
+                error_message=error_message,
+            )
+            if not res.get("sent"):
+                logger.warning(
+                    "telegram_payment_alert_not_sent",
+                    event_type=event_type,
+                    order_id=order_id,
+                    reason=res.get("reason") or res.get("error"),
+                )
+        except Exception as exc:
+            logger.error(
+                "telegram_payment_alert_background_exception",
+                event_type=event_type,
+                order_id=order_id,
+                error=str(exc),
+                exc_info=True,
+            )
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            _safe_dispatch_runner(),
+            name="parallax-payment-telegram-alert",
+        )
+    except Exception as exc:
+        logger.error(
+            "telegram_payment_dispatch_scheduling_failed",
+            event_type=event_type,
+            order_id=order_id,
+            error=str(exc),
+            exc_info=True,
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Operational alerting
+#
+# Critical events (failed payments, unhandled server errors, security notices)
+# are pushed to the same organizing channel as the attendee alerts. Sending is
+# best-effort: a missing token, a network error or a flood of duplicate logs
+# must never break a request.
+# ---------------------------------------------------------------------------
+
+_ALERT_MIN_GAP_SECONDS = 1.5
+_ALERT_REPEAT_WINDOW_SECONDS = 300.0
+_ALERT_FP_MAX = 400
+_last_alert_sent_at = 0.0
+_seen_alerts: dict[str, float] = {}
+
+_SEVERITY_MARK = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
+
+
+async def send_telegram_alert(
+    title: str,
+    fields: dict[str, object] | None = None,
+    severity: str = "info",
+    footer: str | None = None,
+) -> dict:
+    """Post an operational alert to the organizing Telegram channel."""
+    settings = get_settings()
+    bot_token = settings.effective_telegram_bot_token
+    chat_id = settings.effective_telegram_chat_id
+    if not bot_token or not chat_id:
+        return {"sent": False, "reason": "not_configured"}
+
+    lines = [
+        f"{_SEVERITY_MARK.get(severity, 'ℹ️')} <b>{html.escape(str(title))}</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for key, value in (fields or {}).items():
+        lines.append(f"• <b>{html.escape(str(key))}:</b> {html.escape(str(value))}")
+    lines.append(f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    if footer:
+        lines.append(f"<i>{html.escape(footer)}</i>")
+
+    text = "\n".join(lines)[:TELEGRAM_MAX_TEXT_LEN]
+    base_url = f"https://api.telegram.org/bot{bot_token}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.post(
+                f"{base_url}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "link_preview_options": {"is_disabled": True},
+                },
+            )
+            return {"sent": res.is_success, "status_code": res.status_code}
+    except Exception as exc:
+        logger.warning("telegram_alert_failed", error=str(exc))
+        return {"sent": False, "error": str(exc)}
+
+
+def file_telegram_alert(
+    title: str,
+    fields: dict[str, object] | None = None,
+    severity: str = "info",
+    footer: str | None = None,
+) -> None:
+    """Fire-and-forget alert: throttled, de-duplicated and never blocking."""
+    global _last_alert_sent_at
+
+    settings = get_settings()
+    if not settings.effective_telegram_bot_token or not settings.effective_telegram_chat_id:
+        return
+
+    now = time.monotonic()
+    fingerprint = f"{title}|{sorted((fields or {}).items())}"[:_ALERT_FP_MAX]
+    last_seen = _seen_alerts.get(fingerprint)
+    if last_seen is not None and now - last_seen < _ALERT_REPEAT_WINDOW_SECONDS:
+        return
+    if now - _last_alert_sent_at < _ALERT_MIN_GAP_SECONDS:
+        return
+
+    _seen_alerts[fingerprint] = now
+    _last_alert_sent_at = now
+    if len(_seen_alerts) > 200:
+        for key in list(_seen_alerts)[:100]:
+            _seen_alerts.pop(key, None)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop (sync context such as a CLI script): drop the alert.
+        return
+
+    loop.create_task(
+        send_telegram_alert(title, fields, severity=severity, footer=footer),
+        name="parallax-telegram-alert",
+    )
+
+
+class TelegramLogHandler(logging.Handler):
+    """Forwards ERROR+ application logs to Telegram.
+
+    Deduplication and throttling live in ``file_telegram_alert`` so a failing
+    dependency cannot flood the channel.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - IO path
+        try:
+            if record.levelno < logging.ERROR:
+                return
+            message = record.getMessage()
+            file_telegram_alert(
+                f"{record.levelname} · {record.name}",
+                {
+                    "event": message[:700],
+                    "module": f"{record.module}:{record.lineno}",
+                },
+                severity="critical" if record.levelno >= logging.CRITICAL else "warning",
+            )
+        except Exception:
+            pass

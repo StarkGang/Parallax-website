@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, ShieldCheck, Wrench } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
-import { Button, Eyebrow, Field, InlineMessage } from '../components/ui.jsx';
+import { Button, Eyebrow, Field, InlineMessage, Panel } from '../components/ui.jsx';
 
 const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
 
@@ -104,8 +104,7 @@ export default function Login() {
       </aside>
 
       <div className="login-panel">
-        <div className="login-card bezel">
-          <div className="bezel-core is-padded">
+        <Panel className="login-card">
             <Eyebrow>Single Sign-On</Eyebrow>
             <h2>Access your account</h2>
             <p className="muted">
@@ -184,8 +183,7 @@ export default function Login() {
               By continuing you agree to the convention code of conduct.
               Authentication is securely handled by Google.
             </p>
-          </div>
-        </div>
+        </Panel>
       </div>
     </section>
   );

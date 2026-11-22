@@ -190,9 +190,18 @@ async def create_addon_registrations(
             )
         ).scalar_one_or_none()
         if existing:
-            raise Conflict(f"Already registered for {e.title}.")
+            if existing.status == "reserved":
+                # Stale or abandoned unpaid reservation: cancel it cleanly so retry or re-booking succeeds
+                existing.status = "cancelled"
+                existing.cancelled_at = datetime.now(UTC)
+                existing.cancelled_by = "superseded"
+                existing.cancellation_reason = "Superseded by new booking attempt"
+                await revoke_for_registration(db, existing.id)
+            else:
+                raise Conflict(f"Already registered for {e.title}.")
 
         fee = e.addon_price_paise
+        is_free = fee == 0
         total_paise += fee
         reg = Registration(
             edition_id=edition.id,
@@ -200,9 +209,9 @@ async def create_addon_registrations(
             event_id=e.id,
             kind="addon",
             fee_paise=fee,
-            status="confirmed" if fee == 0 else "reserved",
+            status="confirmed" if is_free else "reserved",
             registration_number=_number("addon"),
-            reservation_expires_at=datetime.now(UTC) + timedelta(minutes=policy.hold_minutes),
+            reservation_expires_at=None if is_free else (datetime.now(UTC) + timedelta(minutes=policy.hold_minutes)),
         )
         db.add(reg)
         regs.append(reg)
@@ -210,6 +219,13 @@ async def create_addon_registrations(
     await db.flush()
 
     order = None
+    paid_regs = [r for r in regs if r.fee_paise > 0]
+    free_regs = [r for r in regs if r.fee_paise == 0]
+
+    # Free add-on events are confirmed immediately and tickets issued without blocking on payment
+    for r in free_regs:
+        await issue_for_registration(db, r)
+
     if total_paise > 0:
         order = PaymentOrder(
             edition_id=edition.id,
@@ -220,16 +236,12 @@ async def create_addon_registrations(
         )
         db.add(order)
         await db.flush()
-        for r in regs:
+        for r in paid_regs:
             r.order_id = order.id
         await db.flush()
         from app.services.payments import attach_gateway_order
 
         await attach_gateway_order(db, order)
-    else:
-        # Free add-ons are confirmed immediately, so they need their tickets now.
-        for r in regs:
-            await issue_for_registration(db, r)
 
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")

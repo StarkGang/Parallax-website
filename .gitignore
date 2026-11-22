@@ -111,7 +111,10 @@ tmp/
 /.claude/skills
 /.agents
 
-# ID Card Preview scratch files
+# ID Card Preview scratch files & test images
 id-card-preview.html
 */id-card-preview.html
 scripts/id-card-preview.html
+idcard-*.png
+qr-brand-*.png
+ui-gallery-*.png

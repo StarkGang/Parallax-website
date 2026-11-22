@@ -1,20 +1,28 @@
 """Server-side sessions: opaque token in an HttpOnly cookie, HMAC hash at rest."""
 
+import asyncio
 import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import Unauthenticated
+from app.core.logging import get_logger
 from app.core.security import hash_token, new_token, token_matches_hash
 from app.models.user import Session, User
 
 IDLE_SLIDE_THRESHOLD = timedelta(seconds=60)
+# Bounds the best-effort idle slide so a saturated pooler cannot add latency.
+IDLE_SLIDE_TIMEOUT_SECONDS = 2.0
+SESSION_READ_RETRY_DELAY_SECONDS = 0.15
+
+logger = get_logger("sessions")
 
 
 @dataclass
@@ -134,11 +142,7 @@ async def resolve_session(
         return None
 
     hashed = hash_token(token)
-    row = (
-        await db.execute(
-            select(Session, User).join(User, User.id == Session.user_id).where(Session.token_hash == hashed)
-        )
-    ).first()
+    row = await _session_row(db, hashed)
     if row is None:
         if required:
             raise Unauthenticated("Your session has expired. Sign in again.")
@@ -158,17 +162,68 @@ async def resolve_session(
     if user.status != "active":
         raise Unauthenticated("This account is not active.")
 
-    # Slide the idle window forward at most once a minute; the hard cap never moves.
+    # Slide the idle window forward at most once a minute; the hard cap never
+    # moves. This is deliberately *not* flushed on the request's session: a
+    # read-only page used to fail with a statement timeout whenever the pooled
+    # connection was cold, because authenticating it also performed a write.
     last_seen = _aware(session.last_seen_at)
     if now - last_seen > IDLE_SLIDE_THRESHOLD:
-        session.last_seen_at = now
-        _, absolute = _ttls(session.auth_level == "staff_mfa")
         new_idle = now + _ttls(session.auth_level == "staff_mfa")[0]
         absolute_cap = _aware(session.absolute_expires_at)
-        session.idle_expires_at = min(new_idle, absolute_cap)
-        await db.flush()
+        await _slide_idle(session.id, now, min(new_idle, absolute_cap))
 
     return SessionContext(user=user, session=session)
+
+
+async def _session_row(db: AsyncSession, hashed: str):
+    """Load the session row, retrying once on a stale pooled connection.
+
+    Supabase's pooler can drop or stall the first statement after an idle gap.
+    One clean retry on a fresh transaction turns that into a normal request;
+    a second failure propagates as a 503 rather than a crash.
+    """
+    stmt = (
+        select(Session, User)
+        .join(User, User.id == Session.user_id)
+        .where(Session.token_hash == hashed)
+    )
+    try:
+        return (await db.execute(stmt)).first()
+    except (TimeoutError, DBAPIError) as exc:
+        logger.warning("session_read_retry", error=type(exc).__name__)
+        # A dead connection can fail the rollback too; the retry must still run.
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(SESSION_READ_RETRY_DELAY_SECONDS)
+        return (await db.execute(stmt)).first()
+
+
+async def _slide_idle(
+    session_id: uuid.UUID, seen_at: datetime, idle_expires_at: datetime
+) -> None:
+    """Extend a session's idle window on its own connection.
+
+    Failures are logged and dropped: the row keeps its previous window, the user
+    stays signed in, and the next request slides it again.
+    """
+    from app.db.session import session_scope
+
+    async def run() -> None:
+        async with session_scope() as touch_db:
+            await touch_db.execute(
+                update(Session)
+                .where(Session.id == session_id, Session.revoked_at.is_(None))
+                .values(last_seen_at=seen_at, idle_expires_at=idle_expires_at)
+            )
+
+    try:
+        await asyncio.wait_for(run(), timeout=IDLE_SLIDE_TIMEOUT_SECONDS)
+    except (TimeoutError, DBAPIError) as exc:
+        logger.warning("session_slide_skipped", error=type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001 - touching a session is never critical
+        logger.warning("session_slide_failed", error=type(exc).__name__)
 
 
 async def rotate_session(

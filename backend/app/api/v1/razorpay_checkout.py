@@ -227,6 +227,7 @@ async def verify_razorpay_payment(
 
     if db_order and db_order.status != "paid":
         await mark_order_paid(db, db_order, transaction_id=payment_id)
+        await db.commit()
 
     return VerifyPaymentResponse(
         status="success",

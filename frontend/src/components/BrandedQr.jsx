@@ -3,6 +3,8 @@ import { useMemo } from 'react';
 import { createQrMatrix } from '../lib/qrBrand.js';
 
 const INK = '#0a1024';
+/* The official brand P — the same asset the site ships as its favicon. */
+const P_MARK = `${import.meta.env.BASE_URL}favicon-512x512.png`;
 const FINDER = 7;
 const QUIET = 3;
 
@@ -10,11 +12,11 @@ const QUIET = 3;
  * Parallax credential QR.
  *
  * Same data and error correction as a standard QR, drawn with the convention's
- * own language: rounded modules, squared-off finder eyes and the white Parallax
- * wordmark in a sharp navy plate. Level H pads the code so the plate never eats
- * payload data.
+ * own language: rounded modules, squared-off finder eyes and the Parallax "P"
+ * in a sharp navy plate at the centre. Level H pads the code so the plate never
+ * eats payload data.
  */
-export function BrandedQr({ value, className = '', title = 'QR code', logoSrc = '' }) {
+export function BrandedQr({ value, className = '', title = 'QR code' }) {
   const matrix = useMemo(() => {
     try {
       return createQrMatrix(value);
@@ -31,7 +33,7 @@ export function BrandedQr({ value, className = '', title = 'QR code', logoSrc = 
     (row < FINDER && col >= count - FINDER) ||
     (row >= count - FINDER && col < FINDER);
 
-  const plateSize = count >= 41 ? 9 : count >= 29 ? 7 : 5;
+  const plateSize = count >= 41 ? 11 : count >= 29 ? 9 : 7;
   const plateStart = Math.floor((count - plateSize) / 2);
   const inPlate = (row, col) =>
     row >= plateStart &&
@@ -40,8 +42,7 @@ export function BrandedQr({ value, className = '', title = 'QR code', logoSrc = 
     col < plateStart + plateSize;
 
   const center = count / 2;
-  const markHeight = plateSize - 1.6;
-  const markWidth = markHeight * 0.637; // cropped Parallax P: 545 x 855
+  const markSize = plateSize - 1.5;
 
   const eye = (x, y) => (
     <g key={`eye-${x}-${y}`} transform={`translate(${x} ${y})`}>
@@ -92,29 +93,21 @@ export function BrandedQr({ value, className = '', title = 'QR code', logoSrc = 
 
       <g>
         <rect
-          x={plateStart - 0.35}
-          y={plateStart - 0.35}
-          width={plateSize + 0.7}
-          height={plateSize + 0.7}
-          rx="0.4"
+          x={plateStart - 0.25}
+          y={plateStart - 0.25}
+          width={plateSize + 0.5}
+          height={plateSize + 0.5}
+          rx="0.5"
           fill="#0a1024"
-          stroke="rgba(255, 255, 255, 0.3)"
-          strokeWidth="0.16"
         />
-        {logoSrc ? (
-          <svg
-            x={center - markWidth / 2}
-            y={center - markHeight / 2}
-            width={markWidth}
-            height={markHeight}
-            viewBox="0 0 545 855"
-            preserveAspectRatio="xMidYMid meet"
-          >
-            <image href={logoSrc} width="3161" height="969" />
-          </svg>
-        ) : (
-          <rect x={center - 0.6} y={center - 0.6} width="1.2" height="1.2" fill="#ffffff" />
-        )}
+        <image
+          x={center - markSize / 2}
+          y={center - markSize / 2}
+          width={markSize}
+          height={markSize}
+          href={P_MARK}
+          preserveAspectRatio="xMidYMid meet"
+        />
       </g>
     </svg>
   );

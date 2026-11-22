@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.logging import get_logger, request_id_ctx
@@ -124,9 +125,76 @@ def register_error_handlers(app: FastAPI) -> None:
             content=payload(codes.get(exc.status_code, "HTTP_ERROR"), str(exc.detail)),
         )
 
+    def _unavailable(request: Request, exc: Exception, kind: str) -> JSONResponse:
+        """Database timeouts and dropped connections are transient: say so.
+
+        Returning 503 keeps a cold pooler from looking like a broken page, and
+        gives the client a Retry-After it can honour.
+        """
+        logger.warning(
+            "service_unavailable",
+            path=request.url.path,
+            error=type(exc).__name__,
+            kind=kind,
+        )
+        try:
+            from app.services.telegram import file_telegram_alert
+
+            file_telegram_alert(
+                "Database unavailable",
+                {
+                    "Path": f"{request.method} {request.url.path}",
+                    "Error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                    "Kind": kind,
+                },
+                severity="warning",
+            )
+        except Exception:  # pragma: no cover - alerting must never mask the error
+            pass
+        return JSONResponse(
+            status_code=503,
+            content=payload(
+                "SERVICE_UNAVAILABLE",
+                "The service is briefly unavailable. Please retry in a moment.",
+            ),
+            headers={"Retry-After": "2"},
+        )
+
+    @app.exception_handler(TimeoutError)
+    async def _db_timeout(request: Request, exc: TimeoutError) -> JSONResponse:
+        return _unavailable(request, exc, "statement_timeout")
+
+    @app.exception_handler(OperationalError)
+    async def _db_operational(request: Request, exc: OperationalError) -> JSONResponse:
+        return _unavailable(request, exc, "connection")
+
+    @app.exception_handler(DBAPIError)
+    async def _db_error(request: Request, exc: DBAPIError) -> JSONResponse:
+        if exc.connection_invalidated:
+            return _unavailable(request, exc, "connection_invalidated")
+        logger.exception("database_error", path=request.url.path, error=type(exc).__name__)
+        return JSONResponse(
+            status_code=500,
+            content=payload("INTERNAL_ERROR", "Something went wrong. Please try again."),
+        )
+
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled_error", path=request.url.path, error=type(exc).__name__)
+        try:
+            from app.services.telegram import file_telegram_alert
+
+            file_telegram_alert(
+                "Unhandled server error",
+                {
+                    "Path": f"{request.method} {request.url.path}",
+                    "Error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    "Request ID": request_id_ctx.get() or "n/a",
+                },
+                severity="critical",
+            )
+        except Exception:  # pragma: no cover - alerting must never mask the error
+            pass
         return JSONResponse(
             status_code=500,
             content=payload("INTERNAL_ERROR", "Something went wrong. Please try again."),

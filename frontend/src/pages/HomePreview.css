@@ -58,15 +58,42 @@
   left: 50%;
   bottom: 0;
   z-index: 3;
-  height: var(--px-mascot-h);
+  /* Smaller and softer than the hero art so the cards stay the focus. */
+  height: calc(var(--px-mascot-h) * 0.74);
   width: auto;
   translate: -50% 2%;
+  opacity: 0.94;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
-  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.55));
+  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.5));
   -webkit-mask-image: linear-gradient(180deg, #000 86%, transparent 100%);
   mask-image: linear-gradient(180deg, #000 86%, transparent 100%);
+  /* Barely-there breathing instead of a looping GIF. */
+  animation: pxMascotDrift 11s ease-in-out infinite;
+  transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.px-stage-mascot:hover,
+.px-stage-mascot:focus-visible {
+  opacity: 1;
+  transform: translateY(-6px) scale(1.015);
+}
+
+@keyframes pxMascotDrift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .px-stage-mascot {
+    animation: none;
+  }
 }
 
 .px-stage-inner {

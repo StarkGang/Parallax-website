@@ -333,10 +333,21 @@ class AdminManualAttendancePayload(CamelModel):
     note: str | None = None
 
 
+class DbPlaygroundSeedPayload(CamelModel):
+    user_email_or_id: str
+    target: str = Field(description="'pass' | 'event' | 'both'")
+    event_ids: list[uuid.UUID] = Field(default_factory=list)
+    reason: str = Field(min_length=3, description="Justification for manual seed/recovery")
+    price_paise: int = 0
+    mark_college_reg_approved: bool = True
+    payment_reference: str | None = None
+
+
 __all__ = [
     "AdminForceCancelPayload",
     "AdminProcessRefundPayload",
     "AdminManualAttendancePayload",
+    "DbPlaygroundSeedPayload",
     "Metric",
     "DashboardStats",
     "PolicyView",

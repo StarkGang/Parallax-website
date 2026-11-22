@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Camera,
   CameraOff,
+  Database,
   LayoutDashboard,
   Check,
   ClipboardCheck,
@@ -31,6 +32,8 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+
+import { Avatar, Box, IconButton, Stack, Typography } from '@mui/material';
 
 import { adminApi, publicApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -87,6 +90,7 @@ const NAV = [
   ['Announcements', '/manage/announcements', Megaphone],
   ['Attendance', '/manage/attendance', FileText],
   ['Audit log', '/manage/audit', FileText],
+  ['DB Playground', '/manage/events#db-playground', Database],
   ['Registration config', '/manage/registration-settings', Settings],
   ['Settings', '/manage/settings', Settings],
 ];
@@ -176,46 +180,66 @@ export function AdminLayout() {
           <Link to="/manage" className="admin-brand-link" aria-label="Staff operations home">
             <img src={LOGO} alt={edition?.name || 'Parallax'} className="admin-brand-logo" />
           </Link>
-          <span className="admin-badge-console">Staff Console</span>
-          {edition?.name ? <span className="admin-edition-chip">{edition.name}</span> : null}
+          <Badge tone="accent">Staff Console</Badge>
+          {edition?.name ? <Badge tone="muted">{edition.name}</Badge> : null}
         </div>
 
         <nav className="admin-header-nav" aria-label="Staff navigation shortcuts">
           {/* Switch to Participant Portal */}
-          <Link to="/portal" className="admin-link-pill" title="Open participant portal">
-            <Users size={14} strokeWidth={1.6} />
-            <span className="hide-xs">Participant Portal</span>
-          </Link>
+          <Button
+            to="/portal"
+            variant="ghost"
+            size="small"
+            icon={Users}
+            title="Open participant portal"
+            sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
+          >
+            Participant Portal
+          </Button>
 
           {/* Switch to Public Site */}
-          <Link to="/" className="admin-link-pill" title="View live convention website">
-            <ArrowUpRight size={14} strokeWidth={1.6} />
-            <span className="hide-xs">Live Site</span>
-          </Link>
+          <Button
+            to="/"
+            variant="ghost"
+            size="small"
+            icon={ArrowUpRight}
+            title="View live convention website"
+            sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
+          >
+            Live Site
+          </Button>
 
           {/* Force Cache Refresh */}
-          <button
-            className="admin-link-pill admin-sync-pill"
+          <Button
+            variant="ghost"
+            size="small"
+            icon={RefreshCw}
+            loading={syncing}
             onClick={handleForceRefresh}
             title="Force purge all caches and reload live database state"
-            disabled={syncing}
-            type="button"
           >
-            <RefreshCw size={13} strokeWidth={1.8} className={syncing ? 'spin' : ''} />
-            <span className="hide-xs">{syncing ? 'Syncing…' : 'Force Refresh'}</span>
-          </button>
+            {syncing ? 'Syncing…' : 'Force Refresh'}
+          </Button>
 
           {/* Staff Identity Pill */}
-          <div className="admin-user-pill">
-            <span className="admin-role-tag">{ROLE_LABELS[roles[0]] || 'Staff'}</span>
-            <span className="admin-user-email">{user?.email}</span>
-          </div>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: 'center', px: 1.25, py: 0.5, borderRadius: 99, border: '1px solid', borderColor: 'divider' }}
+          >
+            <Badge tone="accent">{ROLE_LABELS[roles[0]] || 'Staff'}</Badge>
+            <Typography
+              variant="caption"
+              sx={{ color: 'text.secondary', display: { xs: 'none', md: 'block' } }}
+            >
+              {user?.email}
+            </Typography>
+          </Stack>
 
           {/* Sign Out */}
-          <button className="admin-signout-btn" onClick={logout} title="Sign out of staff account">
-            <LogOut size={14} strokeWidth={1.6} />
-            <span className="hide-sm">Sign out</span>
-          </button>
+          <Button variant="ghost" size="small" icon={LogOut} onClick={logout} title="Sign out of staff account">
+            Sign out
+          </Button>
 
           {/* Mobile Menu Button */}
           <button
@@ -1315,6 +1339,15 @@ export function AdminEvents() {
         }}
       />
 
+      <DbPlaygroundSection
+        editionId={editionId}
+        events={rows}
+        onSeeded={() => {
+          setVersion((value) => value + 1);
+          events.reload();
+        }}
+      />
+
       <Sheet
         open={sheet !== null}
         title={sheet?.id ? 'Edit event' : 'New event'}
@@ -1335,6 +1368,211 @@ export function AdminEvents() {
         ) : null}
       </Sheet>
     </>
+  );
+}
+
+function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
+  const { roles } = useAuth();
+  const isSuperOrEditionAdmin = roles.some((r) => r === 'super_admin' || r === 'edition_admin');
+
+  const [emailOrId, setEmailOrId] = useState('');
+  const [target, setTarget] = useState('both');
+  const [selectedEvents, setSelectedEvents] = useState([]);
+  const [reason, setReason] = useState('');
+  const [paymentRef, setPaymentRef] = useState('');
+  const [markApproved, setMarkApproved] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  if (!isSuperOrEditionAdmin) {
+    return null;
+  }
+
+  const toggleEvent = (eid) => {
+    setSelectedEvents((prev) =>
+      prev.includes(eid) ? prev.filter((id) => id !== eid) : [...prev, eid]
+    );
+  };
+
+  const handleSeed = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setResult(null);
+
+    if (!emailOrId.trim()) {
+      setError('Please provide participant email or user ID');
+      return;
+    }
+    if (!reason.trim()) {
+      setError('A valid audit reason is required (e.g., Bank transaction verified on Razorpay dashboard)');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await adminApi.dbPlaygroundSeed(editionId, {
+        userEmailOrId: emailOrId.trim(),
+        target,
+        eventIds: selectedEvents,
+        reason: reason.trim(),
+        paymentReference: paymentRef.trim() || undefined,
+        markCollegeRegApproved: markApproved,
+      });
+      setResult(res.data);
+      if (onSeeded) onSeeded();
+    } catch (err) {
+      setError(err.message || 'Failed to seed database');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      id="db-playground"
+      style={{
+        marginTop: '40px',
+        padding: '24px',
+        borderRadius: '12px',
+        border: '1px solid rgba(239, 68, 68, 0.4)',
+        background: 'rgba(239, 68, 68, 0.04)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+        <Database size={24} style={{ color: '#ef4444' }} />
+        <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', letterSpacing: '-0.02em' }}>
+          DB Playground (Emergency Attendee Seed & Recovery)
+        </h3>
+        <Badge tone="accent" style={{ background: '#ef4444', color: '#fff' }}>
+          SUPER ADMIN / EDITION ADMIN ONLY
+        </Badge>
+      </div>
+
+      <p style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '0.875rem', marginBottom: '20px' }}>
+        Resolve payment gateway disconnects where an attendee paid successfully via Razorpay but webhooks/redirect failed to activate their pass or confirm event add-ons. 
+        <b> Every change is recorded in the permanent audit log and broadcasted directly to the Telegram ops channel.</b>
+      </p>
+
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {result ? (
+        <InlineMessage tone="success">
+          <b>Successfully restored!</b> Actions: {result.actions?.join(' · ')} for attendee {result.userName} ({result.userEmail}).
+        </InlineMessage>
+      ) : null}
+
+      <form onSubmit={handleSeed} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+              ATTENDEE EMAIL OR USER ID *
+            </label>
+            <input
+              type="text"
+              value={emailOrId}
+              onChange={(e) => setEmailOrId(e.target.value)}
+              placeholder="e.g. attendee@college.edu or 3fa85f64-5717..."
+              className="admin-input"
+              style={{ width: '100%' }}
+              required
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+              RECOVERY TARGET *
+            </label>
+            <select
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="admin-input"
+              style={{ width: '100%' }}
+            >
+              <option value="both">Both (Pass + Selected Events)</option>
+              <option value="pass">Convention Pass Only</option>
+              <option value="event">Event Registration(s) Only</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+              RAZORPAY PAYMENT ID / TRANSACTION REF
+            </label>
+            <input
+              type="text"
+              value={paymentRef}
+              onChange={(e) => setPaymentRef(e.target.value)}
+              placeholder="e.g. pay_Q8w9xY123abc or Bank UTR"
+              className="admin-input"
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+              JUSTIFICATION / AUDIT REASON *
+            </label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Verified captured payment on Razorpay portal"
+              className="admin-input"
+              style={{ width: '100%' }}
+              required
+            />
+          </div>
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}>
+          <input
+            type="checkbox"
+            checked={markApproved}
+            onChange={(e) => setMarkApproved(e.target.checked)}
+          />
+          <span>Automatically mark attendee's College Registration as Paid and Approved</span>
+        </label>
+
+        {target !== 'pass' && events.length > 0 ? (
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '8px' }}>
+              SELECT EVENT(S) TO SEED / CONFIRM
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', maxHeight: '180px', overflowY: 'auto', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+              {events.map((ev) => (
+                <label key={ev.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedEvents.includes(ev.id)}
+                    onChange={() => toggleEvent(ev.id)}
+                  />
+                  <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                    {ev.title}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+          <Button
+            type="submit"
+            disabled={busy}
+            style={{
+              background: '#ef4444',
+              borderColor: '#dc2626',
+              color: '#fff',
+              fontWeight: 600,
+            }}
+          >
+            {busy ? 'Restoring & Broadcasting...' : 'Seed & Confirm in Database'}
+          </Button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -3121,14 +3359,9 @@ export function AdminCheckin() {
               <span style={{ textTransform: 'uppercase', fontWeight: 800 }}>
                 {result.result === 'admitted' ? '✓ ADMITTED' : result.result}
               </span>
-              <button
-                type="button"
-                className="button ghost small"
-                onClick={() => setResult(null)}
-                style={{ fontSize: 11, padding: '4px 8px' }}
-              >
+              <Button variant="ghost" size="small" onClick={() => setResult(null)}>
                 Scan next
-              </button>
+              </Button>
             </div>
 
             <h3 style={{ margin: '4px 0' }}>{result.participantName}</h3>

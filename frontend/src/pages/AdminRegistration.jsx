@@ -149,12 +149,9 @@ function DocLightbox({ document, url, onClose }) {
                 </Button>
               </>
             ) : null}
-            <a className="button ghost" href={`${url}?download=true`}>
-              <span>Download</span>
-              <span className="btn-ico">
-                <Download size={14} strokeWidth={1.6} />
-              </span>
-            </a>
+            <Button variant="ghost" href={`${url}?download=true`} icon={Download}>
+              Download
+            </Button>
             <button type="button" className="table-action" onClick={onClose}>
               Close
             </button>

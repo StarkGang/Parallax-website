@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
+import { adminApi } from '../lib/api.js';
 import ParallaxIdCard, {
   ADMIN_PRESETS,
   PALETTES,
@@ -22,7 +23,7 @@ import ParallaxIdCard, {
   ROLE_CONFIGS,
   generateToneTriad,
 } from '../components/ParallaxIdCard.jsx';
-import { Button, Eyebrow, Field, SectionHead } from '../components/ui.jsx';
+import { Button, Eyebrow, Field, SectionHead, useAsync } from '../components/ui.jsx';
 
 export default function AdminIdCardStudio() {
   const { user } = useAuth();
@@ -36,15 +37,26 @@ export default function AdminIdCardStudio() {
   // Selected Preset
   const [activePresetKey, setActivePresetKey] = useState('midhun');
 
+  // Registered attendees query to load real attendee data for card generation
+  const registeredQuery = useAsync(
+    () => (edition?.id ? adminApi.collegeRegistrations(edition.id, { limit: 100 }) : Promise.resolve({ data: { items: [] } })),
+    [edition?.id],
+    { enabled: Boolean(edition?.id && hasAccess) }
+  );
+  const registeredAttendees = registeredQuery.data?.data?.items || registeredQuery.data?.data || [];
+
   // Card Form State
+  const initialPreset = ADMIN_PRESETS[0];
   const [formData, setFormData] = useState({
-    name: ADMIN_PRESETS[0].name,
-    role: ADMIN_PRESETS[0].role,
-    sub: ADMIN_PRESETS[0].sub,
-    tier: ADMIN_PRESETS[0].tier,
-    id: ADMIN_PRESETS[0].id,
-    photo: ADMIN_PRESETS[0].photo,
-    qrPayload: `PX27:${ADMIN_PRESETS[0].id}|NAME:${ADMIN_PRESETS[0].name}|ROLE:${ADMIN_PRESETS[0].role}|FEST:PARALLAX_2027_NSSCE`,
+    name: initialPreset.name,
+    role: initialPreset.role,
+    college: initialPreset.college || 'NSS College of Engineering, Palakkad',
+    branch: initialPreset.branch || 'Computer Science & Engineering · Yr 2',
+    sub: initialPreset.sub || 'Computer Science · NSS College of Engineering',
+    tier: initialPreset.tier,
+    id: initialPreset.id,
+    photo: initialPreset.photo,
+    qrPayload: `PX27:${initialPreset.id}|NAME:${initialPreset.name}|COLLEGE:NSSCE|ROLE:${initialPreset.role}|FEST:PARALLAX_2027_NSSCE`,
     isVerified: true,
   });
 
@@ -64,20 +76,54 @@ export default function AdminIdCardStudio() {
   // Apply a Preset
   const handleSelectPreset = (preset) => {
     setActivePresetKey(preset.key);
+    const college = preset.college || (preset.sub?.includes('·') ? preset.sub.split('·')[1].trim() : 'NSS College of Engineering, Palakkad');
+    const branch = preset.branch || (preset.sub?.includes('·') ? preset.sub.split('·')[0].trim() : preset.sub);
     setFormData({
       name: preset.name,
       role: preset.role,
-      sub: preset.sub,
+      college,
+      branch,
+      sub: `${branch} · ${college}`,
       tier: preset.tier,
       id: preset.id,
       photo: preset.photo,
-      qrPayload: `PX27:${preset.id}|NAME:${preset.name}|ROLE:${preset.role}|FEST:PARALLAX_2027_NSSCE`,
+      qrPayload: `PX27:${preset.id}|NAME:${preset.name}|COLLEGE:${college}|ROLE:${preset.role}|FEST:PARALLAX_2027_NSSCE`,
       isVerified: true,
     });
     setRoleKey(preset.roleKey);
     setPaletteIdx(preset.paletteIdx);
     setKind(preset.kind || 'waves');
     setUseCustomColor(false);
+  };
+
+  // Populate from a real registered attendee
+  const handleSelectAttendee = (e) => {
+    const regId = e.target.value;
+    if (!regId) return;
+    const att = registeredAttendees.find((r) => r.id === regId || r.registrationNumber === regId);
+    if (!att) return;
+    const college = att.collegeName || 'NSS College of Engineering, Palakkad';
+    const branch = [att.branch || att.course || 'Engineering', att.yearOfStudy ? `Yr ${att.yearOfStudy}` : null]
+      .filter(Boolean)
+      .join(' · ');
+    const photoDoc = att.documents?.find((d) => d.docType === 'photo' || d.type === 'photo');
+    const photoUrl = photoDoc ? `/api/v1/editions/${edition.id}/registration/documents/${photoDoc.id}/content` : (att.photoUrl || '');
+    setActivePresetKey('custom');
+    setFormData({
+      name: (att.fullName || 'ATTENDEE').toUpperCase(),
+      role: att.categoryName || 'College Student',
+      college,
+      branch,
+      sub: `${branch} · ${college}`,
+      tier: `${att.categoryName || 'Convention Delegate'} Pass`,
+      id: att.registrationNumber || 'PX-27-DL0001',
+      photo: photoUrl,
+      qrPayload: `PX27:${att.registrationNumber || 'PX27'}|NAME:${att.fullName}|COLLEGE:${college}|ROLE:${att.categoryName || 'DELEGATE'}`,
+      isVerified: att.verificationStatus === 'approved',
+    });
+    setRoleKey('delegate');
+    setPaletteIdx(0);
+    setKind('waves');
   };
 
   const handleCustomColorChange = (hex) => {
@@ -189,7 +235,9 @@ export default function AdminIdCardStudio() {
               setFormData({
                 name: 'NEW ATTENDEE',
                 role: 'Convention Delegate',
-                sub: 'Department · College Name',
+                college: 'NSS College of Engineering, Palakkad',
+                branch: 'Computer Science & Engineering · Yr 2',
+                sub: 'Computer Science · NSS College of Engineering',
                 tier: 'Delegate Pass',
                 id: 'PX-27-DL0001',
                 photo: '',
@@ -211,6 +259,35 @@ export default function AdminIdCardStudio() {
             + Blank Custom
           </button>
         </div>
+
+        {/* Load From Live Registered Attendees */}
+        {registeredAttendees.length > 0 && (
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65, marginBottom: '6px' }}>
+              Load From Registered Attendees ({registeredAttendees.length})
+            </div>
+            <select
+              onChange={handleSelectAttendee}
+              style={{
+                width: '100%',
+                maxWidth: '520px',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: '1px solid var(--border, rgba(255, 255, 255, 0.2))',
+                background: 'var(--surface-input, rgba(255, 255, 255, 0.08))',
+                color: 'inherit',
+                fontSize: '12px',
+              }}
+            >
+              <option value="">-- Choose registered attendee to generate card --</option>
+              {registeredAttendees.map((att) => (
+                <option key={att.id} value={att.id}>
+                  {att.fullName} · {att.collegeName} ({att.registrationNumber || 'No ID'})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Controls on Left, Live 3D Card on Right */}
@@ -310,12 +387,51 @@ export default function AdminIdCardStudio() {
 
             <div style={{ gridColumn: 'span 2' }}>
               <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
-                DEPARTMENT &amp; INSTITUTION
+                COLLEGE / UNIVERSITY DETAILS
               </label>
               <input
                 type="text"
-                value={formData.sub}
-                onChange={(e) => setFormData({ ...formData, sub: e.target.value })}
+                value={formData.college || ''}
+                onChange={(e) => {
+                  const college = e.target.value;
+                  setFormData((prev) => ({
+                    ...prev,
+                    college,
+                    sub: `${prev.branch || ''} · ${college}`,
+                    qrPayload: `PX27:${prev.id}|NAME:${prev.name}|COLLEGE:${college}|ROLE:${prev.role}`,
+                  }));
+                }}
+                placeholder="e.g. NSS College of Engineering, Palakkad"
+                disabled={!hasAccess}
+                style={{
+                  width: '100%',
+                  padding: '9px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border, rgba(255, 255, 255, 0.15))',
+                  background: 'var(--surface-input, rgba(255, 255, 255, 0.06))',
+                  color: 'inherit',
+                  fontFamily: 'inherit',
+                  fontSize: '13px',
+                }}
+              />
+            </div>
+
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+                DEPARTMENT &amp; BRANCH / STREAM
+              </label>
+              <input
+                type="text"
+                value={formData.branch || ''}
+                onChange={(e) => {
+                  const branch = e.target.value;
+                  setFormData((prev) => ({
+                    ...prev,
+                    branch,
+                    sub: `${branch} · ${prev.college || ''}`,
+                  }));
+                }}
+                placeholder="e.g. Computer Science & Engineering · Yr 2"
                 disabled={!hasAccess}
                 style={{
                   width: '100%',

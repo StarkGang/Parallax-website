@@ -45,6 +45,19 @@ def configure_logging(debug: bool = False, json_logs: bool = False) -> None:
         cache_logger_on_first_use=True,
     )
 
+    # Mirror ERROR+ application logs to the organizing Telegram channel. The
+    # handler is a no-op without a bot token, so local runs stay silent.
+    try:
+        from app.services.telegram import TelegramLogHandler
+
+        root = logging.getLogger()
+        if not any(isinstance(handler, TelegramLogHandler) for handler in root.handlers):
+            telegram_handler = TelegramLogHandler()
+            telegram_handler.setLevel(logging.ERROR)
+            root.addHandler(telegram_handler)
+    except Exception:  # pragma: no cover - never block startup on telemetry
+        pass
+
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name or "parallax")

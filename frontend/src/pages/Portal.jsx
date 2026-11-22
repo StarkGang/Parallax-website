@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { QRCodeCanvas } from 'qrcode.react';
+import { Avatar, Box, Stack, Typography } from '@mui/material';
 import {
   ArrowRight,
   LayoutDashboard,
@@ -18,6 +19,7 @@ import {
   MapPin,
   Plus,
   Printer,
+  ReceiptText,
   RefreshCw,
   ShieldCheck,
   Ticket,
@@ -26,7 +28,8 @@ import {
 } from 'lucide-react';
 import { authApi, portalApi, publicApi, registrationApi } from '../lib/api.js';
 import { openCheckout } from '../lib/razorpay.js';
-import { ISTE, LOGO, NSSCE, PARALLAX_MARK } from './Public.jsx';
+import { PaymentProgress } from '../components/PaymentProgress.jsx';
+import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { BrandedQr } from '../components/BrandedQr.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
@@ -154,22 +157,25 @@ export function PortalLayout() {
         title="Your Convention Passes & Bookings"
         desc={`Signed in as ${user?.email} · Live bookings, selections, and entry tickets for ${edition?.name || 'Parallax 2027'}.`}
         aside={
-          <div className="title-badges">
-            <button
-              type="button"
-              className="button ghost small"
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
+          >
+            <Button
+              variant="ghost"
+              size="small"
+              icon={RefreshCw}
+              loading={refreshing}
               onClick={refreshAll}
-              disabled={refreshing}
               title="Re-fetch your profile, pass and bookings from the server"
-              style={{ fontSize: 11, padding: '4px 8px' }}
             >
-              <RefreshCw size={12} className={refreshing ? 'is-spinning' : ''} />
               {refreshing ? 'Refreshing…' : 'Refresh'}
-            </button>
+            </Button>
             {refreshNote ? (
-              <small className="muted" style={{ fontSize: 11 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                 {refreshNote}
-              </small>
+              </Typography>
             ) : null}
             {isStaff ? (
               <Badge tone="accent">Staff Access</Badge>
@@ -178,34 +184,47 @@ export function PortalLayout() {
             )}
             {user?.profileComplete ? <Badge tone="accent">Profile complete</Badge> : null}
             {isStaff ? (
-              <Link to="/manage" className="button ghost small" style={{ fontSize: 11, padding: '4px 8px' }}>
-                Staff Console →
-              </Link>
+              <Button variant="ghost" size="small" to="/manage" icon={ArrowUpRight}>
+                Staff Console
+              </Button>
             ) : null}
-          </div>
+          </Stack>
         }
       />
 
       {/* Mobile Top User Bar & Swipeable Tabs */}
       <div className="section" style={{ paddingBottom: 0, paddingTop: 10 }}>
-        <div className="portal-mobile-user-bar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-            <div className="avatar small" style={{ width: '32px', height: '32px', fontSize: '12px' }}>
+        <Box
+          className="portal-mobile-user-bar"
+          sx={{
+            display: { xs: 'flex', md: 'none' },
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0 }}>
+            <Avatar sx={{ width: 32, height: 32, fontSize: 12, bgcolor: 'primary.dark' }}>
               {initials(user?.fullName)}
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: '13px', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            </Avatar>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
                 {user?.fullName || 'Attendee'}
-              </div>
-              <div style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              </Typography>
+              <Typography
+                variant="caption"
+                sx={{ display: 'block', color: 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
                 {user?.email}
-              </div>
-            </div>
-          </div>
-          <button className="text-link signout" onClick={signOut} style={{ fontSize: '12px', padding: '6px 10px', color: '#cbd5e1' }}>
-            <LogOut size={13} /> Sign out
-          </button>
-        </div>
+              </Typography>
+            </Box>
+          </Stack>
+          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut}>
+            Sign out
+          </Button>
+        </Box>
 
         <nav className="portal-mobile-tabs" aria-label="Participant portal modules">
           {PORTAL_NAV.map(([label, to, end]) => (
@@ -228,9 +247,15 @@ export function PortalLayout() {
 
       <section className="section portal-layout">
         <aside className="portal-side">
-          <div className="avatar">{initials(user?.fullName)}</div>
-          <h3>{user?.fullName}</h3>
-          <p>{user?.email}</p>
+          <Avatar sx={{ width: 56, height: 56, fontSize: 20, bgcolor: 'primary.main', mb: 1.25 }}>
+            {initials(user?.fullName)}
+          </Avatar>
+          <Typography variant="h4" component="h3">
+            {user?.fullName}
+          </Typography>
+          <Typography variant="caption" component="p" sx={{ mb: 1.25, wordBreak: 'break-word' }}>
+            {user?.email}
+          </Typography>
           {isStaff ? (
             <span className="pill staff-pill" style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)' }}>
               Staff Administrator
@@ -254,9 +279,9 @@ export function PortalLayout() {
               </Link>
             ) : null}
           </nav>
-          <button className="text-link signout" onClick={signOut}>
-            <LogOut size={15} strokeWidth={1.5} /> Sign out
-          </button>
+          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut} sx={{ mt: 1.5 }}>
+            Sign out
+          </Button>
         </aside>
         <div className="portal-main">
           <Outlet key={pageKey} />
@@ -332,22 +357,29 @@ export function PortalOverview() {
       {pass.error ? <ErrorBox error={pass.error} onRetry={pass.reload} /> : null}
       {!pass.loading ? <PassStatusCard pass={passData} policy={policy} /> : null}
 
-      <div className="portal-stats bezel">
-        <div className="bezel-core">
-          <Stat
-            label="INCLUDED CHOICES"
-            value={`${selection?.count || 0} / ${policy?.includedEventCount || 0}`}
-            note={selection?.valid ? 'Selection valid' : 'Needs attention'}
-          />
-          <Stat
-            label="SELECTED VALUE"
-            value={money(selection?.valuePaise || 0)}
-            note={`Cap ${money(policy?.includedValueCapPaise)}`}
-          />
-          <Stat label="REGISTRATIONS" value={registrations.length} note="Included and add-on" />
-          <Stat label="TICKETS" value={ticketRows.length} note="Live entry credentials" />
-        </div>
-      </div>
+      <Panel
+        className="portal-stats"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
+          gap: 1.5,
+          p: 1.5,
+          my: 2,
+        }}
+      >
+        <Stat
+          label="INCLUDED CHOICES"
+          value={`${selection?.count || 0} / ${policy?.includedEventCount || 0}`}
+          note={selection?.valid ? 'Selection valid' : 'Needs attention'}
+        />
+        <Stat
+          label="SELECTED VALUE"
+          value={money(selection?.valuePaise || 0)}
+          note={`Cap ${money(policy?.includedValueCapPaise)}`}
+        />
+        <Stat label="REGISTRATIONS" value={registrations.length} note="Included and add-on" />
+        <Stat label="TICKETS" value={ticketRows.length} note="Live entry credentials" />
+      </Panel>
 
       <div className="portal-columns">
         <Panel className="next-card">
@@ -620,6 +652,8 @@ export function PortalSelectEvents() {
   const [addons, setAddons] = useState([]);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
+  const [payStage, setPayStage] = useState(null);
+  const [slowPayment, setSlowPayment] = useState(false);
 
   // Re-sync the draft only when the server's saved selection actually changes,
   // not on every unrelated refresh of the pass document.
@@ -747,10 +781,13 @@ export function PortalSelectEvents() {
     if (!addons.length) return;
     setBusy('addons');
     setMessage(null);
+    setPayStage('preparing');
+    const slowTimer = setTimeout(() => setSlowPayment(true), 7000);
     try {
       const body = await portalApi.registerAddons(editionId, addons);
       const order = body.data?.order;
       if (order?.mock) {
+        setPayStage('verifying');
         await portalApi.mockPay(editionId, order.orderId);
       } else if (order) {
         const attendeeUser = {
@@ -759,6 +796,7 @@ export function PortalSelectEvents() {
           email: user?.email || '',
           phone: user?.phone || '',
         };
+        setPayStage('gateway');
         const response = await openCheckout(
           order,
           attendeeUser,
@@ -778,14 +816,22 @@ export function PortalSelectEvents() {
           });
           return;
         }
+        setPayStage('verifying');
         await portalApi.verifyPayment(editionId, {
           orderId: order.orderId,
           razorpayPaymentId: response.razorpay_payment_id,
           razorpaySignature: response.razorpay_signature,
         });
       }
+      setPayStage('success');
       setAddons([]);
-      await Promise.all([regs.reload(), pass.reload()]);
+      await Promise.all([
+        regs.reload(),
+        pass.reload(),
+        tickets.reload(),
+        catalogue.reload(),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 800));
       setMessage({
         tone: 'success',
         text: order
@@ -795,7 +841,10 @@ export function PortalSelectEvents() {
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     } finally {
+      clearTimeout(slowTimer);
+      setSlowPayment(false);
       setBusy('');
+      setPayStage(null);
     }
   };
 
@@ -980,6 +1029,14 @@ export function PortalSelectEvents() {
           Add-on reservations expire after {policy?.holdMinutes || 15} minutes if unpaid.
         </p>
       </div>
+
+      <PaymentProgress
+        stage={payStage}
+        amount={addonTotal}
+        slow={slowPayment}
+        title={payStage === 'success' ? 'Add-on Bookings Confirmed!' : undefined}
+        subtitle={payStage === 'success' ? 'Your tickets and entry passes have been updated.' : undefined}
+      />
     </>
   );
 }
@@ -1014,25 +1071,21 @@ export function PortalRegistrations() {
   return (
     <>
       <div className="portal-subtabs" style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className={`button ${activeTab === 'events' ? 'primary' : 'ghost'}`}
+        <Button
+          variant={activeTab === 'events' ? 'primary' : 'ghost'}
+          icon={Ticket}
           onClick={() => setActiveTab('events')}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
-          <Ticket size={16} />
-          <span>My Event Registrations</span>
-          {rows.length ? <span className="badge" style={{ padding: '2px 6px', fontSize: '11px' }}>{rows.length}</span> : null}
-        </button>
-        <button
-          type="button"
-          className={`button ${activeTab === 'teams' ? 'primary' : 'ghost'}`}
+          My Event Registrations
+          {rows.length ? <Badge tone="accent">{rows.length}</Badge> : null}
+        </Button>
+        <Button
+          variant={activeTab === 'teams' ? 'primary' : 'ghost'}
+          icon={Users}
           onClick={() => setActiveTab('teams')}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
-          <Users size={16} />
-          <span>My Teams &amp; Invites</span>
-        </button>
+          My Teams &amp; Invites
+        </Button>
       </div>
 
       {activeTab === 'teams' ? (
@@ -1091,11 +1144,20 @@ export function PortalRegistrations() {
                     <StatusBadge status={row.status} />
                   )}
                 </div>
-                {row.status !== 'cancelled' ? (
-                  <button className="table-action" onClick={() => setConfirm(row)}>
-                    Cancel
-                  </button>
-                ) : null}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* The full receipt (payment ID, paid date, event) needs the
+                      ticket payload, so this jumps to the credential that owns it. */}
+                  {row.kind !== 'included' && row.feePaise > 0 && row.status !== 'cancelled' ? (
+                    <Link className="table-action" to="/portal/tickets">
+                      Receipt
+                    </Link>
+                  ) : null}
+                  {row.status !== 'cancelled' ? (
+                    <button className="table-action" onClick={() => setConfirm(row)}>
+                      Cancel
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -1156,6 +1218,7 @@ export function PortalTickets() {
   const profile = useAsync(() => authApi.profile(), [], { enabled: Boolean(user) });
   const [message, setMessage] = useState(null);
   const [downloadTicket, setDownloadTicket] = useState(null);
+  const [receiptTicket, setReceiptTicket] = useState(null);
   const qrDownloadRef = useRef(null);
   const rows = tickets.data?.data || [];
   const prof = profile.data?.data || {};
@@ -1293,7 +1356,6 @@ export function PortalTickets() {
                   value={ticket.token}
                   title={`QR entry pass for ${ticket.title}`}
                   className="qr-img"
-                  logoSrc={PARALLAX_MARK}
                 />
               </div>
 
@@ -1370,6 +1432,15 @@ export function PortalTickets() {
               <Button variant="ghost" onClick={() => downloadQr(ticket)} icon={Download}>
                 Save QR
               </Button>
+              {ticket.kind === 'registration' ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => setReceiptTicket(ticket)}
+                  icon={ReceiptText}
+                >
+                  Payment receipt
+                </Button>
+              ) : null}
             </div>
 
             {/* Subtle Security Footer */}
@@ -1392,7 +1463,201 @@ export function PortalTickets() {
           />
         </div>
       ) : null}
+      {receiptTicket ? (
+        <TicketReceiptSheet
+          ticket={receiptTicket}
+          profile={prof}
+          user={user}
+          edition={edition}
+          onClose={() => setReceiptTicket(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+/**
+ * Printable receipt for a single event payment: order, gateway reference,
+ * amount, attendee and event, in the same paper style as the pass receipt.
+ */
+function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
+  const amount = Number(ticket?.amountPaise || 0);
+  const holder = profile?.fullName || user?.fullName || 'Convention Delegate';
+  const college = profile?.collegeName || 'NSS College of Engineering, Palakkad';
+  const paidLabel = amount > 0 || ticket?.paymentStatus === 'paid' ? 'PAID' : 'ISSUED';
+  const gatewayOrderId = ticket?.gatewayOrderId || null;
+  const paymentId = ticket?.paymentId || null;
+  const internalOrderId = ticket?.orderId ? String(ticket.orderId) : null;
+
+  return (
+    <Sheet
+      open
+      title="Parallax 2027 · Event Payment Receipt"
+      onClose={onClose}
+      wide
+      eyebrow="RECEIPT & CONFIRMATION"
+    >
+      <div className="px-receipt-stage">
+        <div className="px-receipt-card px-printable-target">
+          <div className="px-receipt-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <img
+                src={LOGO}
+                alt="Parallax"
+                style={{ height: '32px', width: 'auto', objectFit: 'contain' }}
+              />
+              <div className="px-receipt-title">
+                <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>
+                  PARALLAX 2027 · PAYMENT RECEIPT
+                </h2>
+                <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#475569' }}>
+                  25th Annual State Student Convention · ISTE Kerala Section &amp; NSSCE Palakkad
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <img src={ISTE} alt="ISTE" style={{ height: '20px', width: 'auto' }} />
+                <img src={NSSCE} alt="NSSCE" style={{ height: '20px', width: 'auto' }} />
+              </div>
+              <span className="badge good" style={{ fontSize: '12px', fontWeight: '700' }}>
+                ✓ {paidLabel}
+              </span>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: '11px',
+                  color: '#64748b',
+                  fontFamily: 'monospace',
+                }}
+              >
+                {ticket?.paidAt ? dateTime(ticket.paidAt) : dateTime(ticket?.issuedAt) || 'Confirmed'}
+              </p>
+            </div>
+          </div>
+
+          <div className="px-receipt-meta-grid">
+            <div className="px-receipt-meta-item">
+              <small>REGISTRATION REF</small>
+              <b>{ticket?.registrationNumber || '—'}</b>
+            </div>
+            <div className="px-receipt-meta-item">
+              <small>GATEWAY ORDER ID</small>
+              <b>{gatewayOrderId || '—'}</b>
+            </div>
+            <div className="px-receipt-meta-item">
+              <small>PAYMENT ID</small>
+              <b>{paymentId || '—'}</b>
+            </div>
+            <div className="px-receipt-meta-item">
+              <small>PAID ON</small>
+              <b>{ticket?.paidAt ? dateTime(ticket.paidAt) : '—'}</b>
+            </div>
+            <div className="px-receipt-meta-item">
+              <small>ORDER REF</small>
+              <b>{internalOrderId || '—'}</b>
+            </div>
+          </div>
+
+          <table className="px-receipt-table">
+            <thead>
+              <tr>
+                <th>Item Description</th>
+                <th>Attendee</th>
+                <th>Status</th>
+                <th style={{ textAlign: 'right' }}>Amount (INR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <b>{ticket?.title || 'Event entry'}</b>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>
+                    {ticket?.venueRoom
+                      ? `${ticket.venueRoom} · ${(edition?.venue || 'NSSCE CAMPUS').toUpperCase()}`
+                      : (edition?.venue || 'NSSCE Campus, Palakkad')}
+                    {ticket?.startsAt ? ` · ${date(ticket.startsAt)}` : ''}
+                  </div>
+                </td>
+                <td>
+                  <div>{holder}</div>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>{college}</div>
+                </td>
+                <td>
+                  <span style={{ color: '#16a34a', fontWeight: '700' }}>{paidLabel}</span>
+                </td>
+                <td style={{ textAlign: 'right', fontWeight: '700' }}>{money(amount)}</td>
+              </tr>
+              <tr className="px-receipt-total-row">
+                <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
+                  Total Amount Paid:
+                </td>
+                <td style={{ textAlign: 'right', padding: '12px 4px', color: '#0284c7' }}>
+                  {money(amount)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div className="px-receipt-refs">
+            <h4>Transaction references</h4>
+            <table>
+              <tbody>
+                <tr>
+                  <td style={{ width: '38%' }}>
+                    <small>Gateway order</small>
+                    <span className="px-receipt-txn">{gatewayOrderId || '—'}</span>
+                  </td>
+                  <td>
+                    <small>Razorpay payment</small>
+                    <span className="px-receipt-txn">{paymentId || '—'}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <small>Platform order ref</small>
+                    <span className="px-receipt-txn">{internalOrderId || '—'}</span>
+                  </td>
+                  <td>
+                    <small>Captured at</small>
+                    <span className="px-receipt-txn">
+                      {ticket?.paidAt ? dateTime(ticket.paidAt) : '—'}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p
+            style={{
+              margin: '16px 0 0',
+              fontSize: '11px',
+              lineHeight: 1.5,
+              color: '#64748b',
+              textAlign: 'center',
+            }}
+          >
+            Computer-generated receipt for event registration #{ticket?.registrationNumber}. Quote the
+            payment ID for any refund or reconciliation query. Retain it for reimbursement.
+            Non-transferable; valid with a photo ID. Helpdesk:{' '}
+            {edition?.helpdeskPhone || '+91 94460 00000'} · parallax-iste.vercel.app
+          </p>
+        </div>
+
+        <div
+          className="no-print"
+          style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '16px' }}
+        >
+          <Button onClick={() => window.print()} icon={Printer}>
+            Download PDF
+          </Button>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 

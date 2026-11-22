@@ -5,6 +5,8 @@ import App from './App.jsx';
 import { AuthProvider } from './lib/auth.jsx';
 import { SiteProvider } from './lib/site.jsx';
 import { ThemeProvider } from './lib/theme.jsx';
+import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
+import { muiTheme } from './lib/muiTheme.js';
 import './style.css';
 import './theme.css';
 import './styles/poi.css';
@@ -17,15 +19,61 @@ if (typeof window !== 'undefined' && window.location.hash && window.location.has
   window.history.replaceState(null, '', cleanPath);
 }
 
+// Developer badge Easter egg (Favicon & Portfolio HUD)
+if (typeof window !== 'undefined') {
+  console.log(
+    '%c             .         :         .\n' +
+    '        -----+---------+---------+-----\n' +
+    '             |   %c\\===========/%c   |\n' +
+    '             |    %c\\         /%c    |\n' +
+    '        %c=====[  M I D H U N   K   M  ]=====%c\n' +
+    '             |      %c\\     /%c      |\n' +
+    '             |       %c\\   /%c       |\n' +
+    '             |        %c\\ /%c        |\n' +
+    '             |         %cV%c         |\n' +
+    '        -----+---------+---------+-----\n' +
+    '             \'         :         \'',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ffffff;background:#090d16;font-weight:800;letter-spacing:1px;font-family:monospace;font-size:11px;line-height:1.25;padding:1px 4px;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#ef4444;font-weight:900;font-family:monospace;font-size:11px;line-height:1.25;',
+    'color:#64748b;font-family:monospace;font-size:11px;line-height:1.25;'
+  );
+
+  console.log(
+    '%c PARALLAX 2027 %c Engineered by Midhun K M ',
+    'background:#0a3d42;color:#b8f23d;font-weight:700;padding:4px 8px;border-radius:3px 0 0 3px;font-family:monospace;font-size:11px;',
+    'background:#1e293b;color:#f8fafc;padding:4px 8px;border-radius:0 3px 3px 0;font-family:monospace;font-size:11px;'
+  );
+
+  console.log(
+    '%c⚡ Portfolio : %chttps://midhunkm.pages.dev/',
+    'color:#94a3b8;font-weight:bold;font-family:monospace;font-size:11px;',
+    'color:#38bdf8;font-weight:bold;font-family:monospace;font-size:11px;text-decoration:underline;'
+  );
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider>
-        <SiteProvider>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
-        </SiteProvider>
+        <MuiThemeProvider theme={muiTheme}>
+          <SiteProvider>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </SiteProvider>
+        </MuiThemeProvider>
       </ThemeProvider>
     </BrowserRouter>
   </StrictMode>,

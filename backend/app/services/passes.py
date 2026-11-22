@@ -315,8 +315,20 @@ async def set_selections(
                 )
             ).scalars()
         )
-        if conflicting:
-            names = ", ".join(event_titles.get(row.event_id, "an event") for row in conflicting)
+        real_conflicts = []
+        for row in conflicting:
+            if row.status == "reserved":
+                # Stale unpaid add-on reservation: cancel it so attendee can claim as included pass event
+                row.status = "cancelled"
+                row.cancelled_at = datetime.now(UTC)
+                row.cancelled_by = "superseded"
+                row.cancellation_reason = "Superseded by included pass selection"
+                from app.services.tickets import revoke_for_registration
+                await revoke_for_registration(db, row.id)
+            else:
+                real_conflicts.append(row)
+        if real_conflicts:
+            names = ", ".join(event_titles.get(row.event_id, "an event") for row in real_conflicts)
             raise Conflict(
                 f"An add-on booking already exists for {names}. Cancel it before including it in the pass."
             )

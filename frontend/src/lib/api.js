@@ -25,6 +25,20 @@ const GET_INFLIGHT = new Map();
 const DEFAULT_TIMEOUT_MS = 25000;
 const UPLOAD_TIMEOUT_MS = 60000;
 
+// Reads retry once on a transient backend answer. A cold database used to show
+// "internal server error" until the user refreshed; now the page heals itself.
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const RETRY_DELAY_MS = 400;
+const RETRY_MAX_DELAY_MS = 2000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function retryDelay(res) {
+  const header = Number(res.headers.get('retry-after'));
+  if (Number.isFinite(header) && header > 0) return Math.min(header * 1000, RETRY_MAX_DELAY_MS);
+  return RETRY_DELAY_MS;
+}
+
 export class ApiError extends Error {
   constructor(message, { status = 0, code = '', details = null } = {}) {
     super(message);
@@ -109,6 +123,7 @@ async function runRequest(
     headers['X-CSRF-Token'] = csrfToken;
   }
 
+  const readOnly = method === 'GET' || method === 'HEAD';
   let res;
   let text = '';
   try {
@@ -119,6 +134,10 @@ async function runRequest(
       throw new ApiError('The server took too long to respond. Please try again.', {
         code: 'TIMEOUT',
       });
+    }
+    if (readOnly && retry) {
+      await sleep(RETRY_DELAY_MS);
+      return runRequest(path, { method, retry: false, timeoutMs });
     }
     throw new ApiError('Could not reach the convention service. Check your connection and retry.', {
       code: 'NETWORK',
@@ -138,6 +157,10 @@ async function runRequest(
 
   if (!res.ok) {
     const error = payload?.error;
+    if (readOnly && retry && RETRYABLE_STATUS.has(res.status)) {
+      await sleep(retryDelay(res));
+      return runRequest(path, { method, retry: false, timeoutMs });
+    }
     if (res.status === 403 && error?.code === 'CSRF_INVALID' && retry) {
       await refreshCsrf();
       // Bypass the shared-read map: this is a retry of the same request.
@@ -365,6 +388,8 @@ export const adminApi = {
   deleteAnnouncement: (editionId, announcementId) =>
     api(`${adminBase(editionId)}/announcements/${announcementId}`, { method: 'DELETE' }),
   audit: (editionId, params = {}) => api(`${adminBase(editionId)}/audit${query(params)}`),
+  dbPlaygroundSeed: (editionId, payload) =>
+    api(`${adminBase(editionId)}/db-playground/seed`, { method: 'POST', body: payload }),
   attendance: (editionId, params = {}) =>
     api(`${adminBase(editionId)}/attendance${query(params)}`),
   checkin: (editionId, payload) =>

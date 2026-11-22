@@ -102,7 +102,9 @@ class Settings(BaseSettings):
     database_migration_url: str | None = None
     database_ssl_ca_file: str | None = None
     db_pool_size: int = 10
-    db_statement_timeout_ms: int = 5000
+    # Generous enough for a Supabase pooler cold start; a genuinely slow query
+    # still aborts, and the API answers 503 instead of dropping the request.
+    db_statement_timeout_ms: int = 15000
     db_ssl: bool = False
     auto_create_tables: bool = True
 

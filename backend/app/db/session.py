@@ -38,11 +38,17 @@ def _create_engine() -> AsyncEngine:
         # Postgres (including Supabase direct and pooled connections)
         server_settings = {
             "statement_timeout": str(settings.db_statement_timeout_ms),
+            # A request cancelled mid-transaction must not pin a pooled server
+            # connection (and its row locks) after the browser has gone away.
+            "idle_in_transaction_session_timeout": "30000",
             "application_name": "parallax-api",
         }
         connect_args: dict = {
             "server_settings": server_settings,
             "command_timeout": max(5.0, settings.db_statement_timeout_ms / 1000.0),
+            # Fail a dead pooler socket fast instead of burning the platform's
+            # request budget; the API then retries once and answers 503.
+            "timeout": 10.0,
         }
 
         # Supabase and cloud Postgres SSL
@@ -73,6 +79,7 @@ def _create_engine() -> AsyncEngine:
             kwargs["poolclass"] = NullPool
         else:
             kwargs["pool_pre_ping"] = True
+            kwargs["pool_recycle"] = 1800
             kwargs.update(
                 pool_size=settings.db_pool_size,
                 max_overflow=max(2, settings.db_pool_size // 2),
@@ -114,6 +121,15 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     async with get_session_factory()() as session:
         try:
             yield session
+        except Exception:
+            # Hand the connection back clean; the error handlers turn transient
+            # database failures into 503s rather than leaking an aborted txn.
+            # Rollback failures must not mask the original error.
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         finally:
             await session.close()
 

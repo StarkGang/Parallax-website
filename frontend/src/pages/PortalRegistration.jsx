@@ -31,12 +31,13 @@ import {
 import { API_ORIGIN, portalApi, registrationApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
-import { dateTime, fileSize, money } from '../lib/format.js';
+import { date, dateTime, fileSize, money } from '../lib/format.js';
 import { openCheckout } from '../lib/razorpay.js';
-import { ISTE, LOGO, NSSCE, PARALLAX_MARK } from './Public.jsx';
+import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { BrandedQr } from '../components/BrandedQr.jsx';
 import { BarcodeSvg } from '../components/BarcodeSvg.jsx';
 import ParallaxIdCard from '../components/ParallaxIdCard.jsx';
+import { PaymentProgress } from '../components/PaymentProgress.jsx';
 import {
   Badge,
   Button,
@@ -88,74 +89,6 @@ function StatusPill({ value, labels = STATE_LABELS }) {
     <span className={`badge ${statusTone(value)}`}>
       {labels[value] || String(value).replace(/_/g, ' ')}
     </span>
-  );
-}
-
-const PAY_STEPS = [
-  ['preparing', 'Payment order created'],
-  ['gateway', 'Paid in Razorpay'],
-  ['verifying', 'Signature verified'],
-];
-
-const PAY_COPY = {
-  preparing: {
-    title: 'Securing your payment',
-    detail: 'Creating a Razorpay order for your pass. This takes a couple of seconds.',
-  },
-  gateway: {
-    title: 'Complete payment in Razorpay',
-    detail: 'Finish the payment in the secure window. Do not refresh or close this page.',
-  },
-  verifying: {
-    title: 'Confirming your payment',
-    detail: 'Razorpay has accepted the payment. Verifying the signature with our server now.',
-  },
-  success: {
-    title: 'Payment successful',
-    detail: 'Generating your convention pass and QR entry ticket.',
-  },
-};
-
-function PaymentProgress({ stage, amount, slow }) {
-  if (!stage) return null;
-  const copy = PAY_COPY[stage];
-  const activeIndex = PAY_STEPS.findIndex(([key]) => key === stage);
-  return (
-    <div className="pay-progress" role="status" aria-live="polite">
-      <div className={`pay-progress-card ${stage === 'success' ? 'is-success' : ''}`}>
-        <div className="pay-progress-icon">
-          {stage === 'success' ? (
-            <Check size={26} strokeWidth={2.6} />
-          ) : (
-            <RefreshCw size={24} className="is-spinning" />
-          )}
-        </div>
-        <h3>{copy.title}</h3>
-        <p>{copy.detail}</p>
-        {amount ? <span className="pay-progress-amount">{money(amount)}</span> : null}
-        <ol className="pay-progress-steps">
-          {PAY_STEPS.map(([key, label], index) => {
-            const done = stage === 'success' || index < activeIndex;
-            const active = !done && index === activeIndex;
-            return (
-              <li key={key} className={done ? 'is-done' : active ? 'is-active' : ''}>
-                <span className="pay-progress-dot">
-                  {done ? <Check size={11} strokeWidth={3} /> : index + 1}
-                </span>
-                {label}
-                {active ? <RefreshCw size={11} className="is-spinning" /> : null}
-              </li>
-            );
-          })}
-        </ol>
-        {slow && stage !== 'success' ? (
-          <small className="pay-progress-hint">
-            Still waiting on Razorpay. Slow connections can take a few extra seconds — please keep this
-            page open.
-          </small>
-        ) : null}
-      </div>
-    </div>
   );
 }
 
@@ -220,16 +153,19 @@ function DocumentPreview({ open, document, editionId, onClose }) {
           </>
         ) : null}
         {url ? (
-          <a className="button ghost" href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            <ExternalLink size={14} />
-            <span>Open in Tab</span>
-          </a>
+          <Button variant="ghost" href={url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>
+            Open in Tab
+          </Button>
         ) : null}
         {url ? (
-          <a className="button ghost" href={url} download={document.originalName || (isPdf ? 'document.pdf' : 'document.jpg')}>
-            <Download size={14} />
-            <span>Download</span>
-          </a>
+          <Button
+            variant="ghost"
+            href={url}
+            download={document.originalName || (isPdf ? 'document.pdf' : 'document.jpg')}
+            icon={Download}
+          >
+            Download
+          </Button>
         ) : null}
       </div>
       <div style={{ background: '#0a0d14', borderRadius: '8px', padding: '16px', textAlign: 'center', minHeight: '340px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -366,9 +302,9 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
             <b style={{ fontSize: '15px', color: '#f8fafc' }}>{req.label}</b>
             {req.required ? <Badge tone="warn">Mandatory</Badge> : null}
             {isUploading ? (
-              <span className="badge neutral" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Badge tone="muted">
                 <RefreshCw size={12} className="is-spinning" /> Uploading...
-              </span>
+              </Badge>
             ) : isUploaded ? (
               <Badge tone="good">✓ File Uploaded</Badge>
             ) : localFile?.error ? (
@@ -466,29 +402,29 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
         </button>
 
         {isUploaded || fileName ? (
-          <button
-            type="button"
-            className="button ghost small upload-action-btn"
+          <Button
+            variant="ghost"
+            size="small"
+            loading={isRemoving}
             disabled={isUploading || isRemoving}
             onClick={onRemoveFile}
             title="Remove from server"
-            style={{ color: '#f87171' }}
+            sx={{ color: '#f87171', borderColor: 'rgba(248, 113, 113, 0.42)' }}
           >
-            {isRemoving ? <RefreshCw size={13} className="is-spinning" /> : <Trash2 size={13} />}
-            <span>{isRemoving ? 'Removing...' : 'Remove'}</span>
-          </button>
+            {isRemoving ? 'Removing...' : 'Remove'}
+          </Button>
         ) : null}
 
         {isUploaded && (previewUrl || serverDoc) ? (
-          <button
-            type="button"
-            className="button ghost small upload-action-btn"
+          <Button
+            variant="ghost"
+            size="small"
+            icon={Eye}
             disabled={isUploading || isRemoving}
             onClick={onPreview}
           >
-            <Eye size={13} />
-            <span>Preview</span>
-          </button>
+            Preview
+          </Button>
         ) : null}
       </div>
     </div>
@@ -568,6 +504,43 @@ export function PortalRegistration() {
   const config = query.data?.data;
   const categories = config?.categories || [];
   const registration = localRegistration || config?.registration;
+
+  // Add-on events are charged on their own orders, so the pass receipt has to
+  // include them as line items instead of only showing the category fee.
+  const extraPayments = (tickets.data?.data || []).filter(
+    (ticket) => ticket.kind === 'registration' && (ticket.amountPaise || 0) > 0,
+  );
+  const extraPaymentsTotal = extraPayments.reduce((sum, t) => sum + (t.amountPaise || 0), 0);
+  const passPaidPaise = registration?.totalPaidPaise ?? registration?.feePaise ?? 0;
+  const receiptTotalPaise = passPaidPaise + extraPaymentsTotal;
+
+  // Every charge is its own gateway order, so the receipt has to carry the
+  // Razorpay references per line item, not just one overall payment id.
+  const passOrder = registration?.order || null;
+  const paymentRecords = [
+    {
+      key: 'pass',
+      label: registration?.category?.name
+        ? `${registration.category.name} convention pass`
+        : 'Convention pass',
+      sublabel: registration?.registrationNumber || null,
+      amountPaise: passPaidPaise,
+      gatewayOrderId: passOrder?.gatewayOrderId || passOrder?.id || null,
+      paymentId: registration?.transactionId || null,
+      paidAt: registration?.paidAt || null,
+      testMode: Boolean(passOrder?.mock),
+    },
+    ...extraPayments.map((ticket) => ({
+      key: ticket.id,
+      label: ticket.title || 'Add-on event',
+      sublabel: ticket.registrationNumber || null,
+      amountPaise: ticket.amountPaise || 0,
+      gatewayOrderId: ticket.gatewayOrderId || ticket.orderId || null,
+      paymentId: ticket.paymentId || null,
+      paidAt: ticket.paidAt || null,
+      testMode: false,
+    })),
+  ];
 
   const resolveEffectiveRole = () => {
     if (badgeRoleOverride) return badgeRoleOverride;
@@ -975,6 +948,13 @@ export function PortalRegistration() {
       if (verified?.data) setLocalRegistration(verified.data);
       setPayStage('success');
       setPayment(null);
+      setVersion((v) => v + 1);
+      await Promise.all([
+        query.reload(),
+        tickets.reload(),
+        qrToken.reload(),
+        userRegs.reload(),
+      ]);
       await new Promise((resolve) => setTimeout(resolve, 800));
       // The verify response is authoritative, so show the paid ticket straight
       // away instead of waiting for another full reload of the page data.
@@ -1069,25 +1049,14 @@ export function PortalRegistration() {
                 </p>
               </div>
 
-              <Link
+              <Button
                 to="/portal/select-events"
-                className="button primary"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '12px 22px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  borderRadius: '10px',
-                  background: 'linear-gradient(135deg, #0284c7, #0ea5e9)',
-                  boxShadow: '0 4px 18px rgba(14, 165, 233, 0.35)',
-                  flexShrink: 0,
-                }}
+                size="medium"
+                icon={ArrowRight}
+                sx={{ flexShrink: 0 }}
               >
-                <span>Select Your 3 Events</span>
-                <ArrowRight size={16} />
-              </Link>
+                Select Your 3 Events
+              </Button>
             </div>
 
             <div
@@ -1131,9 +1100,9 @@ export function PortalRegistration() {
                   <b style={{ color: '#f8fafc' }}>{registration.fullName}</b> · {registration.collegeName}
                 </p>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-                  <span className="badge good">Paid · {money(registration.feePaise)}</span>
+                  <Badge tone="good">Paid · {money(registration.feePaise)}</Badge>
                   <StatusPill value={registration.verificationStatus} />
-                  <span className="badge neutral">{registration.category?.name}</span>
+                  <Badge tone="muted">{registration.category?.name}</Badge>
                 </div>
               </div>
 
@@ -1149,7 +1118,7 @@ export function PortalRegistration() {
               >
                 <div style={{ width: '130px', height: '130px', display: 'grid', placeItems: 'center' }}>
                   {passTicket?.token ? (
-                    <BrandedQr value={passTicket.token} title="QR entry pass" logoSrc={PARALLAX_MARK} />
+                    <BrandedQr value={passTicket.token} title="QR entry pass" />
                   ) : (
                     <QrCode size={110} color="#0f172a" />
                   )}
@@ -1182,14 +1151,21 @@ export function PortalRegistration() {
             </div>
 
             <div className="portal-nav-actions" style={{ display: 'flex', gap: '12px', marginTop: '28px', flexWrap: 'wrap' }}>
-              <Link to="/portal/select-events" className="button primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>Select Included Events & Workshops</span>
-                <ArrowRight size={15} />
-              </Link>
+              <Button to="/portal/select-events" icon={ArrowRight}>
+                Select Included Events &amp; Workshops
+              </Button>
               <Button onClick={() => setShowIdCard(true)} variant="secondary" icon={IdCard}>
                 View & Print ID Card
               </Button>
-              <Button onClick={() => setShowReceipt(true)} variant="ghost" icon={Printer}>
+              <Button
+                onClick={() => {
+                  setShowReceipt(true);
+                  tickets.reload();
+                  query.reload();
+                }}
+                variant="ghost"
+                icon={Printer}
+              >
                 View & Print Receipt
               </Button>
               {registration.canChangeCategory ? (
@@ -1776,7 +1752,7 @@ export function PortalRegistration() {
         wide
         eyebrow="OFFICIAL CREDENTIAL · CR80 PORTRAIT"
       >
-        <div className="px-idcard-modal-content">
+        <div className="px-idcard-modal-content px-printable-target">
           <ParallaxIdCard
             user={user}
             registration={registration}
@@ -1847,7 +1823,15 @@ export function PortalRegistration() {
               </div>
               <div className="px-receipt-meta-item">
                 <small>PAYMENT ID</small>
-                <b>{registration?.transactionId || 'MOCK_PAID'}</b>
+                <b>{registration?.transactionId || '—'}</b>
+              </div>
+              <div className="px-receipt-meta-item">
+                <small>ORDER ID</small>
+                <b>{passOrder?.gatewayOrderId || passOrder?.id || '—'}</b>
+              </div>
+              <div className="px-receipt-meta-item">
+                <small>PAID ON</small>
+                <b>{registration?.paidAt ? dateTime(registration.paidAt) : '—'}</b>
               </div>
               <div className="px-receipt-meta-item">
                 <small>CATEGORY</small>
@@ -1886,26 +1870,92 @@ export function PortalRegistration() {
                     <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
                   </td>
                   <td style={{ textAlign: 'right', fontWeight: '700' }}>
-                    {money(registration?.feePaise || 0)}
+                    {money(passPaidPaise)}
                   </td>
                 </tr>
+                {extraPayments.map((ticket) => (
+                  <tr key={ticket.id}>
+                    <td>
+                      <b>{ticket.title || 'Add-on event'}</b>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>
+                        Paid add-on · {ticket.registrationNumber}
+                        {ticket.startsAt ? ` · ${date(ticket.startsAt)}` : ''}
+                      </div>
+                      <div className="px-receipt-txn" style={{ marginTop: '3px' }}>
+                        {ticket.paymentId || ticket.gatewayOrderId || 'Reference pending'}
+                      </div>
+                    </td>
+                    <td>
+                      <div>{registration?.fullName}</div>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>
+                        {registration?.collegeName}
+                      </div>
+                    </td>
+                    <td>
+                      <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                      {money(ticket.amountPaise || 0)}
+                    </td>
+                  </tr>
+                ))}
                 <tr className="px-receipt-total-row">
                   <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
-                    Total Amount Paid:
+                    Total Amount Paid
+                    {extraPayments.length ? ` (${extraPayments.length} add-on${extraPayments.length === 1 ? '' : 's'})` : ''}
+                    :
                   </td>
                   <td style={{ textAlign: 'right', padding: '12px 4px', color: '#0284c7' }}>
-                    {money(registration?.feePaise || 0)}
+                    {money(receiptTotalPaise)}
                   </td>
                 </tr>
               </tbody>
             </table>
+
+            <div className="px-receipt-refs">
+              <h4>Transaction references</h4>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Gateway order ID</th>
+                    <th>Payment ID</th>
+                    <th style={{ textAlign: 'right' }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentRecords.map((record) => (
+                    <tr key={record.key}>
+                      <td>
+                        <b style={{ fontSize: '11px' }}>{record.label}</b>
+                        <div className="px-receipt-note">
+                          {record.sublabel ? `${record.sublabel} · ` : ''}
+                          {record.paidAt ? dateTime(record.paidAt) : 'Timestamp unavailable'}
+                          {record.testMode ? ' · test mode' : ''}
+                        </div>
+                      </td>
+                      <td>
+                        <span className="px-receipt-txn">{record.gatewayOrderId || '—'}</span>
+                      </td>
+                      <td>
+                        <span className="px-receipt-txn">{record.paymentId || '—'}</span>
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                        {money(record.amountPaise || 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px', fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div>
                 <b>Issuer:</b> ISTE Student Chapter, NSS College of Engineering, Palakkad - 678008
               </div>
               <div>
-                Amounts include all applicable convention fees and event access privileges.
+                Amounts include all applicable convention fees and event access privileges. Quote the
+                payment ID for any refund or reconciliation query.
               </div>
             </div>
           </div>

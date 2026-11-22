@@ -85,8 +85,39 @@ async def attach_gateway_order(db: AsyncSession, order: PaymentOrder) -> Payment
         order.gateway_order_id = await create_gateway_order(order)
         order.status = "created"
         await db.flush()
+        try:
+            from app.services.telegram import dispatch_payment_telegram_alert
+            from app.models.user import User
+
+            user = await db.get(User, order.user_id) if order.user_id else None
+            dispatch_payment_telegram_alert(
+                "initiated",
+                order_id=str(order.id),
+                amount_paise=order.amount_paise,
+                purpose=order.purpose,
+                gateway_order_id=order.gateway_order_id,
+                attendee_name=user.full_name if user else None,
+                attendee_email=user.email if user else None,
+            )
+        except Exception:
+            pass
     except Exception as exc:  # pragma: no cover - provider failure path
         logger.warning("Gateway order creation failed for %s: %s", order.id, exc)
+        try:
+            from app.services.telegram import file_telegram_alert
+
+            file_telegram_alert(
+                "Payment gateway order failed",
+                {
+                    "Order": str(order.id),
+                    "Amount": f"INR {order.amount_paise / 100:.2f}",
+                    "Purpose": order.purpose,
+                    "Error": str(exc)[:300],
+                },
+                severity="critical",
+            )
+        except Exception:  # pragma: no cover
+            pass
         order.status = "failed"
         await db.flush()
         raise AppError(
@@ -195,6 +226,23 @@ async def mark_order_paid(
         await apply_paid_category_change(db, order)
 
     await db.flush()
+    try:
+        from app.services.telegram import dispatch_payment_telegram_alert
+        from app.models.user import User
+
+        user = await db.get(User, order.user_id) if order.user_id else None
+        dispatch_payment_telegram_alert(
+            "success",
+            order_id=str(order.id),
+            amount_paise=order.amount_paise,
+            purpose=order.purpose,
+            payment_id=tx.gateway_payment_id,
+            gateway_order_id=order.gateway_order_id,
+            attendee_name=user.full_name if user else None,
+            attendee_email=user.email if user else None,
+        )
+    except Exception:
+        pass
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
 
@@ -278,9 +326,12 @@ async def process_webhook(
     db.add(entry)
 
     event_type = event_payload.get("event")
-    if event_type in {"payment.captured", "payment.authorized"}:
+    if event_type in {"payment.captured", "payment.authorized", "order.paid"}:
         pay_entity = event_payload.get("payload", {}).get("payment", {}).get("entity", {})
         order_id = pay_entity.get("order_id")
+        if not order_id:
+            order_entity = event_payload.get("payload", {}).get("order", {}).get("entity", {})
+            order_id = order_entity.get("id")
         if order_id:
             order = (
                 await db.execute(
@@ -302,18 +353,42 @@ async def process_webhook(
                         received=paid_amount,
                     )
                 else:
-                    await mark_order_paid(db, order, transaction_id=pay_entity.get("id"))
+                    payment_id = pay_entity.get("id") or (
+                        order_entity.get("payment_id") if "order_entity" in locals() else None
+                    )
+                    await mark_order_paid(db, order, transaction_id=payment_id)
     elif event_type == "payment.failed":
+        # In Razorpay, an individual payment failure within an order does NOT fail the order.
+        # The customer is allowed to retry with another card/UPI/method until the session expires.
+        # Record the attempt failure for observability without corrupting the retryable order status.
         pay_entity = event_payload.get("payload", {}).get("payment", {}).get("entity", {})
         order_id = pay_entity.get("order_id")
-        if order_id:
-            order = (
-                await db.execute(
-                    select(PaymentOrder).where(PaymentOrder.gateway_order_id == order_id)
-                )
-            ).scalar_one_or_none()
-            if order is not None and order.status == "created":
-                order.status = "failed"
+        logger.info(
+            "razorpay_payment_attempt_failed order_id=%s payment_id=%s error=%s",
+            order_id,
+            pay_entity.get("id"),
+            pay_entity.get("error_description"),
+        )
+        try:
+            from app.services.telegram import dispatch_payment_telegram_alert
+            order = None
+            if order_id:
+                order = (
+                    await db.execute(
+                        select(PaymentOrder).where(PaymentOrder.gateway_order_id == order_id)
+                    )
+                ).scalar_one_or_none()
+            dispatch_payment_telegram_alert(
+                "failed",
+                order_id=str(order.id) if order else (order_id or "unknown"),
+                amount_paise=order.amount_paise if order else int(pay_entity.get("amount") or 0),
+                purpose=order.purpose if order else "payment",
+                payment_id=pay_entity.get("id"),
+                gateway_order_id=order_id,
+                error_message=pay_entity.get("error_description"),
+            )
+        except Exception:
+            pass
     elif event_type in {"refund.processed", "refund.failed", "refund.created"}:
         refund_entity = event_payload.get("payload", {}).get("refund", {}).get("entity", {})
         gateway_refund_id = refund_entity.get("id")
@@ -410,6 +485,23 @@ async def refund_order(
                 await revoke_for_registration(db, reg.id)
 
     await db.flush()
+    try:
+        from app.services.telegram import dispatch_payment_telegram_alert
+        from app.models.user import User
+
+        user = await db.get(User, order.user_id) if order.user_id else None
+        dispatch_payment_telegram_alert(
+            "success",
+            order_id=str(order.id),
+            amount_paise=order.amount_paise,
+            purpose=order.purpose,
+            payment_id=tx.gateway_payment_id,
+            gateway_order_id=order.gateway_order_id,
+            attendee_name=user.full_name if user else None,
+            attendee_email=user.email if user else None,
+        )
+    except Exception:
+        pass
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
     return refund

@@ -116,6 +116,7 @@ export async function openStandardCheckout({
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let lastFailure = null;
 
     const finish = (result) => {
       if (settled) return;
@@ -133,12 +134,12 @@ export async function openStandardCheckout({
       order_id: orderId,
       amount,
       currency,
-      name: name || 'Parallax 2026',
+      name: name || 'Parallax 2027',
       description,
       image: logoUrl,
       prefill: {
         email: prefill?.email || user?.email || '',
-        name: prefill?.name || user?.fullName || '',
+        name: prefill?.name || user?.fullName || user?.name || '',
         contact: prefill?.phone || prefill?.contact || user?.phone || '',
       },
       notes: notes || {},
@@ -159,20 +160,33 @@ export async function openStandardCheckout({
       modal: {
         ondismiss: () => {
           if (onDismiss) onDismiss();
-          finish({ success: false, dismissed: true, message: 'Payment cancelled by user.' });
+          if (lastFailure) {
+            const errorMsg =
+              lastFailure?.error?.description ||
+              lastFailure?.error?.reason ||
+              'Payment failed or was declined by the bank.';
+            finish({
+              success: false,
+              failed: true,
+              dismissed: true,
+              error: new Error(errorMsg),
+              details: lastFailure,
+            });
+          } else {
+            finish({ success: false, dismissed: true, message: 'Payment cancelled by user.' });
+          }
         },
       },
     };
 
     const checkout = new Razorpay(options);
 
+    // Razorpay standard checkout: payment.failed fires when a payment attempt fails.
+    // The checkout modal DOES NOT close, allowing the user to retry or switch methods.
+    // Do not settle/terminate the promise here so retried payments can succeed.
     checkout.on('payment.failed', (failResponse) => {
+      lastFailure = failResponse;
       if (onFailed) onFailed(failResponse);
-      const errorMsg =
-        failResponse?.error?.description ||
-        failResponse?.error?.reason ||
-        'Payment failed or was declined.';
-      finish({ success: false, failed: true, error: new Error(errorMsg), details: failResponse });
     });
 
     try {
@@ -189,6 +203,8 @@ export async function openCheckout(order, user, description = 'Convention regist
   const Razorpay = await loadRazorpay();
   return new Promise((resolve, reject) => {
     let settled = false;
+    let lastFailure = null;
+
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -219,17 +235,27 @@ export async function openCheckout(order, user, description = 'Convention regist
       },
       handler: (response) => finish(response),
       modal: {
-        ondismiss: () => finish(null),
+        ondismiss: () => {
+          if (lastFailure) {
+            const reason =
+              lastFailure?.error?.description ||
+              lastFailure?.error?.reason ||
+              'Payment transaction declined or failed.';
+            finish({ failed: true, error: new Error(reason), details: lastFailure });
+          } else {
+            finish(null);
+          }
+        },
         backdropclose: false,
       },
     });
+
+    // An individual payment attempt failure (wrong OTP, card decline) allows user retry
+    // inside the open Razorpay modal. Store the last failure and let handler settle on retry success.
     checkout.on('payment.failed', (failResp) => {
-      const reason =
-        failResp?.error?.description ||
-        failResp?.error?.reason ||
-        'Payment transaction declined or failed.';
-      finish({ failed: true, error: new Error(reason), details: failResp });
+      lastFailure = failResp;
     });
+
     try {
       checkout.open();
     } catch (error) {

@@ -1,7 +1,25 @@
 import React, { Component, useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Inbox, LoaderCircle, X } from 'lucide-react';
+import {
+  Alert,
+  AlertTitle,
+  Box,
+  Button as MuiButton,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Paper,
+  Stack,
+  Switch,
+  Table,
+  TableContainer,
+  Typography,
+} from '@mui/material';
+import { styled } from '@mui/material/styles';
+import { AlertTriangle, Inbox, X } from 'lucide-react';
 
 export function Eyebrow({ children, className = '' }) {
   return (
@@ -12,6 +30,7 @@ export function Eyebrow({ children, className = '' }) {
 }
 
 const PARALLAX_DEPTH_BG = `${import.meta.env.BASE_URL}images/parallax-depth-bg.webp`;
+const PARALLAX_MARK = `${import.meta.env.BASE_URL}images/parallax-vector.svg`;
 
 export function PageTitle({ kicker, title, desc, aside }) {
   return (
@@ -34,15 +53,35 @@ export function PageTitle({ kicker, title, desc, aside }) {
 
 export function SectionHead({ kicker, title, action }) {
   return (
-    <div className="section-heading">
-      <div>
+    <Stack
+      direction="row"
+      alignItems="flex-end"
+      justifyContent="space-between"
+      spacing={2}
+      sx={{ mb: 2, flexWrap: 'wrap', gap: 1.5 }}
+    >
+      <Box>
         {kicker ? <Eyebrow>{kicker}</Eyebrow> : null}
-        <h2>{title}</h2>
-      </div>
+        <Typography variant="h3" component="h2" sx={{ mt: kicker ? 0.5 : 0 }}>
+          {title}
+        </Typography>
+      </Box>
       {action}
-    </div>
+    </Stack>
   );
 }
+
+const VARIANT_MAP = {
+  primary: { variant: 'contained', color: 'primary' },
+  secondary: { variant: 'contained', color: 'secondary' },
+  danger: { variant: 'contained', color: 'error' },
+  ghost: { variant: 'outlined', color: 'inherit' },
+  light: {
+    variant: 'contained',
+    color: 'inherit',
+    sx: { backgroundColor: '#f4f6fb', color: '#06080e', '&:hover': { backgroundColor: '#ffffff' } },
+  },
+};
 
 export function Button({
   to,
@@ -54,65 +93,139 @@ export function Button({
   children,
   className = '',
   type = 'button',
+  size = 'small',
+  sx,
   ...rest
 }) {
-  const inner = (
-    <>
-      {loading ? (
-        <span className="btn-ico" style={{ display: 'inline-flex', alignItems: 'center' }}>
-          <LoaderCircle size={14} className="is-spinning" strokeWidth={2.2} aria-hidden="true" style={{ animation: 'spin 0.8s linear infinite' }} />
-        </span>
-      ) : null}
-      <span>{children}</span>
-      {!loading && Icon ? (
-        <span className="btn-ico">
-          <Icon size={14} strokeWidth={1.6} aria-hidden="true" />
-        </span>
-      ) : null}
-    </>
-  );
-  const cls = `button ${variant} ${loading ? 'is-loading' : ''} ${className}`.trim();
-  if (to) {
-    return (
-      <Link to={to} className={cls} {...rest}>
-        {inner}
-      </Link>
-    );
-  }
-  if (href) {
-    return (
-      <a href={href} className={cls} {...rest}>
-        {inner}
-      </a>
-    );
-  }
+  const map = VARIANT_MAP[variant] || VARIANT_MAP.primary;
+  const linkProps = to ? { component: Link, to } : href ? { component: 'a', href } : { type };
+  // A loading button stays readable: block the click instead of greying it out.
+  const busyProps = loading ? { sx: { pointerEvents: 'none' } } : {};
+
   return (
-    <button type={type} className={cls} disabled={disabled || loading} {...rest}>
-      {inner}
-    </button>
+    <MuiButton
+      {...map}
+      size={size}
+      className={className}
+      disabled={disabled}
+      endIcon={
+        !loading && Icon ? <Icon size={14} strokeWidth={1.8} aria-hidden="true" /> : undefined
+      }
+      startIcon={
+        loading ? (
+          <CircularProgress size={13} thickness={5} color="inherit" aria-hidden="true" />
+        ) : undefined
+      }
+      sx={{ ...(map.sx || {}), ...(sx || {}), ...(busyProps.sx || {}) }}
+      aria-busy={loading || undefined}
+      {...linkProps}
+      {...rest}
+    >
+      {children}
+    </MuiButton>
   );
 }
 
-export function Panel({ children, className = '', padded = true, ...rest }) {
+const PanelSurface = styled(Paper)(({ theme }) => ({
+  position: 'relative',
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: 18,
+  backgroundColor: theme.palette.background.paper,
+  backgroundImage:
+    'radial-gradient(circle at 100% 0%, rgba(124, 92, 255, 0.09), transparent 45%)',
+  boxShadow: '0 1px 0 rgba(255,255,255,0.03) inset',
+  overflow: 'hidden',
+}));
+
+export function Panel({ children, className = '', padded = true, sx, ...rest }) {
   return (
-    <div className={`bezel ${className}`.trim()} {...rest}>
-      <div className={`bezel-core ${padded ? 'is-padded' : ''}`.trim()}>{children}</div>
-    </div>
+    <PanelSurface
+      elevation={0}
+      variant="outlined"
+      className={className}
+      sx={{ p: padded ? 2.5 : 0, ...(sx || {}) }}
+      {...rest}
+    >
+      {children}
+    </PanelSurface>
   );
 }
 
 export function Stat({ label, value, note, tone = '' }) {
+  const accent =
+    tone === 'warn' ? '#fbbf24' : tone === 'good' ? '#3ddc97' : tone === 'bad' ? '#f87171' : null;
+
   return (
-    <div className={`stat-card ${tone}`.trim()}>
-      <span>{label}</span>
-      <b>{value}</b>
-      {note ? <small>{note}</small> : null}
-    </div>
+    <PanelSurface
+      elevation={0}
+      variant="outlined"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0.5,
+        p: 2,
+        minWidth: 0,
+        borderColor: accent ? `color-mix(in srgb, ${accent} 40%, transparent)` : undefined,
+      }}
+    >
+      <Typography
+        variant="overline"
+        component="span"
+        sx={{ color: 'text.secondary', fontSize: '0.6rem' }}
+      >
+        {label}
+      </Typography>
+      <Box
+        component="b"
+        sx={{
+          fontFamily: 'var(--display, inherit)',
+          fontSize: '1.5rem',
+          lineHeight: 1.1,
+          letterSpacing: '-0.02em',
+          color: accent || 'text.primary',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {value}
+      </Box>
+      {note ? (
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
+          {note}
+        </Typography>
+      ) : null}
+    </PanelSurface>
   );
 }
 
+const BADGE_TONES = {
+  good: { color: '#3ddc97', bg: 'rgba(61, 220, 151, 0.12)', border: 'rgba(61, 220, 151, 0.32)' },
+  warn: { color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', border: 'rgba(251, 191, 36, 0.32)' },
+  bad: { color: '#f87171', bg: 'rgba(248, 113, 113, 0.12)', border: 'rgba(248, 113, 113, 0.32)' },
+  accent: { color: '#a58cff', bg: 'rgba(124, 92, 255, 0.16)', border: 'rgba(124, 92, 255, 0.38)' },
+  muted: { color: '#93a4c6', bg: 'rgba(148, 170, 205, 0.08)', border: 'rgba(148, 170, 205, 0.24)' },
+  neutral: { color: '#cbd5e1', bg: 'rgba(255, 255, 255, 0.05)', border: 'rgba(148, 170, 205, 0.26)' },
+};
+
 export function Badge({ tone = 'neutral', children }) {
-  return <span className={`badge ${tone}`.trim()}>{children}</span>;
+  const style = BADGE_TONES[tone] || BADGE_TONES.neutral;
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      label={children}
+      sx={{
+        color: style.color,
+        backgroundColor: style.bg,
+        borderColor: style.border,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        fontSize: '0.65rem',
+        height: 22,
+        '& .MuiChip-label': { px: 1.1 },
+      }}
+    />
+  );
 }
 
 export function StatusBadge({ status }) {
@@ -124,89 +237,230 @@ export function StatusBadge({ status }) {
   return <Badge tone={tone}>{value ? value.replace(/_/g, ' ') : 'unknown'}</Badge>;
 }
 
+/**
+ * Parallax loader: three credential plates fan apart in depth behind the brand
+ * mark, and a shimmer row hints at the content that is still arriving. Pure
+ * CSS so it stays at 60fps on low-end phones, and it settles to a static frame
+ * when motion is reduced.
+ */
 export function Loading({ label = 'Loading', rows = 2 }) {
   return (
-    <div className="loading" role="status" aria-live="polite">
-      <LoaderCircle className="spin" size={18} strokeWidth={1.6} />
-      <span>{label}</span>
+    <Box
+      className="px-loader"
+      role="status"
+      aria-live="polite"
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.75, py: 3 }}
+    >
+      <div className="px-loader-stage" aria-hidden="true">
+        <span className="px-loader-plate is-a" />
+        <span className="px-loader-plate is-b" />
+        <span className="px-loader-plate is-c" />
+        <img className="px-loader-mark" src={PARALLAX_MARK} alt="" />
+      </div>
+      <div className="px-loader-copy">
+        <b>{label}</b>
+        <span className="px-loader-dots" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+      </div>
       <span className="sr-only">Please wait</span>
       {rows > 0 ? (
-        <div className="skeleton-stack" aria-hidden="true">
+        <div className="px-loader-rows" aria-hidden="true">
           {Array.from({ length: rows }).map((_, index) => (
-            <div className="skeleton" key={index} style={{ animationDelay: `${index * 90}ms` }} />
+            <div className="px-loader-row" key={index} />
           ))}
         </div>
       ) : null}
-    </div>
+    </Box>
   );
 }
 
 export function ErrorBox({ error, onRetry, title = 'That did not load' }) {
   return (
-    <div className="state-box error" role="alert">
-      <AlertTriangle size={20} strokeWidth={1.6} />
-      <div>
-        <h3>{title}</h3>
-        <p>{error?.message || 'The server could not complete that request.'}</p>
-        {error?.code ? <code>{error.code}</code> : null}
-      </div>
-      {onRetry ? (
-        <Button variant="ghost" onClick={onRetry}>
-          Try again
-        </Button>
+    <Alert
+      severity="error"
+      variant="outlined"
+      icon={<AlertTriangle size={19} strokeWidth={1.7} />}
+      action={
+        onRetry ? (
+          <Button variant="ghost" size="small" onClick={onRetry}>
+            Try again
+          </Button>
+        ) : undefined
+      }
+      sx={{ alignItems: 'flex-start' }}
+    >
+      <AlertTitle sx={{ fontWeight: 700, fontSize: '0.875rem', mb: 0.25 }}>{title}</AlertTitle>
+      <Typography variant="body2" sx={{ color: 'rgba(254, 202, 202, 0.9)' }}>
+        {error?.message || 'The server could not complete that request.'}
+      </Typography>
+      {error?.code ? (
+        <Box
+          component="code"
+          sx={{ display: 'inline-block', mt: 0.5, fontSize: '0.7rem', opacity: 0.7 }}
+        >
+          {error.code}
+        </Box>
       ) : null}
-    </div>
+    </Alert>
   );
 }
 
 export function Empty({ title = 'Nothing here yet', desc, children }) {
   return (
-    <div className="state-box empty">
-      <Inbox size={22} strokeWidth={1.4} />
-      <div>
-        <h3>{title}</h3>
-        {desc ? <p>{desc}</p> : null}
-      </div>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        textAlign: 'center',
+        gap: 1,
+        px: 2.5,
+        py: 4,
+        borderRadius: 3,
+        border: '1px dashed',
+        borderColor: 'divider',
+        backgroundColor: 'rgba(255,255,255,0.015)',
+        color: 'text.secondary',
+      }}
+    >
+      <Inbox size={24} strokeWidth={1.4} />
+      <Typography variant="subtitle1" sx={{ color: 'text.primary' }}>
+        {title}
+      </Typography>
+      {desc ? (
+        <Typography variant="body2" sx={{ maxWidth: 420 }}>
+          {desc}
+        </Typography>
+      ) : null}
       {children}
-    </div>
+    </Box>
   );
 }
 
 export function Field({ label, hint, children, className = '' }) {
   return (
     <label className={`field ${className}`.trim()}>
-      <span>{label}</span>
+      <Typography
+        component="span"
+        variant="overline"
+        sx={{ display: 'block', color: 'text.secondary', fontSize: '0.6rem' }}
+      >
+        {label}
+      </Typography>
       {children}
-      {hint ? <small>{hint}</small> : null}
+      {hint ? (
+        <Typography component="small" variant="caption" sx={{ display: 'block', mt: 0.5 }}>
+          {hint}
+        </Typography>
+      ) : null}
     </label>
   );
 }
 
 export function Toggle({ checked, onChange, label, hint }) {
   return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span className="toggle-track" aria-hidden="true" />
-      <span className="toggle-copy">
-        <b>{label}</b>
-        {hint ? <small>{hint}</small> : null}
-      </span>
-    </label>
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 1.75,
+        py: 1,
+        borderRadius: 2.5,
+        border: '1px solid',
+        borderColor: 'divider',
+        backgroundColor: 'rgba(255,255,255,0.02)',
+      }}
+    >
+      <Switch
+        checked={Boolean(checked)}
+        onChange={(event) => onChange(event.target.checked)}
+        size="small"
+        slotProps={{ input: { 'aria-label': label } }}
+      />
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="subtitle2" component="b" sx={{ display: 'block' }}>
+          {label}
+        </Typography>
+        {hint ? (
+          <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+            {hint}
+          </Typography>
+        ) : null}
+      </Box>
+    </Box>
   );
 }
 
+const ALERT_SEVERITY = {
+  info: 'info',
+  success: 'success',
+  warn: 'warning',
+  warning: 'warning',
+  error: 'error',
+};
+
 export function InlineMessage({ tone = 'info', children }) {
   return (
-    <p className={`inline-message ${tone}`.trim()} role={tone === 'error' ? 'alert' : 'status'}>
+    <Alert
+      severity={ALERT_SEVERITY[tone] || 'info'}
+      variant="outlined"
+      role={tone === 'error' ? 'alert' : 'status'}
+      sx={{ py: 0.25 }}
+    >
       {children}
-    </p>
+    </Alert>
   );
 }
 
 export function DataTable({ head, children, empty }) {
   return (
-    <div className="table-scroll">
-      <table className="data-table">
+    <TableContainer
+      component={Paper}
+      elevation={0}
+      variant="outlined"
+      sx={{
+        borderColor: 'divider',
+        backgroundColor: 'rgba(255,255,255,0.015)',
+        borderRadius: 3,
+        overflowX: 'auto',
+      }}
+    >
+      <Table
+        size="small"
+        sx={{
+          borderCollapse: 'collapse',
+          minWidth: 560,
+          '& th': {
+            fontFamily: 'var(--mono, monospace)',
+            fontSize: '0.6rem',
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'text.secondary',
+            fontWeight: 600,
+            textAlign: 'left',
+            padding: '10px 14px',
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+            whiteSpace: 'nowrap',
+            backgroundColor: 'rgba(255,255,255,0.02)',
+          },
+          '& td': {
+            fontSize: '0.8125rem',
+            padding: '12px 14px',
+            borderBottom: '1px solid rgba(148,170,205,0.10)',
+            color: 'text.primary',
+            verticalAlign: 'middle',
+          },
+          '& tbody tr:last-of-type td': { borderBottom: 0 },
+          '& tbody tr': { transition: 'background-color 120ms ease' },
+          '& tbody tr:hover': { backgroundColor: 'rgba(124, 92, 255, 0.07)' },
+          '& td b': { fontWeight: 600 },
+        }}
+      >
         <thead>
           <tr>
             {head.map((cell) => (
@@ -217,12 +471,24 @@ export function DataTable({ head, children, empty }) {
           </tr>
         </thead>
         <tbody>{children}</tbody>
-      </table>
-      {empty ? <div className="table-empty">{empty}</div> : null}
-    </div>
+      </Table>
+      {empty ? (
+        <Box
+          sx={{
+            p: 3,
+            textAlign: 'center',
+            color: 'text.secondary',
+            fontSize: '0.8125rem',
+            borderTop: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          {empty}
+        </Box>
+      ) : null}
+    </TableContainer>
   );
 }
-
 
 export class SheetErrorBoundary extends Component {
   constructor(props) {
@@ -238,17 +504,22 @@ export class SheetErrorBoundary extends Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '24px', color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-          <h3 style={{ margin: '0 0 8px', color: '#fca5a5' }}>Failed to render sheet contents</h3>
-          <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#fecaca' }}>{this.state.error?.message || 'Unknown error occurred while rendering the form.'}</p>
-          <button
-            type="button"
-            onClick={() => this.setState({ hasError: false, error: null })}
-            style={{ padding: '6px 14px', background: '#ef4444', color: '#fff', border: 0, borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
-          >
-            Retry form
-          </button>
-        </div>
+        <Box sx={{ p: 3 }}>
+          <Alert severity="error" variant="outlined">
+            <AlertTitle>Failed to render sheet contents</AlertTitle>
+            <Typography variant="body2">
+              {this.state.error?.message || 'Unknown error occurred while rendering the form.'}
+            </Typography>
+            <Button
+              variant="danger"
+              size="small"
+              sx={{ mt: 1.5 }}
+              onClick={() => this.setState({ hasError: false, error: null })}
+            >
+              Retry form
+            </Button>
+          </Alert>
+        </Box>
       );
     }
     return this.props.children;
@@ -264,25 +535,35 @@ export class AdminErrorBoundary extends Component {
     return { hasError: true, error };
   }
   componentDidCatch(error, errorInfo) {
-    console.error("Admin error boundary caught error:", error, errorInfo);
+    console.error('Admin error boundary caught error:', error, errorInfo);
   }
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: "32px", maxWidth: "600px", margin: "40px auto", background: "rgba(239, 68, 68, 0.08)", borderRadius: "16px", border: "1px solid rgba(239, 68, 68, 0.25)", color: "#fecaca" }}>
-          <h2 style={{ margin: "0 0 10px", color: "#fca5a5", fontSize: "18px" }}>Module Encountered an Issue</h2>
-          <p style={{ margin: "0 0 16px", fontSize: "14px", lineHeight: "1.5" }}>{this.state.error?.message || "An unexpected error occurred while loading this admin section."}</p>
-          <button
-            type="button"
-            onClick={() => {
-              clearAsyncCache();
-              this.setState({ hasError: false, error: null });
-            }}
-            style={{ padding: "8px 18px", background: "#ef4444", color: "#fff", border: 0, borderRadius: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600 }}
+        <Box sx={{ p: 4, maxWidth: 620, mx: 'auto' }}>
+          <Alert
+            severity="error"
+            variant="outlined"
+            action={
+              <Button
+                variant="danger"
+                size="small"
+                onClick={() => {
+                  clearAsyncCache();
+                  this.setState({ hasError: false, error: null });
+                }}
+              >
+                Retry module
+              </Button>
+            }
           >
-            Retry Module
-          </button>
-        </div>
+            <AlertTitle>Module encountered an issue</AlertTitle>
+            <Typography variant="body2">
+              {this.state.error?.message ||
+                'An unexpected error occurred while loading this admin section.'}
+            </Typography>
+          </Alert>
+        </Box>
       );
     }
     return this.props.children;
@@ -314,66 +595,108 @@ export class AppErrorBoundary extends Component {
     if (!this.state.hasError) return this.props.children;
     return (
       <section className="section" role="alert">
-        <div className="state-box error">
-          <AlertTriangle size={20} strokeWidth={1.6} />
-          <div>
-            <h3>This page could not be displayed</h3>
-            <p>{this.state.error?.message || 'An unexpected error interrupted the page.'}</p>
-          </div>
-          <div className="banner-actions">
-            <Button variant="ghost" onClick={this.reset}>
-              Try again
-            </Button>
-            <Button to="/">Back to home</Button>
-          </div>
-        </div>
+        <Box sx={{ maxWidth: 620, mx: 'auto' }}>
+          <Alert
+            severity="error"
+            variant="outlined"
+            icon={<AlertTriangle size={20} strokeWidth={1.6} />}
+            action={
+              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+                <Button variant="ghost" size="small" onClick={this.reset}>
+                  Try again
+                </Button>
+                <Button size="small" to="/">
+                  Back to home
+                </Button>
+              </Stack>
+            }
+          >
+            <AlertTitle>This page could not be displayed</AlertTitle>
+            <Typography variant="body2">
+              {this.state.error?.message || 'An unexpected error interrupted the page.'}
+            </Typography>
+          </Alert>
+        </Box>
       </section>
     );
   }
 }
 
+/**
+ * Material dialog shell. Keeps the `.sheet` / `.sheet-body` hooks because the
+ * ticket and ID-card print styles target them.
+ */
 export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 'ADMIN ACTION' }) {
   useEffect(() => {
     if (!open) return undefined;
-    const onKey = (event) => event.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    // Lenis drives the page scroll, so stop it while the dialog owns the screen.
     if (window.__lenis) window.__lenis.stop();
     return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = previous;
       if (window.__lenis) window.__lenis.start();
     };
-  }, [open, onClose]);
+  }, [open]);
 
-  if (!open) return null;
-  // Render into <body> so no transformed/overflow-hidden ancestor (page
-  // wrappers, the site footer stacking context) can clip the sheet.
-  return createPortal(
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+  return (
+    <Dialog
+      open={Boolean(open)}
+      onClose={onClose}
+      fullWidth
+      maxWidth={false}
+      aria-label={title}
+      slotProps={{
+        backdrop: {
+          sx: { backgroundColor: 'rgba(3, 6, 12, 0.66)', backdropFilter: 'blur(6px)' },
+        },
+        paper: {
+          className: `sheet ${wide ? 'is-wide' : ''}`.trim(),
+          sx: {
+            width: wide ? 900 : 620,
+            maxWidth: 'calc(100vw - 28px)',
+            maxHeight: 'calc(100vh - 64px)',
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 3,
+            backgroundColor: 'background.paper',
+            backgroundImage: 'none',
+            boxShadow: '0 30px 80px rgba(0, 0, 0, 0.6)',
+            overflow: 'hidden',
+          },
+        },
+      }}
     >
-      <section
-        className={`modal sheet ${wide ? 'wide' : ''}`.trim()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
+      <DialogTitle
+        component="header"
+        sx={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 2,
+          px: 3,
+          pt: 2.5,
+          pb: 1.75,
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
       >
-        <header className="sheet-head">
-          <div>
-            <Eyebrow>{eyebrow}</Eyebrow>
-            <h2>{title}</h2>
-          </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            <X size={18} strokeWidth={1.6} />
-          </button>
-        </header>
-        <div className="sheet-body" data-lenis-prevent><SheetErrorBoundary>{children}</SheetErrorBoundary></div>
-      </section>
-    </div>,
-    document.body,
+        <Box>
+          <Eyebrow>{eyebrow}</Eyebrow>
+          <Typography variant="h3" component="h2" sx={{ mt: 0.5 }}>
+            {title}
+          </Typography>
+        </Box>
+        <IconButton onClick={onClose} aria-label="Close" size="small">
+          <X size={17} strokeWidth={1.7} />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent
+        className="sheet-body"
+        data-lenis-prevent
+        sx={{ px: 3, py: 2.5 }}
+        dividers={false}
+      >
+        <SheetErrorBoundary>{children}</SheetErrorBoundary>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -513,5 +836,15 @@ export function useDebounced(value, delay = 320) {
 }
 
 export function FieldGrid({ children }) {
-  return <div className="field-grid">{children}</div>;
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+        gap: 2,
+      }}
+    >
+      {children}
+    </Box>
+  );
 }

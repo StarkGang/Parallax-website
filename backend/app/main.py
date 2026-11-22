@@ -371,12 +371,20 @@ def create_app() -> FastAPI:
 
     @app.get("/health/ready", tags=["health"])
     async def ready() -> JSONResponse:
-        try:
-            async with session_scope() as db:
-                await db.execute(text("SELECT 1"))
-        except Exception:
-            return JSONResponse({"status": "unavailable"}, status_code=503)
-        return JSONResponse({"status": "ok"})
+        # One retry absorbs the stale pooled connection a serverless instance
+        # often inherits; a real outage still reports unavailable.
+        for attempt in range(2):
+            try:
+                async with session_scope() as db:
+                    await db.execute(text("SELECT 1"))
+                return JSONResponse({"status": "ok"})
+            except Exception as exc:  # noqa: BLE001 - readiness must never raise
+                logger.warning(
+                    "readiness_check_failed",
+                    attempt=attempt + 1,
+                    error=type(exc).__name__,
+                )
+        return JSONResponse({"status": "unavailable"}, status_code=503)
 
     # Mounted last so API, health, docs and auth routes always win.
     if _spa_index() is not None:

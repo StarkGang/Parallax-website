@@ -17,8 +17,9 @@ function computeLayout() {
   }
   const viewport = { w: window.innerWidth, h: window.innerHeight };
   const width = viewport.w;
+  // Deliberately modest: the guide should feel like a companion, not a banner.
   const size =
-    width < 760 ? { w: 164, h: 196 } : width < 1100 ? { w: 200, h: 238 } : { w: 220, h: 260 };
+    width < 760 ? { w: 128, h: 154 } : width < 1100 ? { w: 152, h: 182 } : { w: 168, h: 200 };
   return { size, viewport };
 }
 

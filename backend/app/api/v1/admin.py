@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthContext, require_permission, require_any_permission
+from app.api.deps import AuthContext, require_permission, require_any_permission, require_min_role
 from app.integrations.storage import get_storage
 from app.core.cache import cache_delete_pattern
 from app.core.errors import AppError
@@ -44,6 +44,7 @@ from app.schemas.admin import (
     AdminForceCancelPayload,
     AdminManualAttendancePayload,
     AdminProcessRefundPayload,
+    DbPlaygroundSeedPayload,
     AnnouncementUpsert,
     CategoryUpsert,
     CheckinRequest,
@@ -1655,6 +1656,189 @@ async def recent_checkins(
             for a, u in rows
         ]
     }
+
+
+@router.post("/db-playground/seed")
+async def db_playground_seed(
+    edition_id: uuid.UUID,
+    payload: DbPlaygroundSeedPayload,
+    request: Request,
+    ctx: AuthContext = Depends(require_min_role("super_admin", "edition_admin")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """DB Playground: Emergency verified override and manual seed for stuck attendee payments/registrations.
+
+    Restricted strictly to super_admin and edition_admin. All actions are logged to
+    the immutable audit table and immediately broadcast to the organizer Telegram channel.
+    """
+    from app.services.telegram import send_telegram_alert
+    from app.services.passes import activate_pass_for_registration
+    from app.services.tickets import issue_for_registration, issue_for_pass
+    from app.services.registrations import _number
+
+    # 1. Resolve user by ID or email
+    user_query = payload.user_email_or_id.strip()
+    target_user: User | None = None
+    try:
+        potential_uuid = uuid.UUID(user_query)
+        target_user = await db.get(User, potential_uuid)
+    except ValueError:
+        pass
+
+    if target_user is None:
+        target_user = (
+            await db.execute(select(User).where(User.email.ilike(user_query)))
+        ).scalars().first()
+
+    if target_user is None:
+        raise NotFound(f"User not found matching '{user_query}'")
+
+    edition = await db.get(ConventionEdition, edition_id)
+    if edition is None:
+        raise NotFound("Convention edition not found.")
+
+    policy = (
+        await db.execute(
+            select(EditionPolicy).where(EditionPolicy.edition_id == edition_id)
+        )
+    ).scalars().first()
+    if policy is None:
+        raise NotFound("Edition policy not configured.")
+
+    results: dict[str, object] = {
+        "userId": str(target_user.id),
+        "userEmail": target_user.email,
+        "userName": target_user.full_name,
+        "actions": [],
+    }
+
+    audit_details: dict[str, object] = {
+        "reason": payload.reason,
+        "operator": ctx.user.email,
+        "targetUser": target_user.email,
+        "target": payload.target,
+        "paymentReference": payload.payment_reference,
+    }
+
+    # 2. Update CollegeRegistration if exists and requested
+    college_reg = (
+        await db.execute(
+            select(CollegeRegistration)
+            .where(
+                CollegeRegistration.user_id == target_user.id,
+                CollegeRegistration.edition_id == edition_id,
+            )
+            .order_by(CollegeRegistration.created_at.desc())
+        )
+    ).scalars().first()
+
+    if college_reg:
+        if payload.mark_college_reg_approved:
+            college_reg.payment_status = "paid"
+            college_reg.verification_status = "approved"
+            college_reg.paid_at = college_reg.paid_at or datetime.now(UTC)
+            college_reg.decided_at = datetime.now(UTC)
+            college_reg.decided_by = ctx.user.id
+            if payload.payment_reference and not college_reg.transaction_id:
+                college_reg.transaction_id = payload.payment_reference
+            results["collegeRegistration"] = {
+                "id": str(college_reg.id),
+                "paymentStatus": college_reg.payment_status,
+                "verificationStatus": college_reg.verification_status,
+            }
+            results["actions"].append("Updated CollegeRegistration to paid/approved")
+
+    # 3. Seed convention pass if requested
+    if payload.target in ("pass", "both"):
+        pass_obj = await activate_pass_for_registration(
+            db,
+            user_id=target_user.id,
+            edition_id=edition_id,
+            policy=policy,
+            price_paise=payload.price_paise,
+        )
+        pass_ticket = await issue_for_pass(db, pass_obj)
+        results["pass"] = {
+            "id": str(pass_obj.id),
+            "status": pass_obj.status,
+            "ticketNumber": pass_ticket.ticket_number if pass_ticket else None,
+        }
+        results["actions"].append("Seeded & Activated Convention Pass + Entry Ticket")
+
+    # 4. Seed event registrations if requested
+    if payload.target in ("event", "both") and payload.event_ids:
+        seeded_events = []
+        for eid in payload.event_ids:
+            event = await db.get(Event, eid)
+            if not event or event.edition_id != edition_id:
+                continue
+
+            existing_reg = (
+                await db.execute(
+                    select(Registration).where(
+                        Registration.user_id == target_user.id,
+                        Registration.event_id == eid,
+                    )
+                )
+            ).scalars().first()
+
+            if existing_reg is None:
+                new_reg = Registration(
+                    edition_id=edition_id,
+                    event_id=eid,
+                    user_id=target_user.id,
+                    fee_paise=0,
+                    status="confirmed",
+                    registration_number=_number("REG"),
+                )
+                db.add(new_reg)
+                await db.flush()
+                await issue_for_registration(db, new_reg)
+                seeded_events.append({"eventId": str(eid), "title": event.title, "action": "created"})
+            else:
+                existing_reg.status = "confirmed"
+                await issue_for_registration(db, existing_reg)
+                seeded_events.append({"eventId": str(eid), "title": event.title, "action": "confirmed"})
+
+        results["events"] = seeded_events
+        results["actions"].append(f"Seeded {len(seeded_events)} Event Registration(s)")
+
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=ctx.role_for(edition_id),
+        action="db_playground_seed",
+        resource_type="attendee_recovery",
+        resource_id=str(target_user.id),
+        before=None,
+        after=audit_details,
+    )
+
+    await db.commit()
+
+    # 5. Broadcast to Telegram immediately with error handling
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            send_telegram_alert(
+                title="🛠️ DB Playground Manual Recovery",
+                fields={
+                    "Operator": f"{ctx.user.email} ({ctx.role_for(edition_id)})",
+                    "Target Attendee": f"{target_user.full_name} ({target_user.email})",
+                    "Actions": ", ".join(results["actions"]),
+                    "Reason": payload.reason,
+                    "Payment Ref": payload.payment_reference or "N/A",
+                },
+                severity="warning",
+                footer="Audit logged in DB Playground",
+            ),
+            name="parallax-db-playground-alert",
+        )
+    except Exception as exc:
+        logger.error("db_playground_telegram_alert_failed", error=str(exc), exc_info=True)
+
+    return {"data": results}
 
 
 __all__ = ["router"]

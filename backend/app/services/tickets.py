@@ -88,7 +88,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFound
 from app.core.security import constant_compare, hash_token
-from app.models.commerce import ConventionPass, Registration, Ticket
+from app.models.commerce import (
+    ConventionPass,
+    PaymentOrder,
+    PaymentTransaction,
+    Registration,
+    Ticket,
+)
 from app.models.edition import Event
 
 TOKEN_PREFIX = "PX"
@@ -414,6 +420,7 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
     starts_at = None
     ends_at = None
     venue_room = None
+    payment: dict[str, Any] = {}
     if ticket.registration_id:
         reg = await db.get(Registration, ticket.registration_id)
         if reg:
@@ -424,6 +431,8 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
                 starts_at = event.starts_at.isoformat() if event.starts_at else None
                 ends_at = event.ends_at.isoformat() if event.ends_at else None
                 venue_room = event.venue_room
+            # Payment evidence for a downloadable per-event receipt.
+            payment = await _payment_summary(db, reg)
 
     return {
         "id": str(ticket.id),
@@ -437,6 +446,42 @@ async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
         "endsAt": ends_at,
         "venueRoom": venue_room,
         "attendedDays": [],
+        **payment,
+    }
+
+
+async def _payment_summary(db: AsyncSession, reg: Registration) -> dict[str, Any]:
+    """Amount, order and gateway reference for a registration's receipt."""
+    order = None
+    if reg.order_id:
+        order = await db.get(PaymentOrder, reg.order_id)
+    txn = None
+    if order is not None:
+        txn = (
+            await db.execute(
+                select(PaymentTransaction)
+                .where(PaymentTransaction.order_id == order.id)
+                .order_by(PaymentTransaction.captured_at.desc())
+            )
+        ).scalars().first()
+    paid_at = None
+    if order is not None and order.paid_at:
+        paid_at = order.paid_at
+    elif txn is not None:
+        paid_at = txn.captured_at
+    # The registration's own fee is authoritative for the per-event receipt line item;
+    # fallback to order amount only if reg fee is unset.
+    amount = reg.fee_paise if reg.fee_paise is not None else (order.amount_paise if order is not None else 0)
+    return {
+        "amountPaise": amount or 0,
+        "itemAmountPaise": reg.fee_paise if reg.fee_paise is not None else 0,
+        "orderAmountPaise": order.amount_paise if order is not None else (reg.fee_paise or 0),
+        "currency": order.currency if order is not None else "INR",
+        "orderId": str(order.id) if order is not None else None,
+        "gatewayOrderId": order.gateway_order_id if order is not None else None,
+        "paymentId": txn.gateway_payment_id if txn is not None else None,
+        "paymentStatus": order.status if order is not None else None,
+        "paidAt": paid_at.isoformat() if paid_at else None,
     }
 
 

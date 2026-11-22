@@ -7,7 +7,7 @@ export const OFFICIAL_PARALLAX_PATH =
 
 /* Curated harmonious tone-on-tone triads */
 export const PALETTES = [
-  { name: 'Parallax Emerald', dark: '#0a3d42', mid: '#2bb673', light: '#b8f23d' },
+  { name: 'Parallax Indigo', dark: '#0e1533', mid: '#4f46e5', light: '#7dd3fc' },
   { name: 'Cosmic Indigo', dark: '#14124a', mid: '#5a4bff', light: '#ff9a62' },
   { name: 'Deep Royal', dark: '#0b1d3a', mid: '#2f6bff', light: '#ffd23f' },
   { name: 'Velvet Purple', dark: '#2a0b3a', mid: '#a23df2', light: '#ff7ab8' },
@@ -25,10 +25,12 @@ export const ROLE_CONFIGS = {
     paletteIdx: 0,
     roleTitle: 'College Student',
     tierPill: 'Convention Delegate',
-    paletteName: 'Parallax Emerald',
-    dark: '#0a3d42',
-    mid: '#2bb673',
-    light: '#b8f23d',
+    paletteName: 'Parallax Indigo',
+    // Deep navy + indigo + sky: the attendee tier now sits in the same family
+    // as the portal chrome instead of a separate green island.
+    dark: '#0e1533',
+    mid: '#4f46e5',
+    light: '#7dd3fc',
     label: 'Convention Delegate',
   },
   volunteer: {
@@ -109,6 +111,8 @@ export const ADMIN_PRESETS = [
     key: 'midhun',
     name: 'MIDHUN K M',
     role: 'College Student',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Computer Science & Engineering · Yr 2',
     sub: 'Computer Science · NSS College of Engineering',
     tier: 'Convention Delegate',
     id: 'PX-27-EA130B',
@@ -121,6 +125,8 @@ export const ADMIN_PRESETS = [
     key: 'navnit',
     name: 'NAVNIT JAYAPRAKASH',
     role: 'Publicity Coordinator',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Mechanical Engineering · ISTE SC NSSCE',
     sub: 'Mechanical Engineering · ISTE SC NSSCE',
     tier: 'Core Organizer',
     id: 'PX-27-OG7712',
@@ -133,6 +139,8 @@ export const ADMIN_PRESETS = [
     key: 'sreenath',
     name: 'SREENATH K',
     role: 'Events Coordinator',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Electrical Engineering · ISTE SC NSSCE',
     sub: 'Electrical Engineering · ISTE SC NSSCE',
     tier: 'Core Team',
     id: 'PX-27-CR4920',
@@ -145,6 +153,8 @@ export const ADMIN_PRESETS = [
     key: 'shadiya',
     name: 'SHADIYA SHERIN M',
     role: 'Executive Committee',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Civil Engineering · ISTE SC NSSCE',
     sub: 'Civil Engineering · ISTE SC NSSCE',
     tier: 'Organizer',
     id: 'PX-27-OG8831',
@@ -157,6 +167,8 @@ export const ADMIN_PRESETS = [
     key: 'speaker',
     name: 'DR. P. R. SURESH',
     role: 'Keynote Speaker',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Principal & Patron · NSSCE Palakkad',
     sub: 'Principal & Patron · NSSCE Palakkad',
     tier: 'Distinguished Guest',
     id: 'PX-27-SP001A',
@@ -169,6 +181,8 @@ export const ADMIN_PRESETS = [
     key: 'volunteer',
     name: 'OPERATIONS CREW',
     role: 'Operations Crew',
+    college: 'NSS College of Engineering, Palakkad',
+    branch: 'Stage & Logistics · ISTE SC NSSCE',
     sub: 'Stage & Logistics · ISTE SC NSSCE',
     tier: 'Operations Staff',
     id: 'PX-27-ST9901',
@@ -511,15 +525,23 @@ export default function ParallaxIdCard({
 
   // Data fields resolution
   const fullName = customData?.name || registration?.fullName || user?.fullName || 'MIDHUN K M';
-  const collegeName = customData?.sub ? customData.sub : (registration?.collegeName || 'NSS College of Engineering, Palakkad');
+  const collegeName =
+    customData?.college ||
+    customData?.collegeName ||
+    customData?.institution ||
+    (customData?.sub?.includes('·')
+      ? customData.sub.split('·')[1].trim()
+      : (customData?.sub || registration?.collegeName || user?.collegeName || 'NSS College of Engineering, Palakkad'));
   const branchCourse = customData?.branch
     ? customData.branch
-    : [
-        registration?.branch || registration?.course || 'Computer Science & Engineering',
-        registration?.yearOfStudy ? `Yr ${registration.yearOfStudy}` : null,
-      ]
-        .filter(Boolean)
-        .join(' · ');
+    : (customData?.sub?.includes('·')
+        ? customData.sub.split('·')[0].trim()
+        : [
+            registration?.branch || registration?.course || 'Computer Science & Engineering',
+            registration?.yearOfStudy ? `Yr ${registration.yearOfStudy}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · '));
 
   const roleTitle = customData?.role || roleConfig.roleTitle || 'College Student';
   const tierPill = customData?.tier || (category?.name ? category.name : roleConfig.tierPill);
@@ -550,6 +572,7 @@ export default function ParallaxIdCard({
       <div className="stage" ref={stageRef}>
         {/* FRONT */}
         <section className="card front" style={cardStyle} aria-label="Pass front">
+          <div className="id-edge-credit" aria-hidden="true">DEVELOPED BY MIDHUN K M</div>
           <div className="pl" style={{ background: spFront.bg }} aria-hidden="true">
             {frontLayers.map((svgContent, idx) => (
               <svg
@@ -582,8 +605,9 @@ export default function ParallaxIdCard({
           <div className="panel">
             <div className="name" title={fullName}>{fullName}</div>
             <div className="role">{roleTitle}</div>
-            <div className="sub" title={customData?.sub ? customData.sub : `${branchCourse} · ${collegeName}`}>
-              {customData?.sub ? customData.sub : `${branchCourse} · ${collegeName}`}
+            <div className="sub-institution" title={`${branchCourse} · ${collegeName}`}>
+              <div className="sub-branch">{branchCourse}</div>
+              <div className="sub-college">{collegeName}</div>
             </div>
             <div className="pills">
               <span className="pill">{tierPill}</span>
@@ -615,6 +639,41 @@ export default function ParallaxIdCard({
                 )}
               </div>
             </div>
+            <div className="perks">
+              <div>
+                <b>2-day entry</b>
+                <span>Both convention days</span>
+              </div>
+              <div>
+                <b>3 event slots</b>
+                <span>Included selections</span>
+              </div>
+              <div>
+                <b>Lunch included</b>
+                <span>Both days, dining hall</span>
+              </div>
+            </div>
+            <div className="sign" aria-label="Digitally signed credential">
+              <svg className="sign-seal" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 1.8l2.5 1.8 3.1-.2.9 3 2.5 1.9-1.2 2.9 1.2 2.9-2.5 1.9-.9 3-3.1-.2L12 22.2l-2.5-1.9-3.1.2-.9-3L3 15.6l1.2-2.9L3 9.9l2.5-1.9.9-3 3.1.2z"
+                  fill="currentColor"
+                  opacity="0.16"
+                />
+                <path
+                  d="M8.1 12.2l2.5 2.5 5.3-5.3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <div>
+                <b>Digitally signed</b>
+                <span>Scan the QR to verify this credential</span>
+              </div>
+            </div>
             <div className="foot">
               <div className="wm">
                 <svg className="px-vector" viewBox="0 0 3161 969" aria-label="Parallax">
@@ -636,6 +695,7 @@ export default function ParallaxIdCard({
 
         {/* BACK */}
         <section className="card back" style={cardStyle} aria-label="Pass back">
+          <div className="id-edge-credit" aria-hidden="true">DEVELOPED BY MIDHUN K M</div>
           <div className="pl" style={{ background: spBack.bg }} aria-hidden="true">
             {backLayers.map((svgContent, idx) => (
               <svg
@@ -659,12 +719,16 @@ export default function ParallaxIdCard({
             </div>
             <div className="rows">
               <div>
-                <small>Helpdesk & Support</small>
-                <b>+91 94460 00000</b>
+                <small>Institution / College</small>
+                <b title={collegeName}>{collegeName}</b>
               </div>
               <div>
-                <small>Official Fest Portal</small>
-                <b>parallax-iste.vercel.app</b>
+                <small>Department / Stream</small>
+                <b title={branchCourse}>{branchCourse}</b>
+              </div>
+              <div>
+                <small>Helpdesk & Support</small>
+                <b>+91 94460 00000</b>
               </div>
               <div>
                 <small>Organizing Chapter</small>
@@ -676,6 +740,16 @@ export default function ParallaxIdCard({
                 {barcodeRects}
               </svg>
               <small>{credentialId}</small>
+            </div>
+            <div className="terms">
+              <div>
+                <small>Validity</small>
+                <b>8-9 Jan 2027 · Both convention days</b>
+              </div>
+              <div>
+                <small>Access</small>
+                <b>Turnstiles · Auditorium · Dining hall</b>
+              </div>
             </div>
             <div className="note">
               If found, please return to Registration Desk, NSS College of Engineering, Palakkad - 678008
