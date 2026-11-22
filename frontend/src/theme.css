@@ -645,22 +645,198 @@ h3 {
   border-right: 0;
 }
 
-/* LOADING / STATES */
-.loading {
-  display: grid;
-  gap: 12px;
-  padding: 26px;
+/* LOADING / STATES ------------------------------------------------------- */
+
+/* The P mark turns in 3D inside a pair of scanning rings while a light sweeps
+   under the label. Same component everywhere: full panel, or compact row. */
+.px-loader {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 34px 26px 30px;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
-  background: rgba(14, 17, 24, 0.55);
+  background:
+    radial-gradient(120% 130% at 50% 0%, rgba(56, 189, 248, 0.09), transparent 62%),
+    rgba(10, 13, 20, 0.72);
   color: var(--muted);
   font-size: 12px;
+  overflow: hidden;
 }
 
-.loading > span:first-of-type {
-  display: inline-flex;
+.px-loader::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.028) 0 1px,
+    transparent 1px 4px
+  );
+  mask-image: radial-gradient(80% 80% at 50% 45%, #000 20%, transparent 100%);
+  -webkit-mask-image: radial-gradient(80% 80% at 50% 45%, #000 20%, transparent 100%);
+}
+
+.px-loader-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 78px;
+  height: 78px;
+  perspective: 460px;
+}
+
+.px-loader-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(56, 189, 248, 0) 0deg,
+    rgba(56, 189, 248, 0) 196deg,
+    rgba(125, 211, 252, 0.85) 300deg,
+    rgba(167, 139, 250, 0.95) 344deg,
+    rgba(167, 139, 250, 0) 360deg
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  animation: px-loader-spin 1.45s linear infinite;
+}
+
+.px-loader-ring.is-outer {
+  inset: -9px;
+  opacity: 0.42;
+  animation: px-loader-spin 5.5s linear infinite reverse;
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+}
+
+.px-loader-p {
+  width: 40px;
+  height: 40px;
+  transform-style: preserve-3d;
+  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.5));
+  animation: px-loader-flip 3.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.px-loader-orbit {
+  position: absolute;
+  inset: -2px;
+  animation: px-loader-spin 3.2s linear infinite;
+}
+
+.px-loader-orbit::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7dd3fc;
+  box-shadow: 0 0 10px #38bdf8, 0 0 22px rgba(56, 189, 248, 0.6);
+  transform: translateX(-50%);
+}
+
+.px-loader-copy {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 11px;
+  min-width: 200px;
+}
+
+.px-loader-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #d7e9f7;
+}
+
+.px-loader-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 4px;
+}
+
+.px-loader-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--cyan);
+  opacity: 0.2;
+  animation: px-loader-dot 1.2s ease-in-out infinite;
+}
+
+.px-loader-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.px-loader-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.px-loader-track {
+  position: relative;
+  width: min(240px, 54vw);
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+}
+
+.px-loader-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 44%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #38bdf8 45%, #a78bfa 70%, transparent);
+  animation: px-loader-sweep 1.5s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+}
+
+.px-loader.is-compact {
+  flex-direction: row;
+  justify-content: center;
+  gap: 14px;
+  padding: 18px 22px;
+}
+
+.px-loader.is-compact .px-loader-mark {
+  width: 46px;
+  height: 46px;
+  flex: none;
+}
+
+.px-loader.is-compact .px-loader-ring.is-outer {
+  inset: -5px;
+}
+
+.px-loader.is-compact .px-loader-p {
+  width: 24px;
+  height: 24px;
+}
+
+.px-loader.is-compact .px-loader-copy {
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.px-loader.is-compact .px-loader-track {
+  width: 132px;
+}
+
+.px-loader .skeleton-stack {
+  width: 100%;
 }
 
 .spin {
@@ -671,6 +847,67 @@ h3 {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes px-loader-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes px-loader-flip {
+  0%,
+  10% {
+    transform: rotateY(0deg) scale(1);
+  }
+  46% {
+    transform: rotateY(180deg) scale(1.04);
+  }
+  54% {
+    transform: rotateY(180deg) scale(1.04);
+  }
+  90%,
+  100% {
+    transform: rotateY(360deg) scale(1);
+  }
+}
+
+@keyframes px-loader-dot {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes px-loader-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  55%,
+  100% {
+    transform: translateX(230%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .px-loader-p {
+    animation: none;
+  }
+
+  .px-loader-ring,
+  .px-loader-orbit {
+    animation-duration: 9s;
+  }
+
+  .px-loader-dots i {
+    animation: none;
+    opacity: 0.7;
   }
 }
 

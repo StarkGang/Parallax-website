@@ -57,6 +57,22 @@ async def record(
     )
     db.add(entry)
 
+    # Privileged actions also reach the desk's Telegram chat. The notification
+    # is queued on the session and only leaves after this transaction commits.
+    try:
+        from app.services.notifications import queue_admin_action
+
+        queue_admin_action(
+            db,
+            action=action,
+            actor_role=actor_role,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            after=after,
+        )
+    except Exception:  # pragma: no cover - alerting must never block the write
+        pass
+
 
 __all__ = ["SENSITIVE_KEYS", "redact", "record"]
 

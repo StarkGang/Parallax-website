@@ -51,7 +51,7 @@ Behavior entries (example pattern) live in `config/behaviors.js`. Keep messages 
 
 - Canvas should remain decorative/non-interactive for assistive tech where appropriate; bubble text should use polite announcements if implemented.
 - Hide preference should be user-controlled and persisted.
-- Reduced motion should suppress roaming/animation-heavy behaviors.
+- The guide is stationary by default: it speaks once on arrival, answers hovers and taps from where it stands, and only walks during a page tour (which starts after the reader scrolls and runs once per session). Reduced motion suppresses walking and animation-heavy behaviours.
 - Rendering should pause or throttle when hidden, offscreen, or when the tab is inactive (verify implementation).
 
 ## Maintenance

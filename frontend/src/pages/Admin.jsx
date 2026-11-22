@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import {
   ArrowUpRight,
   BadgeCheck,
@@ -115,6 +115,19 @@ export function AdminLayout() {
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  /** Nav items that share a path (Registrations / Cancelled & Refunds) differ
+   *  only by their status query, so the highlight has to compare both. */
+  const navActive = (to, end) => {
+    const [path, search] = to.split('?');
+    const pathActive = end
+      ? location.pathname === path
+      : location.pathname === path || location.pathname.startsWith(`${path}/`);
+    if (!pathActive) return false;
+    const wanted = new URLSearchParams(search || '').get('status');
+    const current = new URLSearchParams(location.search).get('status');
+    return wanted === current;
+  };
 
   const handleForceRefresh = async () => {
     setSyncing(true);
@@ -243,15 +256,14 @@ export function AdminLayout() {
       {/* Horizontal Swipeable Mobile Tabs */}
       <nav className="admin-mobile-tabs" aria-label="Staff quick modules">
         {NAV.map(([label, to, Icon, end]) => (
-          <NavLink
+          <Link
             key={to}
             to={to}
-            end={end}
-            className={({ isActive }) => `admin-mobile-tab-item ${isActive ? 'is-active' : ''}`}
+            className={`admin-mobile-tab-item ${navActive(to, end) ? 'is-active' : ''}`}
           >
             <Icon size={13} strokeWidth={1.6} />
             <span>{label}</span>
-          </NavLink>
+          </Link>
         ))}
       </nav>
 
@@ -275,16 +287,15 @@ export function AdminLayout() {
           </div>
           <div className="admin-drawer-links">
             {NAV.map(([label, to, Icon, end]) => (
-              <NavLink
+              <Link
                 key={to}
                 to={to}
-                end={end}
                 onClick={() => setMobileNavOpen(false)}
-                className={({ isActive }) => `admin-drawer-item ${isActive ? 'is-active' : ''}`}
+                className={`admin-drawer-item ${navActive(to, end) ? 'is-active' : ''}`}
               >
                 <Icon size={15} strokeWidth={1.6} />
                 <span>{label}</span>
-              </NavLink>
+              </Link>
             ))}
           </div>
           <div className="admin-drawer-footer">
@@ -308,15 +319,14 @@ export function AdminLayout() {
           </div>
           <nav className="admin-desktop-nav" aria-label="Staff navigation">
             {NAV.map(([label, to, Icon, end]) => (
-              <NavLink
+              <Link
                 key={to}
                 to={to}
-                end={end}
-                className={({ isActive }) => `admin-sidebar-link ${isActive ? 'is-active' : ''}`}
+                className={`admin-sidebar-link ${navActive(to, end) ? 'is-active' : ''}`}
               >
                 <Icon size={15} strokeWidth={1.5} />
                 <span>{label}</span>
-              </NavLink>
+              </Link>
             ))}
           </nav>
           <div className="admin-sidebar-footer">
@@ -2341,6 +2351,7 @@ export function AdminUsers() {
   const [target, setTarget] = useState(null);
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState(null);
+  const [mfaBusy, setMfaBusy] = useState(false);
   const rows = users.data?.data || [];
 
   const apply = async () => {
@@ -2357,6 +2368,26 @@ export function AdminUsers() {
       setReason('');
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
+    }
+  };
+
+  // Used when a participant loses their authenticator: support has to be able
+  // to clear it without an engineer touching the database.
+  const resetMfa = async () => {
+    if (!target) return;
+    // Irreversible for the participant: make the desk confirm the person in
+    // front of them before clearing the second factor.
+    if (!window.confirm(`Reset two-factor authentication for ${target.fullName}?`)) return;
+    setMfaBusy(true);
+    setMessage(null);
+    try {
+      await adminApi.resetUserMfa(editionId, target.id);
+      setMessage({ tone: 'success', text: `Two-factor reset for ${target.fullName}.` });
+      setTarget(null);
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setMfaBusy(false);
     }
   };
 
@@ -2418,6 +2449,9 @@ export function AdminUsers() {
           />
         </Field>
         <div className="sheet-actions">
+          <Button variant="ghost" onClick={resetMfa} disabled={mfaBusy}>
+            {mfaBusy ? 'Resetting…' : 'Reset two-factor'}
+          </Button>
           <Button variant="ghost" onClick={() => setTarget(null)}>
             Cancel
           </Button>

@@ -24,6 +24,7 @@ from app.models.commerce import (
     Refund,
     Registration,
 )
+from app.services import notifications as notify_service
 from app.services.passes import (
     activate_mock_pass,
     selections_for,
@@ -197,6 +198,8 @@ async def mark_order_paid(
     await db.flush()
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
+    # Queued on the session: the desk hears about it only once this commits.
+    await notify_service.notify_order_paid(db, order)
 
 
 async def expire_unpaid(db: AsyncSession) -> int:
@@ -412,6 +415,13 @@ async def refund_order(
     await db.flush()
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
+    await notify_service.notify_refund(
+        db,
+        order,
+        amount_paise=amount_paise,
+        reason_code=reason_code,
+        reason_note=reason_note,
+    )
     return refund
 
 

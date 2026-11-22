@@ -19,22 +19,15 @@
 /** On-screen walking speed; MascotModel paces the Walk clip to match it. */
 export const WALK_SPEED_PX_PER_SEC = 150;
 
+/**
+ * Pacing for the guide. It is deliberately unhurried: one line when a page
+ * opens, one tour after the reader scrolls into the section, and nothing
+ * spontaneous in between.
+ */
 export const MASCOT_TIMING = {
-  evaluateDelayMs: 300,
-  ambientDelayMs: 2800,
-  holdMs: 3400,
-  globalCooldownMs: 1800,
+  evaluateDelayMs: 1400,
+  holdMs: 4200,
   repositionCooldownMs: 600,
-  /** How often a resting mascot crosses the layout on its own. */
-  strollMs: 3200,
-  /** Random extra wait, so the pacing never feels metronomic. */
-  strollJitterMs: 1800,
-  /** A stroll is only worth walking if it actually crosses ground. */
-  strollMinDistancePx: 180,
-  /** After this long standing still, the mascot hops instead of idling. */
-  boredMs: 6500,
-  /** How long a pointed-out card stays ringed after an arrival point. */
-  pointHighlightMs: 2600,
 };
 
 export const EXCLUDED_PREFIXES = ['/portal', '/manage', '/login'];
@@ -43,7 +36,7 @@ export const GENERAL_TIPS = [
   'Click any card and I\'ll tag along.',
   'Everything here is pulled live from the organisers, so no stale info.',
   'Lost? Same. Try the menu up top.',
-  'I walk around a lot. Don\'t take it personally.',
+  'Tap me again whenever you want another tip.',
   'Psst. The good stuff is usually a scroll away.',
 ];
 

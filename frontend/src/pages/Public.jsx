@@ -440,102 +440,204 @@ function HeroParallax({ edition, days }) {
 
   const imagesRef = useRef([]);
   const currentFrameRef = useRef(0);
-  const [framesLoaded, setFramesLoaded] = useState(false);
+  // Scroll writes a fractional target frame; the rAF loop eases the drawn
+  // frame towards it. That interpolation is what makes the sequence read as a
+  // continuous camera move instead of a stack of stills.
+  const targetFrameRef = useRef(0);
+  const displayFrameRef = useRef(0);
+  const lastDrawnRef = useRef(-1);
+  const metricsRef = useRef({ w: 0, h: 0, dpr: 1 });
+  const ensureFrameRef = useRef(null);
+  const bitmapsRef = useRef(new Map());
+  const bitmapPendingRef = useRef(new Set());
+  const bitmapCursorRef = useRef(-1);
 
-  const renderFrame = (frameIdx) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const img = imagesRef.current[frameIdx];
-    if (!img || !img.complete || img.naturalWidth === 0) return;
+  const isFrameReady = (img) =>
+    Boolean(img && (img._pxReady || (img.complete && img.naturalWidth > 0)));
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth || window.innerWidth;
-    const h = canvas.clientHeight || window.innerHeight;
+  /**
+   * Decoded frames are ~3.7 MB each, so the sequence is never fully decoded.
+   * A small window around the scrub position is kept as ImageBitmaps (fast to
+   * blit) and older ones are closed as the window moves.
+   */
+  const ensureBitmaps = (center) => {
+    if (typeof createImageBitmap !== 'function') return;
+    const images = imagesRef.current;
+    const bitmaps = bitmapsRef.current;
+    const pending = bitmapPendingRef.current;
+    const middle = Math.round(center);
 
-    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
+    // Slightly forward-biased, but wide enough to cover a backwards flick.
+    for (let offset = -8; offset <= 10; offset += 1) {
+      const index = middle + offset;
+      if (index < 0 || index >= TOTAL_HERO_FRAMES) continue;
+      if (bitmaps.has(index) || pending.has(index)) continue;
+      const img = images[index];
+      if (!isFrameReady(img)) continue;
+
+      pending.add(index);
+      createImageBitmap(img)
+        .then((bitmap) => {
+          pending.delete(index);
+          bitmaps.set(index, bitmap);
+          if (bitmaps.size > 26) {
+            const keep = Math.round(displayFrameRef.current);
+            const furthestFirst = [...bitmaps.keys()].sort(
+              (a, b) => Math.abs(b - keep) - Math.abs(a - keep),
+            );
+            for (const key of furthestFirst) {
+              if (bitmaps.size <= 26) break;
+              bitmaps.get(key)?.close?.();
+              bitmaps.delete(key);
+            }
+          }
+          lastDrawnRef.current = -1;
+          drawFrame(displayFrameRef.current);
+        })
+        .catch(() => pending.delete(index));
     }
-
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    const iw = img.naturalWidth || 1280;
-    const ih = img.naturalHeight || 720;
-    const scale = Math.max(w / iw, h / ih);
-    const ox = (w - iw * scale) / 2;
-    const oy = (h - ih * scale) / 2;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(img, ox, oy, iw * scale, ih * scale);
-    ctx.restore();
   };
 
-  // Preload image sequence progressively: eager first batch for instant 60fps scrub,
-  // then background idle batches to keep initial network waterfall pristine
+  const drawFrame = (frameIdx) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const images = imagesRef.current;
+    const lastIndex = TOTAL_HERO_FRAMES - 1;
+    let index = Math.max(0, Math.min(lastIndex, Math.round(frameIdx)));
+
+    let source = bitmapsRef.current.get(index);
+    if (!source) {
+      if (isFrameReady(images[index])) {
+        source = images[index];
+      } else {
+        // A fast flick can outrun the decoder: hold the nearest ready frame
+        // rather than leaving the stage empty.
+        let found = -1;
+        for (let step = 1; step <= 24 && found < 0; step += 1) {
+          const back = index - step;
+          const forward = index + step;
+          if (bitmapsRef.current.has(back) || isFrameReady(images[back])) found = back;
+          else if (bitmapsRef.current.has(forward) || isFrameReady(images[forward]))
+            found = forward;
+        }
+        if (found < 0) return;
+        index = found;
+        source = bitmapsRef.current.get(index) || images[index];
+      }
+    }
+
+    if (lastDrawnRef.current === index) return;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    const metrics = metricsRef.current;
+    if (!metrics.w || !metrics.h) {
+      metrics.w = canvas.clientWidth || window.innerWidth;
+      metrics.h = canvas.clientHeight || window.innerHeight;
+      metrics.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    }
+
+    const pixelW = Math.max(1, Math.floor(metrics.w * metrics.dpr));
+    const pixelH = Math.max(1, Math.floor(metrics.h * metrics.dpr));
+    if (canvas.width !== pixelW || canvas.height !== pixelH) {
+      canvas.width = pixelW;
+      canvas.height = pixelH;
+    }
+
+    lastDrawnRef.current = index;
+
+    const iw = source.width || source.naturalWidth || 1280;
+    const ih = source.height || source.naturalHeight || 720;
+    // A hair of overscan keeps the frame edge invisible under the pointer tilt.
+    const scale = Math.max(metrics.w / iw, metrics.h / ih) * 1.02;
+    const ox = (metrics.w - iw * scale) / 2;
+    const oy = (metrics.h - ih * scale) / 2;
+
+    ctx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
+    ctx.drawImage(source, ox, oy, iw * scale, ih * scale);
+  };
+
+  // Load the sequence through a bounded parallel queue instead of idle batches.
+  // A scroll must never outrun the network, so frames around the current scroll
+  // position jump the queue, and each image is decoded before it can be drawn
+  // (lazy decoding on the draw path is what caused the visible stalls).
   useEffect(() => {
     let active = true;
     const loadedImages = new Array(TOTAL_HERO_FRAMES);
+    const requested = new Set();
     const baseUrl = import.meta.env.BASE_URL;
-    let loadedCount = 0;
+    const saveData = Boolean(navigator.connection?.saveData);
+    const MAX_PARALLEL = saveData ? 4 : 8;
+    let activeLoads = 0;
+    let cursor = 0;
 
-    const loadFrame = (index) => {
-      if (!active || loadedImages[index]) return;
-      const img = new Image();
-      const num = String(index + 1).padStart(3, '0');
-      img.src = `${baseUrl}anim/sequence/frame_${num}.webp`;
-      img.onload = () => {
-        if (!active) return;
-        loadedCount++;
-        if (index === 0) {
-          renderFrame(0);
-        }
-        if (loadedCount >= Math.min(20, TOTAL_HERO_FRAMES)) {
-          setFramesLoaded(true);
-        }
-      };
-      loadedImages[index] = img;
+    const pump = () => {
+      while (active && activeLoads < MAX_PARALLEL && cursor < TOTAL_HERO_FRAMES) {
+        const index = cursor;
+        cursor += 1;
+        request(index);
+      }
     };
 
-    // Priority 1: First frame immediately
-    loadFrame(0);
+    const release = () => {
+      activeLoads = Math.max(0, activeLoads - 1);
+      pump();
+    };
 
-    // Priority 2: Next 24 frames for instant initial scroll responsiveness
-    for (let i = 1; i < Math.min(24, TOTAL_HERO_FRAMES); i++) {
-      loadFrame(i);
+    const markReady = (img, index) => {
+      if (!active) return;
+      img._pxReady = true;
+      if (index === 0) {
+        lastDrawnRef.current = -1;
+        drawFrame(displayFrameRef.current);
+      }
+    };
+
+    function request(index) {
+      if (
+        !active ||
+        index < 0 ||
+        index >= TOTAL_HERO_FRAMES ||
+        requested.has(index)
+      ) {
+        return;
+      }
+      requested.add(index);
+
+      const img = new Image();
+      img.decoding = 'async';
+      try {
+        img.fetchPriority = activeLoads < MAX_PARALLEL ? 'high' : 'low';
+      } catch {
+        /* older browsers ignore fetchPriority */
+      }
+      img.onload = () => {
+        markReady(img, index);
+        release();
+      };
+      img.onerror = release;
+      img.src = `${baseUrl}anim/sequence/frame_${String(index + 1).padStart(3, '0')}.webp`;
+      loadedImages[index] = img;
+      activeLoads += 1;
     }
 
-    // Priority 3: Remainder in idle batches of 12 to avoid network congestion
-    let nextBatchStart = 24;
-    const loadNextBatch = () => {
-      if (!active || nextBatchStart >= TOTAL_HERO_FRAMES) return;
-      const end = Math.min(nextBatchStart + 12, TOTAL_HERO_FRAMES);
-      for (let i = nextBatchStart; i < end; i++) {
-        loadFrame(i);
-      }
-      nextBatchStart = end;
-      if (nextBatchStart < TOTAL_HERO_FRAMES) {
-        if (typeof window.requestIdleCallback === 'function') {
-          window.requestIdleCallback(loadNextBatch, { timeout: 200 });
-        } else {
-          setTimeout(loadNextBatch, 80);
-        }
+    // Called by the scrub so a fast scroll pulls its own neighbourhood first.
+    ensureFrameRef.current = (center) => {
+      const index = Math.round(center);
+      for (let offset = 0; offset <= 5; offset += 1) {
+        if (activeLoads >= MAX_PARALLEL + 6) break;
+        request(index + offset);
+        request(index - offset);
       }
     };
 
-    const idleTimer = setTimeout(loadNextBatch, 150);
     imagesRef.current = loadedImages;
-
-    const onResize = () => {
-      renderFrame(currentFrameRef.current);
-    };
-    window.addEventListener('resize', onResize);
+    pump();
 
     return () => {
       active = false;
-      clearTimeout(idleTimer);
-      window.removeEventListener('resize', onResize);
+      ensureFrameRef.current = null;
     };
   }, []);
 
@@ -594,7 +696,9 @@ function HeroParallax({ edition, days }) {
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (isReduced) {
-      renderFrame(TOTAL_HERO_FRAMES - 1);
+      targetFrameRef.current = 0;
+      displayFrameRef.current = 0;
+      drawFrame(0);
       return undefined;
     }
 
@@ -603,15 +707,11 @@ function HeroParallax({ edition, days }) {
         trigger: track,
         start: 'top top',
         end: 'bottom bottom',
-        scrub: 0.65,
         onUpdate: (self) => {
           const progress = self.progress;
-          const targetFrame = Math.min(
-            TOTAL_HERO_FRAMES - 1,
-            Math.max(0, Math.floor(progress * (TOTAL_HERO_FRAMES - 1))),
-          );
-          currentFrameRef.current = targetFrame;
-          renderFrame(targetFrame);
+          currentFrameRef.current = progress;
+          targetFrameRef.current = progress * (TOTAL_HERO_FRAMES - 1);
+          ensureFrameRef.current?.(targetFrameRef.current);
 
           if (scrollPromptRef.current) {
             scrollPromptRef.current.style.opacity = progress > 0.05 ? '0' : '1';
@@ -624,11 +724,98 @@ function HeroParallax({ edition, days }) {
     return () => ctx.revert();
   }, []);
 
+  // Ease the drawn frame towards the scroll target every animation frame. The
+  // damping is frame-rate independent, so a 144Hz display and a 60Hz display
+  // scrub at the same visual speed.
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return undefined;
+    }
+
+    let raf = 0;
+    let previous = 0;
+    let running = true;
+
+    const tick = (now) => {
+      if (!running) return;
+      const delta = previous ? Math.min(now - previous, 64) : 16.7;
+      previous = now;
+
+      const target = targetFrameRef.current;
+      const current = displayFrameRef.current;
+      const gap = target - current;
+
+      if (Math.abs(gap) < 0.02) {
+        displayFrameRef.current = target;
+        drawFrame(target);
+      } else {
+        displayFrameRef.current = current + gap * (1 - Math.pow(0.84, delta / 16.67));
+        drawFrame(displayFrameRef.current);
+      }
+
+      const rounded = Math.round(displayFrameRef.current);
+      if (rounded !== bitmapCursorRef.current) {
+        bitmapCursorRef.current = rounded;
+        ensureBitmaps(rounded);
+      }
+
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => {
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      for (const bitmap of bitmapsRef.current.values()) bitmap?.close?.();
+      bitmapsRef.current.clear();
+      bitmapPendingRef.current.clear();
+    },
+    [],
+  );
+
+  // Canvas size is measured on resize only. Reading clientWidth on every draw
+  // forced a layout recalculation in the middle of the scrub loop.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const measure = () => {
+      metricsRef.current = {
+        w: canvas.clientWidth || window.innerWidth,
+        h: canvas.clientHeight || window.innerHeight,
+        dpr: Math.min(window.devicePixelRatio || 1, 2),
+      };
+      lastDrawnRef.current = -1;
+      drawFrame(displayFrameRef.current);
+    };
+
+    measure();
+    const observer =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    observer?.observe(canvas);
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, []);
+
   return (
     <section className="hero-scroll-track" ref={trackRef}>
       <div className="hero-sticky-stage" ref={stageRef}>
         {/* Full-bleed 3D canvas stage */}
-        <canvas className="hero-scroll-canvas" ref={canvasRef} />
+        <canvas className="hero-scroll-canvas" ref={canvasRef} aria-hidden="true" />
 
         {/* Dynamic vignette and specular glare overlay */}
         <div className="hero-atmosphere-vignette" aria-hidden="true" />
