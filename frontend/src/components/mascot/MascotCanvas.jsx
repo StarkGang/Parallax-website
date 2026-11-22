@@ -10,13 +10,14 @@ export default function MascotCanvas({
   lowPower,
   dprCap,
   onFail,
+  onSlow,
   onReady,
 }) {
   const hostRef = useRef(null);
   const stageRef = useRef(null);
   const [ready, setReady] = useState(false);
-  const callbacks = useRef({ onFail, onReady });
-  callbacks.current = { onFail, onReady };
+  const callbacks = useRef({ onFail, onSlow, onReady });
+  callbacks.current = { onFail, onSlow, onReady };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -24,10 +25,11 @@ export default function MascotCanvas({
 
     const stage = createMascotStage({
       host,
-      dprCap: dprCap ?? (lowPower ? 1 : 1.5),
-      antialias: !lowPower,
+      dprCap: dprCap ?? 1,
+      antialias: false,
       reducedMotion,
       onFail: () => callbacks.current.onFail?.(),
+      onSlow: () => callbacks.current.onSlow?.(),
       onReady: () => {
         setReady(true);
         callbacks.current.onReady?.();

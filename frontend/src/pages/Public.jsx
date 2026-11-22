@@ -438,106 +438,207 @@ function HeroParallax({ edition, days }) {
   const canvasRef = useRef(null);
   const scrollPromptRef = useRef(null);
 
-  const imagesRef = useRef([]);
-  const currentFrameRef = useRef(0);
   // Scroll writes a fractional target frame; the rAF loop eases the drawn
   // frame towards it. That interpolation is what makes the sequence read as a
   // continuous camera move instead of a stack of stills.
   const targetFrameRef = useRef(0);
   const displayFrameRef = useRef(0);
   const lastDrawnRef = useRef(-1);
-  const metricsRef = useRef({ w: 0, h: 0, dpr: 1 });
-  const ensureFrameRef = useRef(null);
-  const bitmapsRef = useRef(new Map());
-  const bitmapPendingRef = useRef(new Set());
+  const focusRef = useRef(-1);
   const bitmapCursorRef = useRef(-1);
+  const directionRef = useRef(1);
+  const metricsRef = useRef({ w: 0, h: 0, dpr: 1 });
+  const ctxRef = useRef(null);
 
-  const isFrameReady = (img) =>
-    Boolean(img && (img._pxReady || (img.complete && img.naturalWidth > 0)));
+  // Compressed frames stay as Blobs (about 12 MB for the whole sequence).
+  // Only a small window around the scroll position is decoded into
+  // ImageBitmaps, and decoding always starts from the Blob.
+  const blobsRef = useRef([]);
+  const bitmapsRef = useRef(new Map());
+  const decodeQueueRef = useRef([]);
+  const decodingRef = useRef(new Set());
+  const fetchQueueRef = useRef([]);
+  const requestedRef = useRef(new Set());
+  const activeFetchesRef = useRef(0);
+  const activeDecodesRef = useRef(0);
+  const abortRef = useRef(null);
+  const focusFrameRef = useRef(() => {});
 
-  /**
-   * Decoded frames are ~3.7 MB each, so the sequence is never fully decoded.
-   * A small window around the scrub position is kept as ImageBitmaps (fast to
-   * blit) and older ones are closed as the window moves.
-   */
-  const ensureBitmaps = (center) => {
-    if (typeof createImageBitmap !== 'function') return;
-    const images = imagesRef.current;
+  const lowPower = () =>
+    Boolean(navigator.connection?.saveData) ||
+    (Number(navigator.deviceMemory) || 8) <= 4 ||
+    window.matchMedia('(max-width: 820px)').matches;
+
+  const bitmapWindow = () => (lowPower() ? 10 : 18);
+
+  const frameScore = (index) => {
+    const focus = focusRef.current;
+    const ahead = directionRef.current >= 0 ? index - focus : focus - index;
+    const bias = ahead > 0 && ahead < 14 ? 6 : 0;
+    return Math.abs(index - focus) - bias;
+  };
+
+  const nearestBitmap = (index) => {
     const bitmaps = bitmapsRef.current;
-    const pending = bitmapPendingRef.current;
-    const middle = Math.round(center);
+    const exact = bitmaps.get(index);
+    if (exact) return { bitmap: exact, index };
+    for (let step = 1; step <= 32; step += 1) {
+      const back = index - step;
+      if (back >= 0) {
+        const bitmap = bitmaps.get(back);
+        if (bitmap) return { bitmap, index: back };
+      }
+      const forward = index + step;
+      if (forward < TOTAL_HERO_FRAMES) {
+        const bitmap = bitmaps.get(forward);
+        if (bitmap) return { bitmap, index: forward };
+      }
+    }
+    return null;
+  };
 
-    // Slightly forward-biased, but wide enough to cover a backwards flick.
-    for (let offset = -8; offset <= 10; offset += 1) {
-      const index = middle + offset;
-      if (index < 0 || index >= TOTAL_HERO_FRAMES) continue;
-      if (bitmaps.has(index) || pending.has(index)) continue;
-      const img = images[index];
-      if (!isFrameReady(img)) continue;
+  const trimBitmaps = () => {
+    const bitmaps = bitmapsRef.current;
+    const cap = bitmapWindow();
+    if (bitmaps.size <= cap) return;
+    const focus = focusRef.current;
+    const furthest = [...bitmaps.keys()].sort(
+      (a, b) => Math.abs(b - focus) - Math.abs(a - focus),
+    );
+    for (const key of furthest) {
+      if (bitmaps.size <= cap) break;
+      bitmaps.get(key)?.close?.();
+      bitmaps.delete(key);
+    }
+  };
 
-      pending.add(index);
-      createImageBitmap(img)
+  const pumpDecode = () => {
+    const max = lowPower() ? 1 : 2;
+    if (activeDecodesRef.current >= max) return;
+    const queue = decodeQueueRef.current;
+    const controller = abortRef.current;
+
+    while (queue.length) {
+      const index = queue.shift();
+      if (!controller || controller.signal.aborted) return;
+      if (bitmapsRef.current.has(index) || decodingRef.current.has(index)) continue;
+      const blob = blobsRef.current[index];
+      if (!blob) continue;
+
+      activeDecodesRef.current += 1;
+      decodingRef.current.add(index);
+      createImageBitmap(blob)
         .then((bitmap) => {
-          pending.delete(index);
-          bitmaps.set(index, bitmap);
-          if (bitmaps.size > 26) {
-            const keep = Math.round(displayFrameRef.current);
-            const furthestFirst = [...bitmaps.keys()].sort(
-              (a, b) => Math.abs(b - keep) - Math.abs(a - keep),
-            );
-            for (const key of furthestFirst) {
-              if (bitmaps.size <= 26) break;
-              bitmaps.get(key)?.close?.();
-              bitmaps.delete(key);
-            }
+          if (!controller || controller.signal.aborted) {
+            bitmap.close();
+            return;
           }
+          bitmapsRef.current.set(index, bitmap);
+          trimBitmaps();
           lastDrawnRef.current = -1;
           drawFrame(displayFrameRef.current);
         })
-        .catch(() => pending.delete(index));
+        .catch(() => {})
+        .finally(() => {
+          decodingRef.current.delete(index);
+          activeDecodesRef.current = Math.max(0, activeDecodesRef.current - 1);
+          pumpDecode();
+        });
+
+      if (activeDecodesRef.current >= max) return;
     }
+  };
+
+  const queueDecode = (index) => {
+    if (index < 0 || index >= TOTAL_HERO_FRAMES) return;
+    if (
+      bitmapsRef.current.has(index) ||
+      decodingRef.current.has(index) ||
+      !blobsRef.current[index]
+    ) {
+      return;
+    }
+    const queue = decodeQueueRef.current;
+    if (queue.includes(index)) return;
+    queue.push(index);
+    queue.sort((a, b) => frameScore(a) - frameScore(b));
+    pumpDecode();
+  };
+
+  const isWanted = (index) =>
+    Math.abs(index - focusRef.current) <= (lowPower() ? 6 : 10);
+
+  const frameUrl = (index) =>
+    `${import.meta.env.BASE_URL}anim/sequence/frame_${String(index + 1).padStart(3, '0')}.webp`;
+
+  const pumpFetch = () => {
+    const controller = abortRef.current;
+    if (!controller || controller.signal.aborted) return;
+    const max = lowPower() ? 3 : 6;
+    const queue = fetchQueueRef.current;
+
+    while (activeFetchesRef.current < max && queue.length) {
+      const index = queue.shift();
+      if (index < 0 || index >= TOTAL_HERO_FRAMES) continue;
+      if (blobsRef.current[index] || requestedRef.current.has(index)) continue;
+
+      requestedRef.current.add(index);
+      activeFetchesRef.current += 1;
+      fetch(frameUrl(index), {
+        signal: controller.signal,
+        priority: isWanted(index) ? 'high' : 'low',
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.blob();
+        })
+        .then((blob) => {
+          blobsRef.current[index] = blob;
+          if (isWanted(index)) queueDecode(index);
+        })
+        .catch(() => {
+          requestedRef.current.delete(index);
+        })
+        .finally(() => {
+          activeFetchesRef.current = Math.max(0, activeFetchesRef.current - 1);
+          pumpFetch();
+        });
+    }
+  };
+
+  const prioritize = (index) => {
+    if (index < 0 || index >= TOTAL_HERO_FRAMES) return;
+    if (blobsRef.current[index]) {
+      queueDecode(index);
+      return;
+    }
+    if (requestedRef.current.has(index)) return;
+    const queue = fetchQueueRef.current;
+    if (!queue.includes(index)) queue.unshift(index);
+    pumpFetch();
   };
 
   const drawFrame = (frameIdx) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const images = imagesRef.current;
-    const lastIndex = TOTAL_HERO_FRAMES - 1;
-    let index = Math.max(0, Math.min(lastIndex, Math.round(frameIdx)));
+    const index = Math.max(
+      0,
+      Math.min(TOTAL_HERO_FRAMES - 1, Math.round(frameIdx)),
+    );
+    // Never draw an undecoded <img>: that forces a synchronous decode on the
+    // main thread mid-scroll. Hold the nearest decoded frame instead.
+    const found = nearestBitmap(index);
+    if (!found) return;
+    if (lastDrawnRef.current === found.index) return;
 
-    let source = bitmapsRef.current.get(index);
-    if (!source) {
-      if (isFrameReady(images[index])) {
-        source = images[index];
-      } else {
-        // A fast flick can outrun the decoder: hold the nearest ready frame
-        // rather than leaving the stage empty.
-        let found = -1;
-        for (let step = 1; step <= 24 && found < 0; step += 1) {
-          const back = index - step;
-          const forward = index + step;
-          if (bitmapsRef.current.has(back) || isFrameReady(images[back])) found = back;
-          else if (bitmapsRef.current.has(forward) || isFrameReady(images[forward]))
-            found = forward;
-        }
-        if (found < 0) return;
-        index = found;
-        source = bitmapsRef.current.get(index) || images[index];
-      }
+    let ctx = ctxRef.current;
+    if (!ctx) {
+      ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+      if (!ctx) return;
+      ctxRef.current = ctx;
     }
-
-    if (lastDrawnRef.current === index) return;
-
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
 
     const metrics = metricsRef.current;
-    if (!metrics.w || !metrics.h) {
-      metrics.w = canvas.clientWidth || window.innerWidth;
-      metrics.h = canvas.clientHeight || window.innerHeight;
-      metrics.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    }
-
     const pixelW = Math.max(1, Math.floor(metrics.w * metrics.dpr));
     const pixelH = Math.max(1, Math.floor(metrics.h * metrics.dpr));
     if (canvas.width !== pixelW || canvas.height !== pixelH) {
@@ -545,101 +646,79 @@ function HeroParallax({ edition, days }) {
       canvas.height = pixelH;
     }
 
-    lastDrawnRef.current = index;
-
-    const iw = source.width || source.naturalWidth || 1280;
-    const ih = source.height || source.naturalHeight || 720;
+    lastDrawnRef.current = found.index;
+    const source = found.bitmap;
+    const iw = source.width || 1280;
+    const ih = source.height || 720;
     // A hair of overscan keeps the frame edge invisible under the pointer tilt.
     const scale = Math.max(metrics.w / iw, metrics.h / ih) * 1.02;
     const ox = (metrics.w - iw * scale) / 2;
     const oy = (metrics.h - ih * scale) / 2;
 
     ctx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'low';
     ctx.drawImage(source, ox, oy, iw * scale, ih * scale);
   };
 
-  // Load the sequence through a bounded parallel queue instead of idle batches.
-  // A scroll must never outrun the network, so frames around the current scroll
-  // position jump the queue, and each image is decoded before it can be drawn
-  // (lazy decoding on the draw path is what caused the visible stalls).
+  // Preload compressed frames in coarse passes (every 16th, 8th, 4th, ...),
+  // so the whole scroll range is scrubbable within a second instead of waiting
+  // for 192 in-order downloads. Decoding is scheduled separately and never
+  // exceeds 1-2 concurrent bitmaps.
   useEffect(() => {
-    let active = true;
-    const loadedImages = new Array(TOTAL_HERO_FRAMES);
-    const requested = new Set();
-    const baseUrl = import.meta.env.BASE_URL;
-    const saveData = Boolean(navigator.connection?.saveData);
-    const MAX_PARALLEL = saveData ? 4 : 8;
-    let activeLoads = 0;
-    let cursor = 0;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    const pump = () => {
-      while (active && activeLoads < MAX_PARALLEL && cursor < TOTAL_HERO_FRAMES) {
-        const index = cursor;
-        cursor += 1;
-        request(index);
-      }
+    const seen = new Set();
+    const queue = [];
+    const enqueue = (index) => {
+      if (index < 0 || index >= TOTAL_HERO_FRAMES || seen.has(index)) return;
+      seen.add(index);
+      queue.push(index);
     };
-
-    const release = () => {
-      activeLoads = Math.max(0, activeLoads - 1);
-      pump();
-    };
-
-    const markReady = (img, index) => {
-      if (!active) return;
-      img._pxReady = true;
-      if (index === 0) {
-        lastDrawnRef.current = -1;
-        drawFrame(displayFrameRef.current);
-      }
-    };
-
-    function request(index) {
-      if (
-        !active ||
-        index < 0 ||
-        index >= TOTAL_HERO_FRAMES ||
-        requested.has(index)
-      ) {
-        return;
-      }
-      requested.add(index);
-
-      const img = new Image();
-      img.decoding = 'async';
-      try {
-        img.fetchPriority = activeLoads < MAX_PARALLEL ? 'high' : 'low';
-      } catch {
-        /* older browsers ignore fetchPriority */
-      }
-      img.onload = () => {
-        markReady(img, index);
-        release();
-      };
-      img.onerror = release;
-      img.src = `${baseUrl}anim/sequence/frame_${String(index + 1).padStart(3, '0')}.webp`;
-      loadedImages[index] = img;
-      activeLoads += 1;
+    for (const stride of [16, 8, 4, 2, 1]) {
+      for (let index = 0; index < TOTAL_HERO_FRAMES; index += stride) enqueue(index);
     }
-
-    // Called by the scrub so a fast scroll pulls its own neighbourhood first.
-    ensureFrameRef.current = (center) => {
-      const index = Math.round(center);
-      for (let offset = 0; offset <= 5; offset += 1) {
-        if (activeLoads >= MAX_PARALLEL + 6) break;
-        request(index + offset);
-        request(index - offset);
-      }
-    };
-
-    imagesRef.current = loadedImages;
-    pump();
+    fetchQueueRef.current = queue;
+    pumpFetch();
+    focusFrameRef.current(0);
 
     return () => {
-      active = false;
-      ensureFrameRef.current = null;
+      controller.abort();
+      abortRef.current = null;
+      fetchQueueRef.current = [];
+      decodeQueueRef.current = [];
+      decodingRef.current.clear();
+      requestedRef.current.clear();
+      for (const bitmap of bitmapsRef.current.values()) bitmap?.close?.();
+      bitmapsRef.current.clear();
+      ctxRef.current = null;
+      lastDrawnRef.current = -1;
     };
   }, []);
+
+  // Window the decoded bitmaps around the scrub position and prefetch in the
+  // direction of travel.
+  focusFrameRef.current = (rawFrame) => {
+    const index = Math.max(
+      0,
+      Math.min(TOTAL_HERO_FRAMES - 1, Math.round(rawFrame)),
+    );
+    if (index === focusRef.current) return;
+    directionRef.current = index >= focusRef.current ? 1 : -1;
+    focusRef.current = index;
+
+    const span = lowPower() ? 6 : 10;
+    for (let offset = 0; offset <= span; offset += 1) {
+      const ahead =
+        directionRef.current > 0 ? index + offset : index - offset;
+      const behind =
+        directionRef.current > 0 ? index - offset : index + offset;
+      prioritize(ahead);
+      if (offset <= 4) prioritize(behind);
+    }
+    trimBitmaps();
+  };
 
   // Subtle pointer parallax tilt
   useEffect(() => {
@@ -711,7 +790,7 @@ function HeroParallax({ edition, days }) {
           const progress = self.progress;
           currentFrameRef.current = progress;
           targetFrameRef.current = progress * (TOTAL_HERO_FRAMES - 1);
-          ensureFrameRef.current?.(targetFrameRef.current);
+          focusFrameRef.current(targetFrameRef.current);
 
           if (scrollPromptRef.current) {
             scrollPromptRef.current.style.opacity = progress > 0.05 ? '0' : '1';
@@ -759,7 +838,7 @@ function HeroParallax({ edition, days }) {
       const rounded = Math.round(displayFrameRef.current);
       if (rounded !== bitmapCursorRef.current) {
         bitmapCursorRef.current = rounded;
-        ensureBitmaps(rounded);
+        focusFrameRef.current(rounded);
       }
 
       raf = requestAnimationFrame(tick);
@@ -772,14 +851,6 @@ function HeroParallax({ edition, days }) {
     };
   }, []);
 
-  useEffect(
-    () => () => {
-      for (const bitmap of bitmapsRef.current.values()) bitmap?.close?.();
-      bitmapsRef.current.clear();
-      bitmapPendingRef.current.clear();
-    },
-    [],
-  );
 
   // Canvas size is measured on resize only. Reading clientWidth on every draw
   // forced a layout recalculation in the middle of the scrub loop.
@@ -788,10 +859,19 @@ function HeroParallax({ edition, days }) {
     if (!canvas) return undefined;
 
     const measure = () => {
+      const width = canvas.clientWidth || window.innerWidth;
+      const height = canvas.clientHeight || window.innerHeight;
+      // The source frames are 1280x720. Painting wider than that only costs
+      // fill rate, so cap the backing store at the native frame width (with a
+      // 0.72 floor for very wide screens) and at 1.5x DPR.
       metricsRef.current = {
-        w: canvas.clientWidth || window.innerWidth,
-        h: canvas.clientHeight || window.innerHeight,
-        dpr: Math.min(window.devicePixelRatio || 1, 2),
+        w: width,
+        h: height,
+        dpr: Math.min(
+          window.devicePixelRatio || 1,
+          Math.max(0.72, 1280 / Math.max(1, width)),
+          1.5,
+        ),
       };
       lastDrawnRef.current = -1;
       drawFrame(displayFrameRef.current);

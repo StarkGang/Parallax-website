@@ -125,7 +125,6 @@ export function StatusBadge({ status }) {
 }
 
 export function Loading({ label = 'Loading', rows = 2 }) {
-  const gradientId = `px-loader-grad-${React.useId().replace(/:/g, '')}`;
   return (
     <div
       className={`px-loader${rows === 0 ? ' is-compact' : ''}`}
@@ -135,20 +134,12 @@ export function Loading({ label = 'Loading', rows = 2 }) {
       <div className="px-loader-mark" aria-hidden="true">
         <span className="px-loader-ring" />
         <span className="px-loader-ring is-outer" />
-        <svg viewBox="0 0 64 64" className="px-loader-p" focusable="false">
-          <defs>
-            <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stopColor="#e0f2fe" />
-              <stop offset="0.5" stopColor="#38bdf8" />
-              <stop offset="1" stopColor="#a78bfa" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M19 8h16a15.5 15.5 0 0 1 0 31h-6v17H19Z M29 18.5h6a5 5 0 0 1 0 10h-6Z"
-            fill={`url(#${gradientId})`}
-            fillRule="evenodd"
-          />
-        </svg>
+        <img
+          src={`${import.meta.env.BASE_URL}favicon-512x512.png`}
+          alt=""
+          className="px-loader-p"
+          draggable="false"
+        />
         <span className="px-loader-orbit" />
       </div>
       <div className="px-loader-copy">

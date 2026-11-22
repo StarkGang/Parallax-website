@@ -94,6 +94,7 @@ export function createMascotStage({
   antialias = true,
   reducedMotion = false,
   onFail,
+  onSlow,
   onReady,
 } = {}) {
   if (!host) return null;
@@ -172,6 +173,26 @@ export function createMascotStage({
   let walkCycle = 0;
   let modelScale = 1;
   let walkTimeScale = 1;
+  let scrolling = false;
+  let scrollTimer = 0;
+  let slowStreak = 0;
+  let slowReported = false;
+  let tickSamples = 0;
+  let tickTotal = 0;
+  let lastTick = 0;
+
+  // The rig is skinned and lit per fragment. On low-end GPUs a single frame can
+  // cost tens of milliseconds, so the page falls back to the artwork sprite
+  // instead of letting the guide stall every scroll.
+  const onScroll = () => {
+    scrolling = true;
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      scrolling = false;
+      lastFrame = performance.now();
+    }, 160);
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
 
   function requestRender() {
     if (disposed || contextLost || rafId) return;
@@ -193,11 +214,48 @@ export function createMascotStage({
       loopId = 0;
       if (disposed || paused || contextLost || reduced || !mixer) return;
       loopId = requestAnimationFrame(tick);
+
+      // Never render the guide while the page is moving: the scroll must own
+      // the frame. The clip resumes as soon as scrolling settles.
+      if (scrolling) {
+        lastFrame = now;
+        lastTick = 0;
+        return;
+      }
+
+      // Observed frame pacing is the honest signal here: when the browser
+      // cannot deliver frames, drop the rig for the artwork sprite.
+      if (lastTick && !slowReported) {
+        tickSamples += 1;
+        tickTotal += now - lastTick;
+        if (tickSamples >= 12 && tickTotal / tickSamples > 45) {
+          slowReported = true;
+          stopClipLoop();
+          onSlow?.();
+          return;
+        }
+      }
+      lastTick = now;
+
+      // A calm idle loop is fine at 30 fps and halves the renderer's cost.
+      if (now - lastFrame < 1000 / 30) return;
       const delta = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
       group.rotation.y = THREE.MathUtils.damp(group.rotation.y, targetYaw, 6, delta);
       mixer.update(delta);
+
+      const started = performance.now();
       renderer.render(scene, camera);
+
+      if (!slowReported) {
+        const cost = performance.now() - started;
+        slowStreak = cost > 38 ? slowStreak + 1 : 0;
+        if (slowStreak >= 3) {
+          slowReported = true;
+          stopClipLoop();
+          onSlow?.();
+        }
+      }
     };
     loopId = requestAnimationFrame(tick);
   }
@@ -590,6 +648,8 @@ export function createMascotStage({
     dispose() {
       if (disposed) return;
       disposed = true;
+      window.removeEventListener('scroll', onScroll);
+      clearTimeout(scrollTimer);
       stopClipLoop();
       cancelAnimationFrame(rafId);
       cancelAnimationFrame(yawRaf);

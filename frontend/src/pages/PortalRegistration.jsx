@@ -33,6 +33,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { dateTime, fileSize, money } from '../lib/format.js';
 import { openCheckout } from '../lib/razorpay.js';
+import { printWhenReady } from '../lib/print.js';
 import { ISTE, LOGO, NSSCE, PARALLAX_MARK } from './Public.jsx';
 import { BrandedQr } from '../components/BrandedQr.jsx';
 import { BarcodeSvg } from '../components/BarcodeSvg.jsx';
@@ -530,6 +531,7 @@ export function PortalRegistration() {
   const [changeSheet, setChangeSheet] = useState(false);
   const [changeForm, setChangeForm] = useState({ categoryId: '', note: '' });
   const [showIdCard, setShowIdCard] = useState(false);
+  const [printingCard, setPrintingCard] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [payStage, setPayStage] = useState(null);
   const [slowPayment, setSlowPayment] = useState(false);
@@ -1798,8 +1800,20 @@ export function PortalRegistration() {
               justifyContent: 'center',
             }}
           >
-            <Button onClick={() => window.print()} icon={Printer} variant="primary">
-              Download PDF / Print
+            <Button
+              onClick={async () => {
+                setPrintingCard(true);
+                try {
+                  await printWhenReady();
+                } finally {
+                  setPrintingCard(false);
+                }
+              }}
+              icon={Printer}
+              variant="primary"
+              loading={printingCard}
+            >
+              {printingCard ? 'Preparing card…' : 'Download PDF / Print'}
             </Button>
             <Button onClick={() => setShowIdCard(false)} variant="ghost">
               Close
@@ -1911,7 +1925,7 @@ export function PortalRegistration() {
           </div>
 
           <div className="no-print" style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <Button onClick={() => window.print()} icon={Printer} variant="primary">
+            <Button onClick={() => printWhenReady()} icon={Printer} variant="primary">
               Download PDF
             </Button>
             <Button onClick={() => setShowReceipt(false)} variant="ghost">
