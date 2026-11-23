@@ -82,6 +82,7 @@ export const muiTheme = createTheme({
           letterSpacing: '0.1px',
           lineHeight: 1.4,
           gap: 8,
+          whiteSpace: 'nowrap',
           boxShadow: 'none',
           transition:
             'background-color 150ms cubic-bezier(.2,0,0,1), box-shadow 150ms cubic-bezier(.2,0,0,1), border-color 150ms cubic-bezier(.2,0,0,1)',
@@ -94,7 +95,15 @@ export const muiTheme = createTheme({
           '& .MuiButton-endIcon': { marginLeft: 2, marginRight: -4 },
           '& .MuiButton-startIcon': { marginLeft: -4, marginRight: 2 },
         },
-        sizeSmall: { minHeight: 32, paddingInline: 16, paddingBlock: 6, fontSize: '0.8125rem' },
+        // Compact buttons are rounded rectangles, not pills: dense admin
+        // toolbars and table rows read as a row of labels otherwise.
+        sizeSmall: {
+          minHeight: 32,
+          paddingInline: 14,
+          paddingBlock: 6,
+          borderRadius: 10,
+          fontSize: '0.8125rem',
+        },
         sizeLarge: { minHeight: 48, paddingInline: 28, paddingBlock: 12, fontSize: '0.9375rem' },
         contained: {
           backgroundColor: SURFACE.accent,
@@ -102,18 +111,21 @@ export const muiTheme = createTheme({
           color: '#ffffff',
           '&:hover': { backgroundColor: '#8769ff', boxShadow: '0 1px 2px rgba(0,0,0,0.30)' },
           '&:active': { backgroundColor: '#8c70ff' },
-        },
-        containedError: {
-          backgroundColor: '#f87171',
-          backgroundImage: 'none',
-          color: '#1b0707',
-          '&:hover': { backgroundColor: '#f97c7c' },
-        },
-        containedSecondary: {
-          backgroundColor: SURFACE.cyan,
-          backgroundImage: 'none',
-          color: '#04121c',
-          '&:hover': { backgroundColor: '#48c2f9' },
+          // Colour-specific variants must be nested on the slot: keys like
+          // `containedError` are ignored by MUI and left danger buttons purple.
+          '&.MuiButton-colorError': {
+            backgroundColor: '#f87171',
+            backgroundImage: 'none',
+            color: '#1b0707',
+          },
+          '&.MuiButton-colorError:hover': { backgroundColor: '#f97c7c' },
+          '&.MuiButton-colorError:active': { backgroundColor: '#ef5f5f' },
+          '&.MuiButton-colorSecondary': {
+            backgroundColor: SURFACE.cyan,
+            backgroundImage: 'none',
+            color: '#04121c',
+          },
+          '&.MuiButton-colorSecondary:hover': { backgroundColor: '#48c2f9' },
         },
         outlined: {
           borderColor: alpha('#c7c9d3', 0.42),

@@ -10,11 +10,10 @@ import hmac
 
 import json
 
-import secrets
 
 import uuid
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from urllib.parse import urlencode
 
@@ -42,7 +41,7 @@ from app.core.config import get_settings
 
 from app.core.csrf import csrf_token_for
 
-from app.core.errors import AppError, Forbidden, NotFound, RateLimited, StepUpRequired, Unauthenticated
+from app.core.errors import AppError, Forbidden, NotFound, RateLimited
 
 from app.core.logging import security_event
 
@@ -74,8 +73,6 @@ from app.core.sessions import (
 
     create_session,
 
-    resolve_session,
-
     revoke_all_sessions,
 
     revoke_session_row,
@@ -97,8 +94,6 @@ from app.models.user import (
     MfaRecoveryCode,
 
     ParticipantProfile,
-
-    Session,
 
     User,
 

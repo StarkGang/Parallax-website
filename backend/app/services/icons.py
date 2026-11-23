@@ -192,8 +192,6 @@ def sanitize_svg(data: bytes, *, recolorable: bool) -> tuple[bytes, int, int]:
 
 
 
-    allowed = {"svg": ALLOWED_ATTRIBUTES}
-
     for element in root.iter():
 
         name = _local(element.tag)

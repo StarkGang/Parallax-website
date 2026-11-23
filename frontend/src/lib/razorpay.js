@@ -12,11 +12,7 @@
 import { api } from './api.js';
 
 export function getRazorpayKeyId() {
-  return (
-    import.meta.env.VITE_RAZORPAY_KEY_ID ||
-    window.__RAZORPAY_KEY_ID__ ||
-    'rzp_test_U2P4j5SmTptx2Z'
-  );
+  return typeof window !== 'undefined' ? (window.__RAZORPAY_KEY_ID__ || '') : '';
 }
 
 export function loadRazorpay() {
@@ -115,8 +111,8 @@ export async function openStandardCheckout({
   const keyId = key || getRazorpayKeyId();
 
   return new Promise((resolve, reject) => {
+    let paymentCompleted = false;
     let settled = false;
-    let lastFailure = null;
 
     const finish = (result) => {
       if (settled) return;
@@ -124,30 +120,26 @@ export async function openStandardCheckout({
       resolve(result);
     };
 
-    const logoUrl =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/favicon.png`
-        : undefined;
+    const cleanPrefill = {};
+    const prefillName = (prefill?.name || user?.fullName || user?.name || '').trim();
+    const prefillEmail = (prefill?.email || user?.email || '').trim();
+    const prefillPhone = (prefill?.phone || prefill?.contact || user?.phone || user?.contact || user?.mobile || '').trim();
+    if (prefillName) cleanPrefill.name = prefillName;
+    if (prefillEmail) cleanPrefill.email = prefillEmail;
+    if (prefillPhone) cleanPrefill.contact = prefillPhone;
 
     const options = {
       key: keyId,
       order_id: orderId,
-      amount,
-      currency,
+      amount: Math.round(Number(amount)),
+      currency: currency || 'INR',
       name: name || 'Parallax 2027',
-      description,
-      image: logoUrl,
-      prefill: {
-        email: prefill?.email || user?.email || '',
-        name: prefill?.name || user?.fullName || user?.name || '',
-        contact: prefill?.phone || prefill?.contact || user?.phone || '',
-      },
-      notes: notes || {},
+      description: description || 'Convention Pass',
       theme: {
         color: '#0284c7',
-        backdrop_color: 'rgba(5, 7, 10, 0.88)',
       },
       handler: async (response) => {
+        paymentCompleted = true;
         try {
           if (onSuccess) {
             await onSuccess(response);
@@ -159,33 +151,40 @@ export async function openStandardCheckout({
       },
       modal: {
         ondismiss: () => {
-          if (onDismiss) onDismiss();
-          if (lastFailure) {
-            const errorMsg =
-              lastFailure?.error?.description ||
-              lastFailure?.error?.reason ||
-              'Payment failed or was declined by the bank.';
-            finish({
-              success: false,
-              failed: true,
-              dismissed: true,
-              error: new Error(errorMsg),
-              details: lastFailure,
-            });
-          } else {
-            finish({ success: false, dismissed: true, message: 'Payment cancelled by user.' });
-          }
+          if (paymentCompleted) return;
+          setTimeout(() => {
+            if (paymentCompleted || settled) return;
+            if (onDismiss) onDismiss();
+            finish({ success: false, dismissed: true, message: 'Payment window closed.' });
+          }, 300);
         },
       },
     };
 
-    const checkout = new Razorpay(options);
+    if (Object.keys(cleanPrefill).length > 0) {
+      options.prefill = cleanPrefill;
+    }
 
-    // Razorpay standard checkout: payment.failed fires when a payment attempt fails.
-    // The checkout modal DOES NOT close, allowing the user to retry or switch methods.
-    // Do not settle/terminate the promise here so retried payments can succeed.
+    if (notes && Object.keys(notes).length > 0) {
+      options.notes = notes;
+    }
+
+    // Only pass image if valid absolute HTTPS URL exists to prevent mixed-content & undefined parsing errors
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      options.image = `${window.location.origin}/images/parallax-logo.png`;
+    }
+
+    let checkout;
+    try {
+      checkout = new Razorpay(options);
+    } catch (err) {
+      settled = true;
+      reject(err);
+      return;
+    }
+
     checkout.on('payment.failed', (failResponse) => {
-      lastFailure = failResponse;
+      // payment.failed fires inside Razorpay for an attempt. Razorpay allows in-modal retries.
       if (onFailed) onFailed(failResponse);
     });
 
@@ -202,58 +201,89 @@ export async function openStandardCheckout({
 export async function openCheckout(order, user, description = 'Convention registration') {
   const Razorpay = await loadRazorpay();
   return new Promise((resolve, reject) => {
+    let paymentCompleted = false;
     let settled = false;
-    let lastFailure = null;
 
     const finish = (value) => {
       if (settled) return;
       settled = true;
       resolve(value);
     };
-    const logoUrl =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/favicon.png`
-        : '';
-    const phone = user?.phone || user?.contact || user?.mobile || '';
 
-    const checkout = new Razorpay({
-      key: order.razorpayKeyId || getRazorpayKeyId(),
-      order_id: order.gatewayOrderId,
-      amount: order.amountPaise,
+    const keyId = order.razorpayKeyId || order.keyId || order.key || getRazorpayKeyId();
+    const gatewayOrderId =
+      order.gatewayOrderId ||
+      order.gateway_order_id ||
+      order.order_id ||
+      (typeof order.orderId === 'string' && order.orderId.startsWith('order_') ? order.orderId : null);
+
+    if (!gatewayOrderId && !order.mock) {
+      settled = true;
+      reject(new Error('Razorpay order ID was not created by the server. Please check your connection and retry.'));
+      return;
+    }
+
+    const cleanPrefill = {};
+    const name = (user?.fullName || user?.name || '').trim();
+    const email = (user?.email || '').trim();
+    const phone = (user?.phone || user?.contact || user?.mobile || '').trim();
+    if (name) cleanPrefill.name = name;
+    if (email) cleanPrefill.email = email;
+    if (phone) cleanPrefill.contact = phone;
+
+    const options = {
+      key: keyId,
+      order_id: gatewayOrderId,
+      amount: Math.round(Number(order.amountPaise || order.amount)),
       currency: 'INR',
       name: 'Parallax 2027',
-      description,
-      image: logoUrl,
-      prefill: {
-        email: user?.email || '',
-        name: user?.fullName || user?.name || '',
-        contact: phone,
-      },
+      description: description || 'Convention registration',
       theme: {
         color: '#0284c7',
-        backdrop_color: 'rgba(5, 7, 10, 0.88)',
       },
-      handler: (response) => finish(response),
+      handler: (response) => {
+        paymentCompleted = true;
+        finish(response);
+      },
       modal: {
         ondismiss: () => {
-          if (lastFailure) {
-            const reason =
-              lastFailure?.error?.description ||
-              lastFailure?.error?.reason ||
-              'Payment transaction declined or failed.';
-            finish({ failed: true, error: new Error(reason), details: lastFailure });
-          } else {
+          if (paymentCompleted) return;
+          // Grace period allows handler() to resolve first if Razorpay closes modal during bank callback
+          setTimeout(() => {
+            if (paymentCompleted || settled) return;
             finish(null);
-          }
+          }, 300);
         },
-        backdropclose: false,
       },
-    });
+    };
 
-    // An individual payment attempt failure (wrong OTP, card decline) allows user retry
-    // inside the open Razorpay modal. Store the last failure and let handler settle on retry success.
+    if (Object.keys(cleanPrefill).length > 0) {
+      options.prefill = cleanPrefill;
+    }
+
+    if (order.orderId || order.id) {
+      options.notes = {
+        order_id: String(order.orderId || order.id),
+      };
+    }
+
+    // Only set image if HTTPS to prevent mixed-content or "undefined" image crashes on local development
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      options.image = `${window.location.origin}/images/parallax-logo.png`;
+    }
+
+    let checkout;
+    try {
+      checkout = new Razorpay(options);
+    } catch (err) {
+      settled = true;
+      reject(err);
+      return;
+    }
+
+    // Informational listener: let attendee retry inside Razorpay modal without killing the promise
     checkout.on('payment.failed', (failResp) => {
-      lastFailure = failResp;
+      console.warn('Razorpay payment attempt declined or failed:', failResp?.error?.description);
     });
 
     try {

@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFound
 from app.core.text import render_markdown
 from app.models.edition import Announcement, ConventionEdition
-from app.schemas.public import AnnouncementPublic
 from app.services.audit import record
 
 

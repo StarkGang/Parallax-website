@@ -2,6 +2,7 @@
 
 import html
 import json
+import logging
 import re
 import uuid
 from typing import Annotated, Any
@@ -20,8 +21,9 @@ from app.services import announcements as announcement_service
 from app.services import college_registrations as registration_service
 from app.services import events as event_service
 from app.services.telegram import send_telegram_inquiry
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from app.services.editions import (
+    aware,
     current_edition,
     current_policy,
     edition_by_slug,
@@ -35,8 +37,17 @@ from sqlalchemy import select
 
 router = APIRouter(prefix="/public", tags=["public"])
 
+logger = logging.getLogger(__name__)
+
 CACHE_EDGE = {"Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600"}
 CACHE_60 = CACHE_EDGE
+
+# Last known-good edition payload. If the database briefly refuses a connection
+# (a cold pooler is a normal serverless event) this keeps the site rendering
+# instead of turning a retryable hiccup into a hard 404. Cache entries are
+# per-process, so it is a safety net, not the primary cache.
+EDITION_STALE_KEY = "public:edition:current:last-good"
+EDITION_STALE_TTL = 60 * 60 * 24
 
 
 @router.get("/config", response_model=PublicConfig)
@@ -58,6 +69,7 @@ async def config(db: AsyncSession = Depends(get_db)) -> PublicConfig:
         dev_login=settings.dev_login_available,
         google_login=settings.google_configured,
         payments_enabled=settings.payments_enabled,
+        razorpay_key_id=settings.razorpay_key_id if settings.payments_enabled else None,
         edition_slug=slug,
         support_email=support,
     )
@@ -71,20 +83,37 @@ async def edition_current(response: Response, db: AsyncSession = Depends(get_db)
     cached_val = cache_get("public:edition:current")
     if cached_val is not None:
         return cached_val
+
     try:
         edition = await current_edition(db)
+        policy = None
+        try:
+            policy = await current_policy(db, edition.id)
+        except NotFound:
+            # An edition without a current policy is still a valid edition; the
+            # policy section is simply omitted until one is published.
+            logger.warning("edition_without_policy", extra={"edition": edition.slug})
+        data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
     except NotFound:
         raise
-    except Exception:
-        raise NotFound("Current edition not available yet.")
+    except Exception as exc:
+        # Database timeouts and dropped pooler connections are transient. Serve
+        # the last good payload when this process has one, otherwise let the
+        # error middleware answer 503 so the client knows to retry. Never report
+        # a retryable failure as a permanent 404.
+        stale = cache_get(EDITION_STALE_KEY)
+        logger.warning(
+            "edition_current_unavailable error=%s stale=%s",
+            type(exc).__name__,
+            bool(stale),
+        )
+        if stale is not None:
+            response.headers["X-Parallax-Stale"] = "1"
+            return stale
+        raise
 
-    policy = None
-    try:
-        policy = await current_policy(db, edition.id)
-    except Exception:
-        pass
-    data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
     cache_set("public:edition:current", data, ttl_seconds=60)
+    cache_set(EDITION_STALE_KEY, data, ttl_seconds=EDITION_STALE_TTL)
     return data
 
 

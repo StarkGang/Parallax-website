@@ -18,6 +18,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger("app.config")
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+ROOT_DIR = BACKEND_DIR.parent
 
 
 def _sanitize_database_url(url: str | None) -> str:
@@ -74,7 +75,7 @@ def _sanitize_database_url(url: str | None) -> str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(str(BACKEND_DIR / ".env"), ".env"),
+        env_file=(str(ROOT_DIR / ".env"), str(BACKEND_DIR / ".env"), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,

@@ -8,7 +8,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
+from app.core.cache import cache_delete_pattern, cache_get, cache_set
 from app.core.errors import NotFound, ValidationFailed
 from app.models.commerce import (
     AttendanceRecord,
@@ -37,17 +37,44 @@ def aware(value: datetime | None) -> datetime | None:
 
 
 async def current_edition(db: AsyncSession) -> ConventionEdition:
+    """Resolve the edition the site and console operate on.
+
+    An active (published/open) edition always wins. If every edition is a
+    draft or archived, the most recently updated one is returned instead of a
+    dead-end 404: staff must still be able to open the console and publish it.
+    """
     row = (
         await db.execute(
             select(ConventionEdition)
             .where(ConventionEdition.status.in_(["published", "open"]))
-            .order_by(ConventionEdition.starts_at.desc())
+            # Total ordering: two editions can share a start date, and an
+            # ambiguous order made the site and console resolve different rows
+            # on different requests. created_at/id break the tie deterministically.
+            .order_by(
+                ConventionEdition.starts_at.desc(),
+                ConventionEdition.created_at.desc(),
+                ConventionEdition.id.desc(),
+            )
             .limit(1)
         )
     ).scalar_one_or_none()
-    if row is None:
-        raise NotFound("No active convention edition found.")
-    return row
+    if row is not None:
+        return row
+
+    latest = (
+        await db.execute(
+            select(ConventionEdition)
+            .order_by(
+                ConventionEdition.updated_at.desc(),
+                ConventionEdition.created_at.desc(),
+                ConventionEdition.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest is None:
+        raise NotFound("No convention edition has been created yet.")
+    return latest
 
 
 async def edition_by_slug(db: AsyncSession, slug: str) -> ConventionEdition:
@@ -62,14 +89,16 @@ async def edition_by_slug(db: AsyncSession, slug: str) -> ConventionEdition:
 
 
 async def edition_by_id(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition:
+    """Resolve an edition strictly by id.
+
+    This used to fall back to "whatever edition is current", which silently
+    pointed reads *and writes* at another convention whenever a stale or
+    invented id reached the API. An unknown id is a client problem (or a row
+    that was deleted) and must surface as a 404 the caller can recover from.
+    """
     row = await db.get(ConventionEdition, edition_id)
     if row is None:
-        # Graceful fallback: if client passed a fallback/placeholder UUID (e.g. 00000000-0000-0000-0000-000000000001)
-        # or an edition that was updated/re-seeded, resolve to the current active edition.
-        try:
-            return await current_edition(db)
-        except Exception:
-            raise NotFound("Convention edition not found.")
+        raise NotFound("Convention edition not found. Reload the page to refresh it.")
     return row
 
 

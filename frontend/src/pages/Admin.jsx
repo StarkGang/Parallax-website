@@ -90,12 +90,13 @@ const NAV = [
   ['Announcements', '/manage/announcements', Megaphone],
   ['Attendance', '/manage/attendance', FileText],
   ['Audit log', '/manage/audit', FileText],
-  ['DB Playground', '/manage/events#db-playground', Database],
+  ['DB Playground', '/manage/database', Database],
   ['Registration config', '/manage/registration-settings', Settings],
   ['Settings', '/manage/settings', Settings],
 ];
 
 const ROLE_LABELS = {
+  owner: 'Owner',
   super_admin: 'Super admin',
   edition_admin: 'Edition admin',
   finance_admin: 'Finance admin',
@@ -154,17 +155,35 @@ export function AdminLayout() {
     return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   if (!isStaff) return <Navigate to="/portal" replace />;
 
-  // Never let admin modules call the API with the placeholder edition UUID.
-  // The public edition lookup has to resolve the real database row first.
+  // Staff modules need the real database edition row: without it every request
+  // would address an id the API does not know, so gate them on a verified load.
   if (!site.editionVerified) {
     return (
       <div className="admin-gate">
         {site.editionError ? (
-          <ErrorBox
-            error={site.editionError}
-            title="Could not load the convention edition"
-            onRetry={site.refresh}
-          />
+          <>
+            <ErrorBox
+              error={site.editionError}
+              title="Could not load the convention edition"
+              onRetry={site.refresh}
+            />
+            <p className="muted" style={{ marginTop: 12 }}>
+              The console needs the live edition record before it can load staff modules.
+              This is usually a short database wake-up: retry in a moment. Signing out and
+              in again also refreshes the session.
+            </p>
+            <div className="admin-gate-actions">
+              <Button variant="ghost" icon={RefreshCw} onClick={site.refresh}>
+                Retry edition lookup
+              </Button>
+              <Button variant="ghost" to="/portal">
+                Open participant portal
+              </Button>
+              <Button variant="ghost" icon={LogOut} onClick={logout}>
+                Sign out
+              </Button>
+            </div>
+          </>
         ) : (
           <Loading label="Resolving convention edition…" rows={0} />
         )}
@@ -192,6 +211,7 @@ export function AdminLayout() {
             size="small"
             icon={Users}
             title="Open participant portal"
+            className="admin-secondary-action"
             sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
           >
             Participant Portal
@@ -204,6 +224,7 @@ export function AdminLayout() {
             size="small"
             icon={ArrowUpRight}
             title="View live convention website"
+            className="admin-secondary-action"
             sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
           >
             Live Site
@@ -1339,15 +1360,6 @@ export function AdminEvents() {
         }}
       />
 
-      <DbPlaygroundSection
-        editionId={editionId}
-        events={rows}
-        onSeeded={() => {
-          setVersion((value) => value + 1);
-          events.reload();
-        }}
-      />
-
       <Sheet
         open={sheet !== null}
         title={sheet?.id ? 'Edit event' : 'New event'}
@@ -1429,150 +1441,148 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
   };
 
   return (
-    <div
-      id="db-playground"
-      style={{
-        marginTop: '40px',
-        padding: '24px',
-        borderRadius: '12px',
-        border: '1px solid rgba(239, 68, 68, 0.4)',
-        background: 'rgba(239, 68, 68, 0.04)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-        <Database size={24} style={{ color: '#ef4444' }} />
-        <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', letterSpacing: '-0.02em' }}>
-          DB Playground (Emergency Attendee Seed & Recovery)
-        </h3>
-        <Badge tone="accent" style={{ background: '#ef4444', color: '#fff' }}>
-          SUPER ADMIN / EDITION ADMIN ONLY
+    <Panel id="db-playground" className="db-playground">
+      <div className="panel-head-row">
+        <div>
+          <Eyebrow>DANGER ZONE</Eyebrow>
+          <p className="muted" style={{ marginTop: 4 }}>
+            Resolve payment gateway disconnects where an attendee paid via Razorpay but webhooks
+            or the redirect failed to activate their pass or confirm event add-ons. Every change is
+            recorded in the permanent audit log and broadcast to the Telegram ops channel.
+          </p>
+        </div>
+        <Badge tone="bad">
+          <Database size={13} strokeWidth={1.8} style={{ marginRight: 5 }} />
+          Super Admin / Edition Admin only
         </Badge>
       </div>
-
-      <p style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '0.875rem', marginBottom: '20px' }}>
-        Resolve payment gateway disconnects where an attendee paid successfully via Razorpay but webhooks/redirect failed to activate their pass or confirm event add-ons. 
-        <b> Every change is recorded in the permanent audit log and broadcasted directly to the Telegram ops channel.</b>
-      </p>
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
       {result ? (
         <InlineMessage tone="success">
-          <b>Successfully restored!</b> Actions: {result.actions?.join(' · ')} for attendee {result.userName} ({result.userEmail}).
+          <b>Successfully restored.</b> Actions: {result.actions?.join(' · ')} for attendee{' '}
+          {result.userName} ({result.userEmail}).
         </InlineMessage>
       ) : null}
 
-      <form onSubmit={handleSeed} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
-              ATTENDEE EMAIL OR USER ID *
-            </label>
+      <form className="admin-form db-playground-form" onSubmit={handleSeed}>
+        <FieldGrid>
+          <Field label="Attendee email or user ID" hint="The account that paid.">
             <input
               type="text"
               value={emailOrId}
               onChange={(e) => setEmailOrId(e.target.value)}
-              placeholder="e.g. attendee@college.edu or 3fa85f64-5717..."
-              className="admin-input"
-              style={{ width: '100%' }}
+              placeholder="e.g. attendee@college.edu"
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
-              RECOVERY TARGET *
-            </label>
-            <select
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              className="admin-input"
-              style={{ width: '100%' }}
-            >
-              <option value="both">Both (Pass + Selected Events)</option>
-              <option value="pass">Convention Pass Only</option>
-              <option value="event">Event Registration(s) Only</option>
+          <Field label="Recovery target" hint="What should be activated for this attendee.">
+            <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="both">Both (pass + selected events)</option>
+              <option value="pass">Convention pass only</option>
+              <option value="event">Event registration(s) only</option>
             </select>
-          </div>
-        </div>
+          </Field>
+        </FieldGrid>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
-              RAZORPAY PAYMENT ID / TRANSACTION REF
-            </label>
+        <FieldGrid>
+          <Field label="Razorpay payment ID / transaction ref" hint="Optional — helps the auditor match the payment.">
             <input
               type="text"
               value={paymentRef}
               onChange={(e) => setPaymentRef(e.target.value)}
-              placeholder="e.g. pay_Q8w9xY123abc or Bank UTR"
-              className="admin-input"
-              style={{ width: '100%' }}
+              placeholder="e.g. pay_Q8w9xY123abc or bank UTR"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
-              JUSTIFICATION / AUDIT REASON *
-            </label>
+          <Field label="Justification / audit reason" hint="Required. Shown in the audit log and ops channel.">
             <input
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="e.g. Verified captured payment on Razorpay portal"
-              className="admin-input"
-              style={{ width: '100%' }}
               required
             />
-          </div>
-        </div>
+          </Field>
+        </FieldGrid>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}>
-          <input
-            type="checkbox"
-            checked={markApproved}
-            onChange={(e) => setMarkApproved(e.target.checked)}
-          />
-          <span>Automatically mark attendee's College Registration as Paid and Approved</span>
-        </label>
+        <Toggle
+          checked={markApproved}
+          onChange={setMarkApproved}
+          label="Mark the college registration paid & approved"
+          hint="Skips manual verification for this attendee."
+        />
 
         {target !== 'pass' && events.length > 0 ? (
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', marginBottom: '8px' }}>
-              SELECT EVENT(S) TO SEED / CONFIRM
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', maxHeight: '180px', overflowY: 'auto', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+          <Field
+            label="Events to seed / confirm"
+            hint={`${selectedEvents.length} selected`}
+          >
+            <div className="db-event-picker">
               {events.map((ev) => (
-                <label key={ev.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                <label key={ev.id} className="db-event-option">
                   <input
                     type="checkbox"
                     checked={selectedEvents.includes(ev.id)}
                     onChange={() => toggleEvent(ev.id)}
                   />
-                  <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                    {ev.title}
-                  </span>
+                  <span>{ev.title}</span>
                 </label>
               ))}
             </div>
-          </div>
+          </Field>
         ) : null}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+        <div className="sheet-actions">
           <Button
-            type="submit"
-            disabled={busy}
-            style={{
-              background: '#ef4444',
-              borderColor: '#dc2626',
-              color: '#fff',
-              fontWeight: 600,
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setEmailOrId('');
+              setPaymentRef('');
+              setReason('');
+              setSelectedEvents([]);
+              setResult(null);
+              setError(null);
             }}
+            disabled={busy}
           >
-            {busy ? 'Restoring & Broadcasting...' : 'Seed & Confirm in Database'}
+            Clear
+          </Button>
+          <Button type="submit" variant="danger" loading={busy} icon={Database}>
+            {busy ? 'Restoring & broadcasting' : 'Seed & confirm in database'}
           </Button>
         </div>
       </form>
-    </div>
+    </Panel>
+  );
+}
+
+export function AdminDbPlayground() {
+  const { editionId } = useSite();
+  const [version, setVersion] = useState(0);
+  const events = useAsync(() => adminApi.events(editionId), [editionId, version], {
+    enabled: Boolean(editionId),
+  });
+  const rows = events.data?.data || [];
+
+  return (
+    <>
+      <SectionHead
+        kicker="DEVELOPMENT & TESTING"
+        title="Database Playground"
+        subtitle="Seed test registrations, simulate transactions, and inspect database state in isolation."
+      />
+      <DbPlaygroundSection
+        editionId={editionId}
+        events={rows}
+        onSeeded={() => {
+          setVersion((value) => value + 1);
+          events.reload();
+        }}
+      />
+    </>
   );
 }
 
@@ -2115,54 +2125,49 @@ export function AdminRegistrations() {
         </Button>
       </div>
 
-      {/* Quick Status Filter Tabs */}
-      <div
-        style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          marginBottom: '14px',
-        }}
-      >
-        <button
-          type="button"
-          className={`button ${status === '' ? 'primary' : 'ghost'} small`}
+      {/* Quick status filter tabs */}
+      <div className="filter-chip-row">
+        <Button
+          variant={status === '' ? 'primary' : 'ghost'}
           onClick={() => updateFilters('', selectedEventId)}
         >
-          All Registrations
-        </button>
-        <button
-          type="button"
-          className={`button ${status === 'confirmed' ? 'primary' : 'ghost'} small`}
+          All registrations
+        </Button>
+        <Button
+          variant={status === 'confirmed' ? 'primary' : 'ghost'}
           onClick={() => updateFilters('confirmed', selectedEventId)}
         >
-          Confirmed Active
-        </button>
-        <button
-          type="button"
-          className={`button ${status === 'reserved' ? 'primary' : 'ghost'} small`}
+          Confirmed active
+        </Button>
+        <Button
+          variant={status === 'reserved' ? 'primary' : 'ghost'}
           onClick={() => updateFilters('reserved', selectedEventId)}
         >
           Reserved
-        </button>
-        <button
-          type="button"
-          className={`button ${status === 'cancelled' ? 'primary' : 'ghost'} small`}
-          style={
+        </Button>
+        <Button
+          variant={status === 'cancelled' ? 'primary' : 'ghost'}
+          icon={X}
+          onClick={() => updateFilters('cancelled', selectedEventId)}
+          sx={
             status === 'cancelled'
               ? {
-                  background: 'rgba(239, 68, 68, 0.2)',
-                  border: '1px solid #ef4444',
-                  color: '#fca5a5',
-                  fontWeight: 600,
+                  backgroundColor: '#f87171',
+                  color: '#1b0707',
+                  '&:hover': { backgroundColor: '#f97c7c' },
                 }
-              : { color: '#f87171' }
+              : {
+                  color: '#fca5a5',
+                  borderColor: 'rgba(248, 113, 113, 0.42)',
+                  '&:hover': {
+                    backgroundColor: 'rgba(248, 113, 113, 0.12)',
+                    borderColor: 'rgba(248, 113, 113, 0.75)',
+                  },
+                }
           }
-          onClick={() => updateFilters('cancelled', selectedEventId)}
         >
-          ❌ Cancelled &amp; Removed (View Refunds)
-        </button>
+          Cancelled &amp; removed
+        </Button>
       </div>
 
       {actionMessage ? (
@@ -3453,54 +3458,34 @@ export function AdminCheckin() {
             </div>
           </div>
 
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              marginBottom: '14px',
-            }}
-          >
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button
-                type="button"
-                className={`button ${rosterFilter === 'all' ? 'primary' : 'ghost'} small`}
+          <div className="roster-toolbar">
+            <div className="filter-chip-row" style={{ marginBottom: 0 }}>
+              <Button
+                variant={rosterFilter === 'all' ? 'primary' : 'ghost'}
                 onClick={() => setRosterFilter('all')}
               >
                 All ({rosterData.totalRegistered})
-              </button>
-              <button
-                type="button"
-                className={`button ${rosterFilter === 'present' ? 'primary' : 'ghost'} small`}
+              </Button>
+              <Button
+                variant={rosterFilter === 'present' ? 'primary' : 'ghost'}
                 onClick={() => setRosterFilter('present')}
               >
                 Present ({rosterData.totalAttended})
-              </button>
-              <button
-                type="button"
-                className={`button ${rosterFilter === 'pending' ? 'primary' : 'ghost'} small`}
+              </Button>
+              <Button
+                variant={rosterFilter === 'pending' ? 'primary' : 'ghost'}
                 onClick={() => setRosterFilter('pending')}
               >
                 Pending ({rosterData.totalRegistered - rosterData.totalAttended})
-              </button>
+              </Button>
             </div>
 
             <input
               type="text"
-              placeholder="Filter roster by attendee or team..."
+              className="toolbar-input"
+              placeholder="Filter roster by attendee or team…"
               value={rosterSearch}
               onChange={(e) => setRosterSearch(e.target.value)}
-              style={{
-                flex: 1,
-                minWidth: '200px',
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '6px',
-                padding: '6px 10px',
-                fontSize: '13px',
-                color: '#fff',
-              }}
             />
           </div>
 

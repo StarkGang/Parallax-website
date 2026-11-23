@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 title Parallax Convention - Auto Config & Launcher
 
 echo ===================================================
-echo     PARALLAX 2026 - FULL-STACK AUTO-LAUNCHER
+echo     PARALLAX 2027 - FULL-STACK AUTO-LAUNCHER
 echo ===================================================
 echo.
 

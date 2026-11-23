@@ -639,20 +639,6 @@ export default function ParallaxIdCard({
                 )}
               </div>
             </div>
-            <div className="perks">
-              <div>
-                <b>2-day entry</b>
-                <span>Both convention days</span>
-              </div>
-              <div>
-                <b>3 event slots</b>
-                <span>Included selections</span>
-              </div>
-              <div>
-                <b>Lunch included</b>
-                <span>Both days, dining hall</span>
-              </div>
-            </div>
             <div className="sign" aria-label="Digitally signed credential">
               <svg className="sign-seal" viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -740,16 +726,6 @@ export default function ParallaxIdCard({
                 {barcodeRects}
               </svg>
               <small>{credentialId}</small>
-            </div>
-            <div className="terms">
-              <div>
-                <small>Validity</small>
-                <b>8-9 Jan 2027 · Both convention days</b>
-              </div>
-              <div>
-                <small>Access</small>
-                <b>Turnstiles · Auditorium · Dining hall</b>
-              </div>
             </div>
             <div className="note">
               If found, please return to Registration Desk, NSS College of Engineering, Palakkad - 678008

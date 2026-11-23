@@ -9,9 +9,9 @@ gateway confirmation or an explicit finance-desk reference.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
-import re
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -2073,7 +2073,6 @@ async def decide_category_change(
     row.requested_category_id = None
 
     if diff > 0:
-        mode = settlement if settlement in {"additional_payment"} else "additional_payment"
         if change.order_id is None:
             order = PaymentOrder(
                 edition_id=row.edition_id,

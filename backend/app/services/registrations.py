@@ -3,7 +3,6 @@
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from fastapi import Request
 from sqlalchemy import delete, func, select
@@ -190,7 +189,7 @@ async def create_addon_registrations(
             )
         ).scalar_one_or_none()
         if existing:
-            if existing.status == "reserved":
+            if existing.status in ("reserved", "pending"):
                 # Stale or abandoned unpaid reservation: cancel it cleanly so retry or re-booking succeeds
                 existing.status = "cancelled"
                 existing.cancelled_at = datetime.now(UTC)

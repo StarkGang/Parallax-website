@@ -1,4 +1,4 @@
-# Parallax 2026 · Production Deployment Guide
+# Parallax 2027 · Production Deployment Guide
 
 This document provides a production-grade deployment runbook for **Parallax** — a single app where FastAPI serves the React SPA and the API on one origin, backed by PostgreSQL and S3/Supabase storage.
 
@@ -103,7 +103,7 @@ Production requires PostgreSQL 15+. Free reliable providers include **Supabase**
 
 #### Option 1: Supabase (Recommended - Free Tier)
 1. Go to [supabase.com](https://supabase.com) and create an account.
-2. Click **New Project** → Name it `parallax-2026` → Set a strong database password.
+2. Click **New Project** → Name it `parallax-2027` → Set a strong database password.
 3. Choose region **Mumbai / South Asia (`ap-south-1`)** for lowest latency to Kerala.
 4. Once deployed, navigate to **Project Settings** (gear icon) → **Database**.
 5. Under **Connection string**, select **URI**.
@@ -124,7 +124,7 @@ Google Sign-In provides seamless 1-click authentication without requiring users 
 2. Create a new project: `Parallax-Convention`.
 3. In the sidebar, go to **APIs & Services** → **OAuth consent screen**:
    - User Type: **External**.
-   - App Name: `Parallax 2026`.
+   - App Name: `Parallax 2027`.
    - User support email: Select your email.
    - Developer contact email: Select your email.
    - Click **Save and Continue**.
@@ -388,13 +388,13 @@ Verify your deployment with the following checklist:
 | Liveness Probe | HTTP 200 `{"status": "ok"}` | `curl -i https://yourdomain.com/health/live` |
 | Readiness Probe (DB Check) | HTTP 200 `{"status": "ok"}` | `curl -i https://yourdomain.com/health/ready` |
 | Security Headers | Check `X-Content-Type-Options: nosniff`, `Content-Security-Policy` | `curl -I https://yourdomain.com/api/v1/public/config` |
-| Public Edition Data | Returns `Parallax 2026` hosted by NSS College of Engineering | `curl https://yourdomain.com/api/v1/public/editions/current` |
-| Public Events | Returns all 12 events across Day 1 & Day 2 | `curl https://yourdomain.com/api/v1/public/editions/parallax-2026/events` |
-| Public Schedule | Returns Day 1 & Day 2 schedule items at NSSCE | `curl https://yourdomain.com/api/v1/public/editions/parallax-2026/schedule` |
+| Public Edition Data | Returns `Parallax 2027` hosted by NSS College of Engineering | `curl https://yourdomain.com/api/v1/public/editions/current` |
+| Public Events | Returns all 12 events across Day 1 & Day 2 | `curl https://yourdomain.com/api/v1/public/editions/parallax-2027/events` |
+| Public Schedule | Returns Day 1 & Day 2 schedule items at NSSCE | `curl https://yourdomain.com/api/v1/public/editions/parallax-2027/schedule` |
 | Google Maps on Venue | Loads NSS College of Engineering, Palakkad map embed | Navigate to `https://yourdomain.com/venue` |
 | Make My Pass Badge | Renders vertical badge with scannable QR, tear-strip, and print button | Sign in and visit `https://yourdomain.com/portal/tickets` |
 
 ---
 
-*Document version: 2.1.0 · Last verified for Parallax 2026 Production Release.*
+*Document version: 2.1.0 · Last verified for Parallax 2027 Production Release.*
 

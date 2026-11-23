@@ -51,7 +51,7 @@ export function PageTitle({ kicker, title, desc, aside }) {
   );
 }
 
-export function SectionHead({ kicker, title, action }) {
+export function SectionHead({ kicker, title, subtitle, action }) {
   return (
     <Stack
       direction="row"
@@ -60,11 +60,16 @@ export function SectionHead({ kicker, title, action }) {
       spacing={2}
       sx={{ mb: 2, flexWrap: 'wrap', gap: 1.5 }}
     >
-      <Box>
+      <Box sx={{ minWidth: 0 }}>
         {kicker ? <Eyebrow>{kicker}</Eyebrow> : null}
         <Typography variant="h3" component="h2" sx={{ mt: kicker ? 0.5 : 0 }}>
           {title}
         </Typography>
+        {subtitle ? (
+          <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.5 }}>
+            {subtitle}
+          </Typography>
+        ) : null}
       </Box>
       {action}
     </Stack>

@@ -1,19 +1,14 @@
 """Account endpoints: identity, profile, own sessions and deletion request."""
 
-import uuid
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
-from app.core.errors import NotFound
 from app.core.rate_limit import limiter, memory_limiter
-from app.core.sessions import revoke_session_row
 from app.db.session import get_db
 from app.schemas.auth import (
-    DeletionRequestResponse,
     MeEnvelope,
-    MeResponse,
     ProfilePatch,
     ProfileResponse,
     SessionInfo,

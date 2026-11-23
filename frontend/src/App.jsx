@@ -34,6 +34,7 @@ import {
   AdminAttendance,
   AdminAudit,
   AdminCheckin,
+  AdminDbPlayground,
   AdminEvents,
   AdminLayout,
   AdminOverview,
@@ -243,7 +244,7 @@ export default function App() {
     return <Loading label="Connecting to Parallax convention…" rows={0} />;
   }
 
-  if (site.error && !site.edition) {
+  if (site.error && !site.editionVerified) {
     return (
       <div className="boot boot-error">
         <img src={LOGO} alt="Parallax" />
@@ -408,7 +409,7 @@ export default function App() {
             <Route path="verification" element={<Navigate to="/portal/registration" replace />} />
             <Route path="select-events" element={<PortalSelectEvents />} />
             <Route path="registrations" element={<PortalRegistrations />} />
-            <Route path="tickets" element={<PortalTickets />} />
+            <Route path="tickets" element={<Navigate to="/portal/registration" replace />} />
             <Route path="teams" element={<PortalTeams />} />
             <Route path="profile" element={<PortalProfile />} />
           </Route>
@@ -436,6 +437,8 @@ export default function App() {
             <Route path="payments" element={<AdminPayments />} />
             <Route path="announcements" element={<AdminAnnouncements />} />
             <Route path="audit" element={<AdminAudit />} />
+            <Route path="database" element={<AdminDbPlayground />} />
+            <Route path="db-playground" element={<AdminDbPlayground />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
 

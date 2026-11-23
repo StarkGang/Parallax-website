@@ -899,7 +899,13 @@ export function PortalRegistration() {
       }
       await ensureProfileSaved();
       const body = await registrationApi.submit(editionId);
-      const order = body.data.payment;
+      const order = body.data?.payment;
+      if (!order) {
+        setPayStage('success');
+        setPayment(null);
+        refresh('Payment confirmed! Your convention ticket has been generated.');
+        return;
+      }
       setPayment(order);
 
       if (order.mock) {
@@ -916,13 +922,15 @@ export function PortalRegistration() {
         email: form.email?.trim() || user?.email || '',
         phone: form.phone?.trim() || user?.phone || '',
       };
-      setPayStage('gateway');
+      // Allow Razorpay standard modal / mobile drawer full interactive viewport access
+      setPayStage(null);
       const response = await openCheckout(
         order,
         attendeeUser,
         `${selectedCategory?.name || 'Convention Pass'} - Parallax 2027`
       );
       if (!response) {
+        setBusy('');
         setMessage({
           tone: 'info',
           text: 'Payment was cancelled or closed. Your registration details and uploaded documents are safely saved. You can complete payment anytime.',
@@ -930,6 +938,7 @@ export function PortalRegistration() {
         return;
       }
       if (response.failed) {
+        setBusy('');
         setMessage({
           tone: 'error',
           text: response.error?.message || 'Payment failed or was declined by the bank. Please retry or try another payment method in Razorpay.',
@@ -955,7 +964,8 @@ export function PortalRegistration() {
         qrToken.reload(),
         userRegs.reload(),
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setPayStage(null);
       // The verify response is authoritative, so show the paid ticket straight
       // away instead of waiting for another full reload of the page data.
       setMessage({
@@ -964,9 +974,9 @@ export function PortalRegistration() {
       });
     } catch (err) {
       setMessage({ tone: 'error', text: err.message || 'Checkout failed.' });
+      setPayStage(null);
     } finally {
       setBusy('');
-      setPayStage(null);
     }
   };
 

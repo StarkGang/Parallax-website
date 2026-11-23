@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -25,7 +25,6 @@ from app.models.commerce import (
     Registration,
 )
 from app.services.passes import (
-    activate_mock_pass,
     selections_for,
     sync_included_registrations,
 )
@@ -70,6 +69,7 @@ async def create_gateway_order(order: PaymentOrder) -> str | None:
                 "amount": order.amount_paise,
                 "currency": "INR",
                 "receipt": str(order.id),
+                "payment_capture": 1,
             },
         )
         resp.raise_for_status()
@@ -79,8 +79,41 @@ async def create_gateway_order(order: PaymentOrder) -> str | None:
 
 async def attach_gateway_order(db: AsyncSession, order: PaymentOrder) -> PaymentOrder:
     """Create the provider order exactly once so checkout can actually open."""
+    settings = get_settings()
     if order.gateway_order_id:
-        return order
+        if settings.payments_enabled and order.gateway_order_id.startswith("mock_order_"):
+            order.gateway_order_id = None
+        elif settings.payments_enabled and not order.gateway_order_id.startswith("mock_order_"):
+            # Check with Razorpay whether this order was already captured/paid, or if it expired
+            try:
+                async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
+                    resp = await client.get(
+                        f"https://api.razorpay.com/v1/orders/{order.gateway_order_id}",
+                        headers=_auth_header(),
+                    )
+                    if resp.status_code == 200:
+                        order_info = resp.json()
+                        if order_info.get("status") == "paid":
+                            # Order was already paid in Razorpay! Fetch payment ID and mark paid.
+                            payments_resp = await client.get(
+                                f"https://api.razorpay.com/v1/orders/{order.gateway_order_id}/payments",
+                                headers=_auth_header(),
+                            )
+                            tx_id = None
+                            if payments_resp.status_code == 200:
+                                for item in payments_resp.json().get("items", []):
+                                    if item.get("status") == "captured":
+                                        tx_id = item.get("id")
+                                        break
+                            await mark_order_paid(db, order, transaction_id=tx_id)
+                            return order
+                        elif order_info.get("status") not in {"created", "attempted"}:
+                            order.gateway_order_id = None
+            except Exception as e:
+                logger.warning("Failed checking gateway order %s: %s", order.gateway_order_id, e)
+                return order
+        else:
+            return order
     try:
         order.gateway_order_id = await create_gateway_order(order)
         order.status = "created"
@@ -172,8 +205,14 @@ async def create_order(
         gateway_id = await create_gateway_order(order)
         order.gateway_order_id = gateway_id
         await db.flush()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Gateway order creation failed for %s: %s", order.id, exc)
+        if get_settings().payments_enabled:
+            raise AppError(
+                "Could not initialize payment with Razorpay. Please try again or contact support.",
+                code="PAYMENT_GATEWAY_ERROR",
+                status_code=502,
+            ) from exc
     return order
 
 
@@ -495,7 +534,7 @@ async def refund_order(
             order_id=str(order.id),
             amount_paise=order.amount_paise,
             purpose=order.purpose,
-            payment_id=tx.gateway_payment_id,
+            payment_id=transaction.gateway_payment_id if transaction else None,
             gateway_order_id=order.gateway_order_id,
             attendee_name=user.full_name if user else None,
             attendee_email=user.email if user else None,

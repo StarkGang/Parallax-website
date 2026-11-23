@@ -123,6 +123,7 @@ class PublicConfig(CamelModel):
     dev_login: bool
     google_login: bool
     payments_enabled: bool
+    razorpay_key_id: str | None = None
     edition_slug: str | None = None
     support_email: str | None = None
 

@@ -1252,129 +1252,264 @@ section[id],
 }
 
 /* ------------------------------------------------------------------ */
-/* Payment progress: always show what the gateway is doing              */
+/* Payment progress: clean, understated fintech workflow               */
 /* ------------------------------------------------------------------ */
 
 .is-spinning {
   animation: spin 0.9s linear infinite;
 }
 
+.pay-progress-overlay,
 .pay-progress {
   position: fixed;
   inset: 0;
-  z-index: 999999;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at 50% 35%, rgba(14, 165, 233, 0.18), transparent 60%),
-    rgba(3, 7, 18, 0.88);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: payProgressFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: payModalFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-@keyframes payProgressFadeIn {
+@keyframes payModalFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
+.pay-progress-dialog,
 .pay-progress-card {
-  width: min(440px, 100%);
-  padding: 34px 28px 28px;
+  position: relative;
+  width: min(380px, calc(100vw - 32px));
+  margin: auto;
+  padding: 28px 24px 22px;
   text-align: center;
-  color: #e8f5ff;
-  background: linear-gradient(165deg, rgba(13, 22, 35, 0.98), rgba(6, 12, 20, 0.99));
-  border: 1px solid rgba(56, 189, 248, 0.32);
-  border-radius: 20px;
+  color: #f1f5f9;
+  box-sizing: border-box;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 28px 80px rgba(0, 0, 0, 0.75),
-    0 0 50px rgba(14, 165, 233, 0.18);
-  transform: translateY(0);
-  animation: payCardSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    0 20px 25px -5px rgba(0, 0, 0, 0.6),
+    0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  animation: payDialogScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-@keyframes payCardSlideUp {
-  from { transform: translateY(16px) scale(0.98); opacity: 0; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
+@keyframes payDialogScale {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
+.pay-progress-dialog.is-success,
 .pay-progress-card.is-success {
-  border-color: rgba(74, 222, 128, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(74, 222, 128, 0.2),
-    0 28px 80px rgba(0, 0, 0, 0.75),
-    0 0 55px rgba(74, 222, 128, 0.25);
+  border-color: rgba(34, 197, 94, 0.4);
 }
 
-.pay-progress-icon {
+.pay-progress-icon-cell,
+.pay-progress-icon-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.pay-icon-spinner,
+.pay-icon-active {
   display: grid;
   place-items: center;
-  width: 68px;
-  height: 68px;
-  margin: 0 auto 18px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   color: #38bdf8;
-  background: rgba(14, 165, 233, 0.14);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  position: relative;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
 }
 
-.pay-progress-card.is-success .pay-progress-icon {
+.pay-icon-success {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
   color: #22c55e;
-  background: rgba(34, 197, 94, 0.16);
-  border-color: rgba(34, 197, 94, 0.5);
-  animation: successIconPop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
 }
 
-@keyframes successIconPop {
-  0% { transform: scale(0.7); }
-  60% { transform: scale(1.15); }
-  100% { transform: scale(1); }
+.pay-spin {
+  animation: paySpin 1s linear infinite;
 }
 
-/* Google Pay / Razorpay pulse rings on active states */
-.pay-progress-icon.is-active::after {
-  content: "";
-  position: absolute;
-  inset: -6px;
+@keyframes paySpin {
+  to { transform: rotate(360deg); }
+}
+
+.pay-progress-headline,
+.pay-progress-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #f8fafc;
+}
+
+.pay-progress-subline,
+.pay-progress-detail {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.pay-progress-badge,
+.pay-progress-amount-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 5px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+.pay-badge-label,
+.pay-progress-amount-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.pay-badge-value,
+.pay-progress-amount-value {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.01em;
+}
+
+.pay-progress-stepper,
+.pay-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 20px 0 0;
+  padding: 16px 0 0;
+  list-style: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+
+.pay-step-row,
+.pay-step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.pay-step-row.is-active,
+.pay-step-item.is-active {
+  background: rgba(56, 189, 248, 0.05);
+}
+
+.pay-step-badge,
+.pay-step-dot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  font-weight: 600;
   border-radius: 50%;
-  border: 2px solid rgba(56, 189, 248, 0.4);
-  animation: payRingPulse 1.8s infinite cubic-bezier(0.24, 0, 0.38, 1);
 }
 
-.pay-progress-card.is-success .pay-progress-icon::after {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  border: 2px solid rgba(34, 197, 94, 0.4);
-  animation: payRingSuccess 1.5s ease-out 1;
+.pay-step-row.is-pending .pay-step-badge,
+.pay-step-item.is-pending .pay-step-dot {
+  color: #64748b;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.16);
 }
 
-@keyframes payRingPulse {
-  0% { transform: scale(0.92); opacity: 0.8; }
-  70% { transform: scale(1.22); opacity: 0; }
-  100% { transform: scale(1.25); opacity: 0; }
+.pay-step-row.is-active .pay-step-badge,
+.pay-step-item.is-active .pay-step-dot {
+  color: #0284c7;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1.5px solid #0284c7;
 }
 
-@keyframes payRingSuccess {
-  0% { transform: scale(0.9); opacity: 0.9; }
-  100% { transform: scale(1.35); opacity: 0; }
+.pay-step-row.is-done .pay-step-badge,
+.pay-step-item.is-done .pay-step-dot {
+  color: #ffffff;
+  background: #16a34a;
+  border: 1.5px solid #16a34a;
 }
 
-/* Razorpay standard iframe breakout: ensure checkout modal never gets obscured by footer or stacked shells */
-.razorpay-container,
-iframe[name*="razorpay"],
-.razorpay-backdrop {
-  z-index: 2147483647 !important;
+.pay-step-text,
+.pay-step-label {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
 }
 
-/* Ensure footer remains on normal document plane and never overlaps modal checkout */
+.pay-step-row.is-active .pay-step-text,
+.pay-step-item.is-active .pay-step-label {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.pay-step-row.is-done .pay-step-text,
+.pay-step-item.is-done .pay-step-label {
+  color: #cbd5e1;
+}
+
+.pay-step-inline-spin,
+.pay-step-spinner {
+  margin-left: auto;
+  color: #0284c7;
+}
+
+.pay-progress-footer-note,
+.pay-progress-security {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 18px;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.pay-shield-svg,
+.pay-shield-icon {
+  color: #64748b;
+}
+
+.pay-progress-notice,
+.pay-progress-slow-alert {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  font-size: 11.5px;
+  color: #fbbf24;
+  text-align: center;
+}
+
+/* Footer remains strictly on base document plane and never overlaps overlays */
 .footer {
   position: relative;
-  z-index: 10 !important;
+  z-index: 1;
   isolation: isolate;
   overflow: hidden;
   padding: clamp(42px, 4.5vw, 64px) 7% 22px;
@@ -1383,96 +1518,4 @@ iframe[name*="razorpay"],
     radial-gradient(58% 110% at 10% 0%, rgba(56, 189, 248, 0.09), transparent 66%),
     radial-gradient(48% 90% at 90% 100%, rgba(124, 92, 255, 0.08), transparent 66%),
     linear-gradient(180deg, #07101c 0%, #040810 100%) !important;
-}
-
-.pay-progress-card h3 {
-  margin: 0 0 6px;
-  font-size: 19px;
-  letter-spacing: -0.01em;
-  color: #fff;
-}
-
-.pay-progress-card p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: #a9c3d6;
-}
-
-.pay-progress-amount {
-  display: inline-block;
-  margin-top: 12px;
-  padding: 4px 12px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  color: #7dd3fc;
-  background: rgba(14, 165, 233, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  border-radius: 999px;
-}
-
-.pay-progress-steps {
-  display: grid;
-  gap: 8px;
-  margin: 20px 0 0;
-  padding: 16px 0 0;
-  list-style: none;
-  border-top: 1px solid rgba(148, 200, 228, 0.1);
-  text-align: left;
-}
-
-.pay-progress-steps li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  color: rgba(168, 198, 218, 0.55);
-}
-
-.pay-progress-steps li.is-active {
-  color: #e8f5ff;
-}
-
-.pay-progress-steps li.is-done {
-  color: #7ddfa4;
-}
-
-.pay-progress-dot {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-  font-weight: 700;
-  color: rgba(168, 198, 218, 0.7);
-  border: 1px solid rgba(148, 200, 228, 0.28);
-  border-radius: 50%;
-}
-
-.pay-progress-steps li.is-active .pay-progress-dot {
-  color: #7dd3fc;
-  border-color: rgba(56, 189, 248, 0.6);
-  background: rgba(14, 165, 233, 0.14);
-}
-
-.pay-progress-steps li.is-done .pay-progress-dot {
-  color: #06120b;
-  background: #4ade80;
-  border-color: #4ade80;
-}
-
-.pay-progress-hint {
-  display: block;
-  margin-top: 16px;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: #fbbf24;
-}
-
-@media (max-width: 480px) {
-  .pay-progress-card {
-    padding: 24px 20px 20px;
-  }
 }

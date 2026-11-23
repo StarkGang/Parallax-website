@@ -1,35 +1,27 @@
 """Participant workflow: pass purchase, included selection, addons, teams, verification and tickets."""
 
 import uuid
-from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
-from app.core.errors import AppError, NotFound, ValidationFailed
+from app.core.errors import AppError, NotFound
 from app.core.rate_limit import limiter, memory_limiter
 from app.core.uploads import read_upload_limited
 from app.db.session import get_db
-from app.models.commerce import ConventionPass, PaymentOrder, Registration, Ticket
+from app.models.commerce import Ticket
 from app.models.edition import ConventionEdition
 from app.schemas.participant import (
     AddonRequest,
     EmailConfirm,
     PassView,
-    PaymentOrderView,
-    RegistrationView,
-    SelectionState,
     SelectionUpdate,
     TeamCreate,
     TeamJoin,
-    TeamView,
-    TicketView,
-    VerificationView,
 )
 from app.schemas.registration import PaymentVerification
 from app.services import (
@@ -452,6 +444,9 @@ async def verify_payment(
     order = await payment_service.order_for(db, payload.order_id)
     if order.user_id != ctx.user.id or order.edition_id != edition_id:
         raise NotFound("Order not found.")
+
+    if order.status == "paid":
+        return {"data": {"paid": True, "orderId": str(order.id)}}
 
     settings = get_settings()
     if settings.payments_enabled:

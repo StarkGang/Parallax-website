@@ -143,7 +143,7 @@
   right: 0;
   top: 71cqw;
   bottom: 0;
-  padding: 3.9cqw 5.5cqw 3.2cqw;
+  padding: 3.9cqw 5.5cqw 6.8cqw;
   display: flex;
   flex-direction: column;
   z-index: 4;
@@ -335,7 +335,7 @@
   align-items: flex-end;
   gap: 3cqw;
   padding-top: 1cqw;
-  padding-bottom: 0.2cqw;
+  padding-bottom: 1.8cqw;
 }
 .px-card-root .wm {
   display: flex;
@@ -463,7 +463,7 @@
   left: 6cqw;
   right: 6cqw;
   top: 69cqw;
-  bottom: 4.5cqw;
+  bottom: 7.5cqw;
   display: flex;
   flex-direction: column;
   z-index: 3;

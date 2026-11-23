@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
@@ -13,16 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
-from app.core.errors import AppError, Conflict, NotFound
+from app.core.errors import AppError, NotFound
 from app.core.rate_limit import limiter, memory_limiter
 from app.core.text import safe_filename
 from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.integrations.storage import get_document_storage
-from app.models.commerce import ConventionPass, PaymentOrder
+from app.models.commerce import PaymentOrder
 from app.models.edition import ConventionEdition
-from app.models.registration import RegistrationDocument, RegistrationNotification
-from app.models.user import User
+from app.models.registration import RegistrationNotification
 from app.schemas.registration import (
     CategoryChangeRequest,
     PaymentVerification,
@@ -209,7 +207,7 @@ async def submit_registration(
                     "razorpayKeyId": settings.razorpay_key_id,
                     "mock": settings.mock_payments_available,
                 }
-                if order
+                if order and order.status != "paid"
                 else None
             ),
         }

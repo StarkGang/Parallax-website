@@ -6,6 +6,7 @@ import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+import uuid
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -67,9 +68,10 @@ def _create_engine() -> AsyncEngine:
             )
 
         # Disable prepared statement caching on Supabase PgBouncer/Supavisor or in serverless lambdas
-        if ":6543" in url or ":5432" in url or is_serverless or "supabase" in url:
+        if ":6543" in url or ":5432" in url or is_serverless or "supabase" in url or "pooler" in url:
             connect_args["prepared_statement_cache_size"] = 0
             connect_args["statement_cache_size"] = 0
+            connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid.uuid4()}__"
 
         # Strip any query parameters like ?sslmode=require from the URL so SQLAlchemy doesn't conflict with connect_args
         clean_url = url.split("?")[0]
@@ -112,7 +114,6 @@ def get_engine() -> AsyncEngine:
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    global _factory
     get_engine()
     return _factory
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import cache_delete_pattern
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.text import render_markdown
-from app.models.commerce import Registration, Team, TeamMember
+from app.models.commerce import Registration
 from app.models.edition import (
     ConventionEdition,
     Event,
@@ -311,6 +311,8 @@ async def admin_list_events(
             "startsAt": _aware(e.starts_at).isoformat() if e.starts_at else None,
             "endsAt": _aware(e.ends_at).isoformat() if e.ends_at else None,
             "venueRoom": e.venue_room,
+            "bannerUrl": e.banner_url,
+            "capacityUnit": e.capacity_unit,
             "createdAt": _aware(e.created_at).isoformat() if e.created_at else None,
         }
         for e in events

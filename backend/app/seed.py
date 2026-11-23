@@ -20,7 +20,7 @@ from app.models.registration import RegistrationCategory, RegistrationSettings
 from app.models.user import EditionMembership, User
 from app.services import icons as icon_service
 
-EDITION_SLUG = "parallax-2026"
+EDITION_SLUG = "parallax-2027"
 
 CATEGORIES = (
     ("computing", "Computing", "cyan", 1),
@@ -236,8 +236,6 @@ async def _refresh_demo_timeline(db: AsyncSession, edition: ConventionEdition) -
             )
         )
     ).scalar_one_or_none()
-    deadline = _aware(policy.selection_change_deadline) if policy else None
-
     # Only ever re-anchor an edition that has actually finished. An edition
     # whose dates were set by staff must never be moved, even when its policy
     # windows are stale (that is a console/configuration problem, not seed data).
@@ -390,9 +388,24 @@ async def ensure_registration_config(
 
 
 async def seed_if_empty(db: AsyncSession) -> None:
+    """Seed the demo convention only when the database has no edition at all.
+
+    The lookup used to be by demo slug, so every startup against a database
+    whose live edition had a different slug (for example ``parallax-2027``)
+    silently created a second, duplicate edition with the same dates. Two
+    published editions with equal start dates then made the public "current
+    edition" lookup return a different row on different requests. Reusing any
+    existing edition keeps seeding idempotent for real deployments.
+    """
     ext = (
         await db.execute(
-            select(ConventionEdition).where(ConventionEdition.slug == EDITION_SLUG)
+            select(ConventionEdition)
+            .order_by(
+                ConventionEdition.starts_at.desc(),
+                ConventionEdition.created_at.desc(),
+                ConventionEdition.id.desc(),
+            )
+            .limit(1)
         )
     ).scalar_one_or_none()
 
@@ -400,8 +413,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
         # Seed edition
         edition = ConventionEdition(
             slug=EDITION_SLUG,
-            name="Parallax 2026",
-            hero_headline="Parallax 2026",
+            name="Parallax 2027",
+            hero_headline="Parallax 2027",
             hero_subtitle="Two days of engineering, argued in public.",
             theme="Engineering in Public",
             organizer="ISTE Student Chapter, NSSCE",
@@ -436,7 +449,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
             selection_change_deadline=datetime(2027, 1, 8, 18, 0, tzinfo=UTC),
             refund_rules={"allowed": True, "deadlineHours": 48},
             gst_note="Inclusive of all applicable taxes",
-            reason="Initial policy for Parallax 2026",
+            reason="Initial policy for Parallax 2027",
         )
         db.add(policy)
         await db.flush()
@@ -529,7 +542,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
         # Seed announcements
         a = Announcement(
             edition_id=edition.id,
-            title="Welcome to Parallax 2026!",
+            title="Welcome to Parallax 2027!",
             body_md="Registrations are officially open for all technical and robotics events at NSS College of Engineering.",
             audience="public",
             published_at=_at(0, 8, 0),

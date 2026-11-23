@@ -69,7 +69,6 @@ def _ttls(is_staff: bool) -> tuple[timedelta, timedelta]:
 async def create_session(
     db: AsyncSession, user: User, request: Request, *, is_staff: bool = False
 ) -> tuple[Session, str]:
-    settings = get_settings()
     token = new_token(32)
     idle, absolute = _ttls(is_staff)
     now = _now()

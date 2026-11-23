@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import AppError, ValidationFailed
-from app.core.security import decrypt_pii, hash_pii, hash_token, new_token, token_matches_hash
+from app.core.security import decrypt_pii, hash_pii, hash_token, token_matches_hash
 from app.integrations import email as email_outbox
 from app.integrations.storage import document_key, get_storage
 from app.models.edition import (

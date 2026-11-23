@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api.deps import current_context
 from app.api.v1 import (
     admin,
     admin_registration,
@@ -63,6 +62,19 @@ def _spa_index() -> Path | None:
     return SPA_INDEX if SPA_INDEX.is_file() else None
 
 
+def _render_index_html() -> str | None:
+    spa_file = _spa_index()
+    if not spa_file or not spa_file.is_file():
+        return None
+    content = spa_file.read_text(encoding="utf-8")
+    settings = get_settings()
+    key_id = settings.razorpay_key_id if settings.payments_enabled else ""
+    injection = f'<script>window.__RAZORPAY_KEY_ID__="{key_id}";</script>'
+    if "</head>" in content:
+        return content.replace("</head>", f"{injection}</head>", 1)
+    return injection + content
+
+
 class SPAStaticFiles(StaticFiles):
     """Static files for the built SPA, with client-route history fallback.
 
@@ -76,6 +88,10 @@ class SPAStaticFiles(StaticFiles):
         segment = path.replace("\\", "/").split("/", 1)[0].lower()
         if segment in SPA_RESERVED_PREFIXES:
             raise HTTPException(status_code=404, detail="Not found")
+        if path in ("", "/", "index.html"):
+            rendered = _render_index_html()
+            if rendered:
+                return HTMLResponse(rendered, headers={"Cache-Control": "no-cache"})
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
@@ -84,6 +100,9 @@ class SPAStaticFiles(StaticFiles):
                 raise
             if Path(path).suffix:
                 raise
+        rendered = _render_index_html()
+        if rendered:
+            return HTMLResponse(rendered, headers={"Cache-Control": "no-cache"})
         fallback = await super().get_response("index.html", scope)
         if fallback.status_code != 200:
             raise HTTPException(status_code=404, detail="Not found")

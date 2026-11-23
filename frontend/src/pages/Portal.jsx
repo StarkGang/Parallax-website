@@ -62,53 +62,6 @@ const PORTAL_NAV = [
   ['Profile & Settings', '/portal/profile'],
 ];
 
-function loadRazorpay() {
-  return new Promise((resolve, reject) => {
-    if (window.Razorpay) return resolve(window.Razorpay);
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.onload = () => resolve(window.Razorpay);
-    script.onerror = () => reject(new Error('Could not load the payment gateway.'));
-    document.head.appendChild(script);
-    return undefined;
-  });
-}
-
-async function openRazorpay(order, user) {
-  const Razorpay = await loadRazorpay();
-  const logoUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/favicon.png`
-      : '';
-  return new Promise((resolve, reject) => {
-    const checkout = new Razorpay({
-      key: order.razorpayKeyId,
-      order_id: order.gatewayOrderId,
-      amount: order.amountPaise,
-      currency: 'INR',
-      name: 'Parallax 2026',
-      description: 'Convention pass',
-      image: logoUrl,
-      prefill: {
-        email: user?.email || '',
-        name: user?.fullName || '',
-        contact: user?.phone || '',
-      },
-      theme: {
-        color: '#0284c7',
-        backdrop_color: 'rgba(5, 7, 10, 0.88)',
-      },
-      handler: () => resolve(true),
-      modal: { ondismiss: () => resolve(false) },
-    });
-    try {
-      checkout.open();
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
 export function PortalLayout() {
   const { user, logout, isStaff, reload: reloadUser } = useAuth();
   const { edition, refresh: refreshSite } = useSite();
@@ -180,7 +133,7 @@ export function PortalLayout() {
             {isStaff ? (
               <Badge tone="accent">Staff Access</Badge>
             ) : (
-              <Badge tone="accent">Parallax 2027 Attendee</Badge>
+              <Badge tone="accent">{edition?.name || 'Convention'} Attendee</Badge>
             )}
             {user?.profileComplete ? <Badge tone="accent">Profile complete</Badge> : null}
             {isStaff ? (
@@ -320,8 +273,8 @@ function PassStatusCard({ pass, policy }) {
         {pass.paidAt ? `paid ${date(pass.paidAt)}` : 'payment pending'}
       </p>
       <div className="banner-actions">
-        <Button to="/portal/tickets" variant="ghost" icon={Ticket}>
-          View tickets
+        <Button to="/portal/registration" variant="ghost" icon={Ticket}>
+          View pass & ticket
         </Button>
         <Button to="/portal/select-events" icon={ArrowRight}>
           {selection?.valid ? 'Review selections' : 'Finish selections'}
@@ -414,7 +367,7 @@ export function PortalOverview() {
                   ? '/portal/registration'
                   : !selection?.valid
                     ? '/portal/select-events'
-                    : '/portal/tickets'
+                    : '/portal/registration'
             }
             icon={ArrowRight}
           >
@@ -451,7 +404,7 @@ export function PortalOverview() {
         <Panel>
           <div className="panel-head-row">
             <Eyebrow>ENTRY TICKETS</Eyebrow>
-            <Link className="text-link" to="/portal/tickets">
+            <Link className="text-link" to="/portal/registration">
               All tickets <ArrowRight size={15} strokeWidth={1.5} />
             </Link>
           </div>
@@ -482,44 +435,39 @@ export function PortalPass() {
 
   const passData = pass.data?.data;
 
-  const createOrder = async () => {
-    setBusy('order');
-    setMessage(null);
-    try {
-      const body = await portalApi.createPassOrder(editionId);
-      setOrder(body.data);
-      setMessage({ tone: 'info', text: 'Payment order created. Complete the payment to activate the pass.' });
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const completePayment = async () => {
-    if (!order) return;
+  const handleBuyPass = async () => {
     setBusy('pay');
     setMessage(null);
     try {
-      if (order.mock) {
-        await portalApi.mockPay(editionId, order.orderId);
+      let activeOrder = order;
+      if (!activeOrder) {
+        const body = await portalApi.createPassOrder(editionId);
+        activeOrder = body.data;
+        setOrder(activeOrder);
+      }
+      if (activeOrder.mock) {
+        await portalApi.mockPay(editionId, activeOrder.orderId);
       } else {
-        const paid = await openRazorpay(order, user);
-        if (!paid) {
-          setMessage({ tone: 'info', text: 'Payment window closed. The order is still open.' });
+        const paid = await openCheckout(activeOrder, user, 'Convention pass - Parallax 2027');
+        if (!paid || paid.failed) {
+          setMessage({
+            tone: 'info',
+            text: paid?.error?.message || 'Payment window closed. Click complete payment to resume.',
+          });
           setBusy('');
           return;
         }
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          const status = await portalApi.payment(editionId, order.orderId);
-          if (status.data?.status === 'paid') break;
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
+        await portalApi.verifyPayment(editionId, {
+          orderId: activeOrder.orderId,
+          razorpayPaymentId: paid.razorpay_payment_id,
+          razorpaySignature: paid.razorpay_signature,
+        });
       }
       await pass.reload();
       setOrder(null);
-      setMessage({ tone: 'success', text: 'Pass activated. Your entry ticket has been issued.' });
-      setTimeout(() => navigate('/portal/tickets'), 900);
+      setMessage({ tone: 'success', text: 'Pass activated! Your entry ticket has been issued.' });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      navigate('/portal/registration');
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     } finally {
@@ -561,7 +509,7 @@ export function PortalPass() {
             <b>{passData.selection?.count || 0} of {policy?.includedEventCount}</b>
           </div>
           <div className="banner-actions">
-            <Button to="/portal/tickets" variant="ghost" icon={Ticket}>
+            <Button to="/portal/registration" variant="ghost" icon={Ticket}>
               Tickets
             </Button>
             <Button to="/portal/select-events" icon={ArrowRight}>
@@ -600,29 +548,25 @@ export function PortalPass() {
             </li>
           </ul>
           {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-          {!order ? (
-            <Button onClick={createOrder} disabled={busy === 'order'} icon={ArrowRight}>
-              {busy === 'order' ? 'Creating order' : 'Create payment order'}
-            </Button>
-          ) : (
-            <div className="order-box">
+          {order ? (
+            <div className="order-box" style={{ marginBottom: '14px' }}>
               <div className="detail-row">
                 <span>Amount</span>
                 <b>{money(order.amountPaise)}</b>
               </div>
               <div className="detail-row">
                 <span>Payment method</span>
-                <b>{order.mock ? 'Instant verification' : 'Razorpay'}</b>
+                <b>{order.mock ? 'Instant verification' : 'Razorpay Secure'}</b>
               </div>
-              <Button onClick={completePayment} disabled={busy === 'pay'} icon={CreditCard}>
-                {busy === 'pay'
-                  ? 'Processing'
-                  : order.mock
-                    ? `Complete pass activation · ${money(order.amountPaise)}`
-                    : 'Open secure checkout'}
-              </Button>
             </div>
-          )}
+          ) : null}
+          <Button onClick={handleBuyPass} disabled={Boolean(busy)} icon={CreditCard}>
+            {busy
+              ? 'Opening payment gateway…'
+              : order
+                ? `Complete pass payment · ${money(order.amountPaise)}`
+                : `Pay ${money(policy?.passPricePaise)} with Razorpay`}
+          </Button>
           <p className="notice">
             <ShieldCheck size={16} strokeWidth={1.5} />
             {order?.mock === false
@@ -643,6 +587,9 @@ export function PortalSelectEvents() {
     enabled: Boolean(slug),
   });
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
 
@@ -678,10 +625,7 @@ export function PortalSelectEvents() {
 
   const addonRegisteredIds = new Set(
     (regs.data?.data || [])
-      .filter(
-        (row) =>
-          row.kind === 'addon' && ['confirmed', 'reserved', 'pending'].includes(row.status),
-      )
+      .filter((row) => row.kind === 'addon' && row.status === 'confirmed')
       .map((row) => row.eventId),
   );
 
@@ -707,15 +651,16 @@ export function PortalSelectEvents() {
     return capInclusive ? nextValue <= cap : nextValue < cap;
   };
 
-  const registeredEventIds = new Set(
+  // Only confirmed registrations block add-on booking; unpaid or expired holds can be re-selected
+  const confirmedEventIds = new Set(
     (regs.data?.data || [])
-      .filter((row) => ['confirmed', 'reserved', 'pending'].includes(row.status))
+      .filter((row) => row.status === 'confirmed')
       .map((row) => row.eventId),
   );
   const addonOptions = (catalogue.data?.data || []).filter(
     (event) =>
       !selected.includes(event.id) &&
-      !registeredEventIds.has(event.id) &&
+      !confirmedEventIds.has(event.id) &&
       event.registrationOpen,
   );
   const addonTotal = addonOptions
@@ -768,8 +713,12 @@ export function PortalSelectEvents() {
     setMessage(null);
     try {
       await portalApi.saveSelections(editionId, selected);
-      await pass.reload();
-      setMessage({ tone: 'success', text: 'Selections saved. Included registrations are updated.' });
+      await Promise.all([
+        pass.reload(),
+        regs.reload(),
+        tickets.reload(),
+      ]);
+      setMessage({ tone: 'success', text: 'Selections saved! Your included registrations and entry passes have been updated.' });
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     } finally {
@@ -796,7 +745,8 @@ export function PortalSelectEvents() {
           email: user?.email || '',
           phone: user?.phone || '',
         };
-        setPayStage('gateway');
+        // Close preparing overlay so Razorpay modal/drawer has 100% viewport access on Android/mobile
+        setPayStage(null);
         const response = await openCheckout(
           order,
           attendeeUser,
@@ -807,6 +757,7 @@ export function PortalSelectEvents() {
             tone: 'info',
             text: 'Payment was cancelled or closed. Your add-on bookings were not charged.',
           });
+          await regs.reload();
           return;
         }
         if (response.failed) {
@@ -814,6 +765,7 @@ export function PortalSelectEvents() {
             tone: 'error',
             text: response.error?.message || 'Payment declined in Razorpay. Please retry or choose another payment method.',
           });
+          await regs.reload();
           return;
         }
         setPayStage('verifying');
@@ -831,7 +783,8 @@ export function PortalSelectEvents() {
         tickets.reload(),
         catalogue.reload(),
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setPayStage(null);
       setMessage({
         tone: 'success',
         text: order
@@ -840,11 +793,11 @@ export function PortalSelectEvents() {
       });
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
+      setPayStage(null);
     } finally {
       clearTimeout(slowTimer);
       setSlowPayment(false);
       setBusy('');
-      setPayStage(null);
     }
   };
 
@@ -1023,7 +976,11 @@ export function PortalSelectEvents() {
         </div>
 
         <Button onClick={registerAddons} disabled={!addons.length || busy === 'addons'} icon={CreditCard} variant="primary">
-          {busy === 'addons' ? 'Securing booking…' : `Pay ${money(addonTotal)} with Razorpay`}
+          {busy === 'addons'
+            ? 'Securing booking…'
+            : addonTotal === 0
+              ? 'Confirm Free Bookings'
+              : `Pay ${money(addonTotal)} with Razorpay`}
         </Button>
         <p className="demo-label">
           Add-on reservations expire after {policy?.holdMinutes || 15} minutes if unpaid.
@@ -1045,6 +1002,9 @@ export function PortalRegistrations() {
   const { editionId } = useSite();
   const [activeTab, setActiveTab] = useState('events');
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
   const [confirm, setConfirm] = useState(null);
@@ -1148,7 +1108,7 @@ export function PortalRegistrations() {
                   {/* The full receipt (payment ID, paid date, event) needs the
                       ticket payload, so this jumps to the credential that owns it. */}
                   {row.kind !== 'included' && row.feePaise > 0 && row.status !== 'cancelled' ? (
-                    <Link className="table-action" to="/portal/tickets">
+                    <Link className="table-action" to="/portal/registration">
                       Receipt
                     </Link>
                   ) : null}
@@ -1747,7 +1707,9 @@ export function PortalTeams() {
                 'create',
                 () => portalApi.createTeam(editionId, { eventId: form.eventId, name: form.name }),
                 'Team created. Share the invite code.',
-              )
+              ).then((ok) => {
+                if (ok) setForm((f) => ({ ...f, name: '' }));
+              })
             }
             disabled={busy === 'create' || !form.eventId || form.name.trim().length < 2}
             icon={Users}

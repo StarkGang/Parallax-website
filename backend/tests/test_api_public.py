@@ -21,7 +21,7 @@ async def test_public_config(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["environment"] == "test"
-    assert data["editionSlug"] == "parallax-2026"
+    assert data["editionSlug"] == "parallax-2027"
 
 
 @pytest.mark.asyncio
@@ -30,18 +30,18 @@ async def test_current_edition_and_catalogue(client: AsyncClient):
     resp = await client.get("/api/v1/public/editions/current")
     assert resp.status_code == 200
     edition = resp.json()["data"]
-    assert edition["slug"] in ("parallax-2027", "parallax-2026")
+    assert edition["slug"] in ("parallax-2027", "parallax-2027")
     assert "Parallax 202" in edition["name"]
     assert edition["policy"]["passPricePaise"] == 50000
 
     # Categories
-    cat_resp = await client.get("/api/v1/public/editions/parallax-2026/categories")
+    cat_resp = await client.get("/api/v1/public/editions/parallax-2027/categories")
     assert cat_resp.status_code == 200
     cats = cat_resp.json()["data"]
     assert len(cats) >= 5
 
     # Events catalogue
-    ev_resp = await client.get("/api/v1/public/editions/parallax-2026/events")
+    ev_resp = await client.get("/api/v1/public/editions/parallax-2027/events")
     assert ev_resp.status_code == 200
     events = ev_resp.json()["data"]
     assert len(events) >= 10
@@ -52,7 +52,7 @@ async def test_current_edition_and_catalogue(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_public_schedule(client: AsyncClient):
-    resp = await client.get("/api/v1/public/editions/parallax-2026/schedule")
+    resp = await client.get("/api/v1/public/editions/parallax-2027/schedule")
     assert resp.status_code == 200
     days = resp.json()["data"]
     assert len(days) >= 1

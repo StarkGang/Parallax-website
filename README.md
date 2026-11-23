@@ -284,7 +284,7 @@ Server-side rules belong in the backend. UI checks cannot enforce authorization,
 
 ## Edition data and policy
 
-The seeded edition slug is `parallax-2026`. Seed data includes categories (Computing, Engineering, Robotics, Electronics, Design) and both individual and team events.
+The seeded edition slug is `parallax-2027`. Seed data includes categories (Computing, Engineering, Robotics, Electronics, Design) and both individual and team events.
 
 The seed policy sets:
 

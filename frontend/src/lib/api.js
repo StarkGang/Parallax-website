@@ -198,7 +198,6 @@ export const publicApi = {
       body: payload,
     }),
   iconUrl: (iconId) => `${API_BASE}/public/icons/${iconId}`,
-  documentUrl: (relative) => (relative?.startsWith('http') ? relative : relative),
 };
 
 export const authApi = {
@@ -431,4 +430,10 @@ export const adminApi = {
     `${API_BASE}/editions/${editionId}/admin/registration/${registrationId}/documents/${documentId}/content${
       download ? '?download=true' : ''
     }`,
+  fetchRegistrationDocumentBlob: async (editionId, registrationId, documentId) => {
+    const url = `${API_BASE}/editions/${editionId}/admin/registration/${registrationId}/documents/${documentId}/content`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error('Could not load document content');
+    return res.blob();
+  },
 };

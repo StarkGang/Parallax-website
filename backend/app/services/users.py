@@ -9,8 +9,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.errors import Conflict, NotFound, ValidationFailed
-from app.core.permissions import Role, STAFF_ROLES
+from app.core.errors import NotFound, ValidationFailed
+from app.core.permissions import Role
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
 from app.core.sessions import revoke_all_sessions
 from app.models.commerce import ConventionPass, Registration
@@ -25,8 +25,8 @@ from app.models.user import (
 )
 from app.schemas.auth import MeResponse, RoleGrant
 from app.services.audit import record
-from app.services.editions import current_edition, current_policy
-from app.services.verification import profile_complete, status_for
+from app.services.editions import current_edition
+from app.services.verification import profile_complete
 
 
 def normalize_email(email: str) -> str:
@@ -469,7 +469,12 @@ async def invite_staff(
     edition_id: uuid.UUID,
     actor_id: uuid.UUID | None = None,
     actor_role: str | None = None,
-) -> StaffInvite:
+) -> tuple[StaffInvite, str]:
+    """Create a staff invite and return it with the one-time plaintext token.
+
+    Only the token hash is stored, so the caller must surface the token (as a
+    shareable link) immediately; it can never be recovered later.
+    """
     token = new_token(32)
     invite = StaffInvite(
         edition_id=edition_id,
@@ -489,7 +494,7 @@ async def invite_staff(
         after={"email": email, "role": role},
     )
     await db.flush()
-    return invite
+    return invite, token
 
 
 async def grant_membership(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
@@ -6,6 +6,7 @@ import {
   Check,
   CreditCard,
   Download,
+  FileImage,
   FileText,
   IdCard,
   RefreshCw,
@@ -112,63 +113,154 @@ function Pill({ value, labels = STATE_LABELS }) {
   );
 }
 
-function DocLightbox({ document, url, onClose }) {
+function isPdfDocument(document) {
+  return (
+    document?.mime === 'application/pdf' || /\.pdf$/i.test(document?.originalName || '')
+  );
+}
+
+function AdminDocRow({ document, onOpen, downloadUrl }) {
+  const pdf = isPdfDocument(document);
+
+  return (
+    <div className="admin-doc-row">
+      <button
+        type="button"
+        className="admin-doc-file"
+        onClick={() => onOpen(document)}
+        title={`View ${document.label || document.type}`}
+      >
+        <span className="admin-doc-file-icon" aria-hidden="true">
+          {pdf ? (
+            <FileText size={19} strokeWidth={1.7} />
+          ) : (
+            <FileImage size={19} strokeWidth={1.7} />
+          )}
+        </span>
+        <span className="admin-doc-file-text">
+          <b>{document.label || document.type}</b>
+          <small>
+            {document.originalName || document.type} · {fileSize(document.sizeBytes)} ·{' '}
+            {document.uploadedAt ? dateTime(document.uploadedAt) : 'uploaded'}
+          </small>
+        </span>
+      </button>
+      <div className="admin-doc-file-actions">
+        <button type="button" className="table-action is-primary" onClick={() => onOpen(document)}>
+          View
+        </button>
+        <a
+          className="table-action"
+          href={downloadUrl}
+          download={document.originalName || `${document.type}.bin`}
+        >
+          <Download size={13} strokeWidth={1.7} /> Download
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function DocViewer({ viewer, onClose }) {
   const [zoom, setZoom] = useState(1);
-  useEffect(() => setZoom(1), [document?.id]);
-  if (!document) return null;
-  const isPdf = document.mime === 'application/pdf';
-  // Portal to <body> so the admin shell/footer cannot clip the review overlay.
+  const doc = viewer?.document;
+  const pdf = isPdfDocument(doc);
+
+  useEffect(() => setZoom(1), [doc?.id]);
+
+  useEffect(() => {
+    if (!viewer) return undefined;
+    // Capture phase so Escape closes only this viewer and never the review sheet.
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [viewer, onClose]);
+
+  if (!viewer || !doc) return null;
+
   return createPortal(
-    <div className="doc-lightbox" role="dialog" aria-modal="true" aria-label={document.label}>
+    <div
+      className="doc-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={doc.label || doc.type}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div className="doc-lightbox-card">
         <div className="doc-lightbox-head">
-          <div>
-            <Eyebrow>DOCUMENT REVIEW</Eyebrow>
-            <b>{document.label}</b>
+          <div className="doc-lightbox-title">
+            <Eyebrow>DOCUMENT PREVIEW</Eyebrow>
+            <b>{doc.label || doc.type}</b>
             <small>
-              {document.originalName || document.type} · {fileSize(document.sizeBytes)}
+              {doc.originalName || doc.type} · {fileSize(doc.sizeBytes)}
+              {doc.uploadedAt ? ` · ${dateTime(doc.uploadedAt)}` : ''}
             </small>
           </div>
           <div className="doc-lightbox-actions">
-            {!isPdf ? (
+            {!pdf ? (
               <>
-                <Button
-                  variant="ghost"
+                <button
+                  type="button"
+                  className="table-action"
                   onClick={() => setZoom((value) => Math.max(1, value - 0.25))}
-                  icon={ZoomOut}
+                  disabled={zoom <= 1}
                 >
-                  Zoom out
-                </Button>
+                  <ZoomOut size={13} strokeWidth={1.8} /> Zoom out
+                </button>
                 <span className="mono-note">{Math.round(zoom * 100)}%</span>
-                <Button
-                  variant="ghost"
+                <button
+                  type="button"
+                  className="table-action"
                   onClick={() => setZoom((value) => Math.min(4, value + 0.25))}
-                  icon={ZoomIn}
+                  disabled={zoom >= 4}
                 >
-                  Zoom in
-                </Button>
+                  <ZoomIn size={13} strokeWidth={1.8} /> Zoom in
+                </button>
               </>
             ) : null}
-            <Button variant="ghost" href={`${url}?download=true`} icon={Download}>
-              Download
-            </Button>
-            <button type="button" className="table-action" onClick={onClose}>
-              Close
+            <a
+              className="table-action"
+              href={viewer.downloadUrl}
+              download={doc.originalName || `${doc.type}.bin`}
+            >
+              <Download size={13} strokeWidth={1.7} /> Download
+            </a>
+            <button
+              type="button"
+              className="table-action is-primary doc-lightbox-close"
+              onClick={onClose}
+              aria-label="Close document preview"
+            >
+              <X size={14} strokeWidth={2} /> Close
             </button>
           </div>
         </div>
         <div className="doc-preview-stage">
-          {isPdf ? (
-            <iframe title={document.label} src={url} className="doc-preview-pdf" />
+          {viewer.loading ? (
+            <span className="admin-doc-loading">Loading document…</span>
+          ) : !viewer.url ? (
+            <span className="admin-doc-error">
+              {viewer.error || 'This document could not be loaded. Use Download instead.'}
+            </span>
+          ) : pdf ? (
+            <iframe title={doc.label || doc.type} src={viewer.url} className="doc-preview-pdf" />
           ) : (
             <img
-              src={url}
-              alt={document.label}
+              src={viewer.url}
+              alt={doc.label || doc.type}
               className="doc-preview-image"
               style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
             />
           )}
         </div>
+        {viewer.error ? <p className="admin-doc-error">{viewer.error}</p> : null}
       </div>
     </div>,
     document.body,
@@ -184,7 +276,6 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [dialog, setDialog] = useState(null);
-  const [preview, setPreview] = useState(null);
   const [note, setNote] = useState('');
   const [verificationNote, setVerificationNote] = useState('');
   const [rejectForm, setRejectForm] = useState({
@@ -201,11 +292,68 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     reference: '',
   });
   const [changeNote, setChangeNote] = useState('');
+  // In-page document viewer: the review sheet stays mounted underneath, so
+  // closing the viewer never loses the admin's position or unsaved notes.
+  const [viewer, setViewer] = useState(null);
+  const viewerUrl = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (viewerUrl.current) URL.revokeObjectURL(viewerUrl.current);
+      viewerUrl.current = null;
+    },
+    [],
+  );
 
   const data = detail.data?.data;
   if (detail.loading) return <Loading label="Loading registration" rows={3} />;
   if (detail.error) return <ErrorBox error={detail.error} onRetry={detail.reload} />;
   if (!data) return <Empty title="Registration not found" />;
+
+  const closeViewer = () => {
+    setViewer(null);
+    if (viewerUrl.current) {
+      URL.revokeObjectURL(viewerUrl.current);
+      viewerUrl.current = null;
+    }
+  };
+
+  const openDocument = async (document) => {
+    setViewer({
+      document,
+      url: null,
+      loading: true,
+      error: '',
+      downloadUrl: adminApi.registrationDocumentUrl(editionId, registrationId, document.id, true),
+    });
+    try {
+      const blob = await adminApi.fetchRegistrationDocumentBlob(
+        editionId,
+        registrationId,
+        document.id,
+      );
+      const url = URL.createObjectURL(blob);
+      if (viewerUrl.current) URL.revokeObjectURL(viewerUrl.current);
+      viewerUrl.current = url;
+      setViewer((current) =>
+        current?.document?.id === document.id ? { ...current, url, loading: false } : current,
+      );
+    } catch {
+      // Fall back to the authorized route; the browser still sends the session cookie.
+      const direct = adminApi.registrationDocumentUrl(editionId, registrationId, document.id);
+      setViewer((current) =>
+        current?.document?.id === document.id
+          ? {
+              ...current,
+              url: direct,
+              loading: false,
+              error:
+                'Loaded straight from the server. If the preview stays blank, use Download instead.',
+            }
+          : current,
+      );
+    }
+  };
 
   const run = async (label, action, success) => {
     setBusy(label);
@@ -421,48 +569,25 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               : 'All required documents on file'}
           </Badge>
         </div>
-        <div className="admin-doc-grid">
-          {(data.documents || []).map((document) => {
-            const url = adminApi.registrationDocumentUrl(editionId, registrationId, document.id);
-            const isPdf = document.mime === 'application/pdf';
-            return (
-              <div className="admin-doc-card" key={document.id}>
-                <button
-                  type="button"
-                  className="admin-doc-thumb"
-                  onClick={() => setPreview({ document, url })}
-                >
-                  {isPdf ? (
-                    <FileText size={28} strokeWidth={1.3} />
-                  ) : (
-                    <img src={url} alt={document.label} loading="lazy" />
-                  )}
-                  <span className="admin-doc-zoom">
-                    <ZoomIn size={14} strokeWidth={1.6} /> View & zoom
-                  </span>
-                </button>
-                <div>
-                  <b>{document.label}</b>
-                  <small>
-                    {document.originalName || document.type} · {dateTime(document.uploadedAt)}
-                  </small>
-                  <div className="row-actions">
-                    <button
-                      type="button"
-                      className="table-action"
-                      onClick={() => setPreview({ document, url })}
-                    >
-                      Preview
-                    </button>
-                    <a className="table-action" href={`${url}?download=true`}>
-                      Download
-                    </a>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          {!data.documents?.length ? <p className="muted">No documents uploaded yet.</p> : null}
+        <div className="admin-doc-list">
+          {(data.documents || []).map((document) => (
+            <AdminDocRow
+              key={document.id}
+              document={document}
+              onOpen={openDocument}
+              downloadUrl={adminApi.registrationDocumentUrl(
+                editionId,
+                registrationId,
+                document.id,
+                true,
+              )}
+            />
+          ))}
+          {!data.documents?.length ? (
+            <p className="muted" style={{ padding: '16px 0' }}>
+              No documents uploaded yet.
+            </p>
+          ) : null}
         </div>
         {(data.documentRequirements || []).length ? (
           <div className="reg-requirement-list">
@@ -893,11 +1018,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         </form>
       </Sheet>
 
-      <DocLightbox
-        document={preview?.document}
-        url={preview?.url}
-        onClose={() => setPreview(null)}
-      />
+      <DocViewer viewer={viewer} onClose={closeViewer} />
 
       <div className="sheet-actions">
         <Button variant="ghost" onClick={onClose}>

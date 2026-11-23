@@ -1,11 +1,12 @@
 """Administrative operations: catalogue, pricing, policy changes, verification decisions and staff access."""
 
+import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,6 @@ from app.models.commerce import (
     Registration,
     Team,
     TeamMember,
-    Ticket,
 )
 from app.models.edition import (
     ConventionEdition,
@@ -39,7 +39,7 @@ from app.models.edition import (
     Icon,
 )
 from app.models.registration import CollegeRegistration
-from app.models.user import EditionMembership, User
+from app.models.user import User
 from app.schemas.admin import (
     AdminForceCancelPayload,
     AdminManualAttendancePayload,
@@ -48,7 +48,6 @@ from app.schemas.admin import (
     AnnouncementUpsert,
     CategoryUpsert,
     CheckinRequest,
-    CheckinResponse,
     EditionUpdate,
     EventUpsert,
     MembershipGrant,
@@ -68,6 +67,8 @@ from app.services import (
     users as user_service,
     verification as verif_service,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/editions/{edition_id}/admin", tags=["admin"])
 
@@ -509,19 +510,6 @@ async def user_status(
     return {"data": {"updated": True}}
 
 
-@router.post("/users/{user_id}/reset-mfa")
-async def reset_mfa(
-    edition_id: uuid.UUID,
-    user_id: uuid.UUID,
-    request: Request,
-    ctx: AuthContext = Depends(require_permission("users.manage")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    # MFA is optional / disabled, reset confirms cleanly
-    await db.commit()
-    return {"data": {"reset": True}}
-
-
 @router.get("/memberships")
 async def memberships(
     edition_id: uuid.UUID,
@@ -561,7 +549,7 @@ async def invite_staff(
     ctx: AuthContext = Depends(require_permission("staff.manage")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    inv = await user_service.invite_staff(
+    inv, token = await user_service.invite_staff(
         db,
         request,
         email=payload.email,
@@ -571,7 +559,19 @@ async def invite_staff(
         actor_role=_role(ctx, edition_id),
     )
     await db.commit()
-    return {"data": {"invited": True, "email": inv.email}}
+    from app.core.config import get_settings
+
+    base = (get_settings().app_base_url or get_settings().frontend_origin).rstrip("/")
+    return {
+        "data": {
+            "invited": True,
+            "email": inv.email_normalized,
+            "role": payload.role,
+            "inviteToken": token,
+            "inviteUrl": f"{base}/login?invite={token}",
+            "expiresAt": inv.expires_at.isoformat() if inv.expires_at else None,
+        }
+    }
 
 
 @router.get("/payments")
@@ -1155,18 +1155,20 @@ async def audit(
     rows = list(
         (
             await db.execute(
-                select(AuditLog)
+                select(AuditLog, User.full_name)
+                .outerjoin(User, User.id == AuditLog.actor_id)
                 .order_by(AuditLog.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
-        ).scalars()
+        ).all()
     )
     return {
         "data": [
             {
                 "id": str(r.id),
                 "actorId": str(r.actor_id) if r.actor_id else None,
+                "actorName": actor_name,
                 "actorRole": r.actor_role,
                 "action": r.action,
                 "resourceType": r.resource_type,
@@ -1175,7 +1177,7 @@ async def audit(
                 "after": r.after,
                 "createdAt": edition_service.aware(r.created_at).isoformat() if r.created_at else None,
             }
-            for r in rows
+            for r, actor_name in rows
         ]
     }
 
