@@ -126,6 +126,8 @@ class PublicConfig(CamelModel):
     razorpay_key_id: str | None = None
     edition_slug: str | None = None
     support_email: str | None = None
+    # False until a provider is configured; the portal hides email-only paths.
+    email_available: bool = False
 
 
 __all__ = [

@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.models.commerce import PaymentOrder, Registration
+from app.models.commerce import PaymentOrder, PaymentTransaction, Registration
 from app.models.edition import Event
 from app.models.user import User
 
@@ -45,6 +45,15 @@ async def test_admin_force_cancel_and_refund_and_roster(
         status="paid",
     )
     db_session.add(order)
+    await db_session.flush()
+    db_session.add(
+        PaymentTransaction(
+            order_id=order.id,
+            gateway_payment_id=f"pay_test_{order.id.hex[:10]}",
+            amount_paise=order.amount_paise,
+            status="captured",
+        )
+    )
     await db_session.flush()
 
     # Create a test registration for this user linked to the order

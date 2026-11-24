@@ -7,6 +7,7 @@ import { AppErrorBoundary, Button, ErrorBox, Loading } from './components/ui.jsx
 import { initSmoothScroll, gsap } from './lib/motion.js';
 import { SamaritanBootLoader } from './components/SamaritanBootLoader.jsx';
 import MascotProvider from './components/mascot/MascotProvider.jsx';
+import MfaGate, { StepUpGate } from './components/MfaGate.jsx';
 import {
   About,
   ContactPage,
@@ -85,13 +86,14 @@ function RequireAuth({ children }) {
 }
 
 function RequireStaff({ children }) {
-  const { user, loading, isStaff } = useAuth();
+  const { user, loading, isStaff, mfaRequired } = useAuth();
   const location = useLocation();
   if (loading) return <Loading label="Checking your role" rows={0} />;
   if (!user) {
     return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   }
   if (!isStaff) return <Navigate to="/portal" replace />;
+  if (mfaRequired) return <MfaGate />;
   return children;
 }
 
@@ -430,7 +432,6 @@ export default function App() {
             <Route path="id-cards" element={<AdminIdCardStudio />} />
             <Route path="attendance" element={<AdminAttendance />} />
             <Route path="check-in" element={<AdminCheckin />} />
-            <Route path="checkin" element={<AdminCheckin />} />
             <Route path="policy" element={<AdminPolicy />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="verifications" element={<AdminVerifications />} />
@@ -444,6 +445,7 @@ export default function App() {
 
           <Route path="*" element={<NotFound />} />
         </Routes>
+        <StepUpGate />
         </AppErrorBoundary>
       </main>
 

@@ -111,10 +111,12 @@ class Settings(BaseSettings):
 
     # Sessions / cookies (30-day persistent sessions)
     session_cookie_name: str = "px_session"
-    session_idle_ttl_participant_min: int = 43200
-    session_absolute_ttl_participant_min: int = 43200
-    session_idle_ttl_staff_min: int = 43200
-    session_absolute_ttl_staff_min: int = 43200
+    # Idle must stay well below absolute; the absolute cap is never extended by
+    # activity, so a stolen session dies after a month at the latest.
+    session_idle_ttl_participant_min: int = 480  # 8 hours
+    session_absolute_ttl_participant_min: int = 43200  # 30 days
+    session_idle_ttl_staff_min: int = 60  # 1 hour
+    session_absolute_ttl_staff_min: int = 43200  # 30 days
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
     server_secret_key: str = Field(default="", description="Base secret key for HMAC and sessions")
@@ -122,7 +124,13 @@ class Settings(BaseSettings):
     totp_encryption_key: str | None = None
 
     # Auth & login switches
-    mfa_enforced: bool = False
+    # Staff (admin) accounts must enrol an authenticator app before they can use
+    # admin routes. Enrollment happens on first login, so enabling this never
+    # locks an existing admin out.
+    mfa_enforced: bool = True
+    # Set to false to force a startup failure instead of handing staff an MFA
+    # challenge the client cannot render (for example during a client rollback).
+    mfa_ui_ready: bool = True
     allow_direct_login: bool = False
     dev_auth_enabled: bool = False
     dev_admin_email: str = "owner@parallax.local"
@@ -158,12 +166,32 @@ class Settings(BaseSettings):
     email_enabled: bool = False
     email_provider_api_key: str | None = None
     email_from: str | None = None
+    email_provider_base_url: str = "https://api.resend.com"
+    # Dry run logs subject/body and marks rows sent without contacting a provider.
+    # Useful with a dummy key to verify the pipeline before a real provider exists.
+    email_dry_run: bool = False
+    email_dispatch_interval_seconds: int = 60
 
     # Telegram Bot Notifications (optional)
     telegram_bot_token: str | None = None
     bot_token: str | None = None  # Alias for telegram_bot_token
     telegram_chat_id: str | None = None
     chat_id: str | None = None  # Alias for telegram_chat_id
+
+    @property
+    def email_available(self) -> bool:
+        """True only when a provider, a sender and the master switch are all set.
+
+        Every email code path uses this one helper so the app can run without an
+        email provider: nothing queues, and no screen claims a message was sent.
+        """
+        return bool(
+            self.email_enabled
+            and self.email_provider_api_key
+            and self.email_provider_api_key.strip()
+            and self.email_from
+            and self.email_from.strip()
+        )
 
     @property
     def effective_telegram_bot_token(self) -> str | None:
@@ -178,6 +206,13 @@ class Settings(BaseSettings):
     max_upload_bytes_document: int = 3_145_728
     max_upload_bytes_icon_svg: int = 65_536
     max_upload_bytes_icon_png: int = 262_144
+
+    # Abandoned-checkout housekeeping. Orders older than this are expired and
+    # any capacity they held is released. The background sweep is opt-in so a
+    # serverless deployment can drive it from a cron instead.
+    unpaid_order_ttl_minutes: int = 60
+    expiry_sweep_enabled: bool = False
+    expiry_sweep_interval_seconds: int = 900
 
     # Bootstrap & monitoring
     sentry_dsn: str | None = None
@@ -211,20 +246,12 @@ class Settings(BaseSettings):
         if self.admin_email and not self.bootstrap_owner_email:
             self.bootstrap_owner_email = self.admin_email
 
-        # Resolve FRONTEND_ORIGIN with zero-config smart defaults
-        vercel_url = os.getenv("VERCEL_URL") or os.getenv("VERCEL_BRANCH_URL")
+        # FRONTEND_ORIGIN is configuration, not something to guess from the
+        # hosting provider. Development gets the local default; everywhere else
+        # it must be set explicitly, and OAuth fails closed if it is not.
         if not self.frontend_origin or self.frontend_origin == "http://localhost:5173":
-            if os.getenv("VERCEL"):
-                self.frontend_origin = "https://parallax-iste.vercel.app"
-            elif vercel_url:
-                self.frontend_origin = f"https://{vercel_url}"
-            elif self.is_development:
-                self.frontend_origin = "http://localhost:5173"
-            else:
-                self.frontend_origin = "https://parallax-iste.vercel.app"
-        elif not self.is_development and self.frontend_origin.startswith("http://localhost") and (vercel_url or os.getenv("VERCEL")):
-            self.frontend_origin = "https://parallax-iste.vercel.app"
-        elif not self.is_development and self.frontend_origin.startswith("http://") and not self.frontend_origin.startswith("http://localhost"):
+            self.frontend_origin = "http://localhost:5173" if self.is_development else ""
+        elif not self.is_development and self.frontend_origin.startswith("http://"):
             self.frontend_origin = "https://" + self.frontend_origin[len("http://") :]
         self.frontend_origin = self.frontend_origin.rstrip("/")
 
@@ -266,15 +293,9 @@ class Settings(BaseSettings):
         ):
             self.database_url = f"sqlite+aiosqlite:///{tempfile.gettempdir()}/parallax.db"
 
-        # Google OAuth Redirect URI - matches authorized URIs in Google Cloud Console:
-        # https://parallax-iste.vercel.app/google/callback
-        if not self.google_redirect_uri:
-            if os.getenv("VERCEL") or not self.is_development:
-                self.google_redirect_uri = "https://parallax-iste.vercel.app/google/callback"
-            elif self.frontend_origin:
-                self.google_redirect_uri = f"{self.frontend_origin}/google/callback"
-        elif ".vercel.app" in self.google_redirect_uri and not self.google_redirect_uri.startswith("https://parallax-iste.vercel.app"):
-            self.google_redirect_uri = "https://parallax-iste.vercel.app/google/callback"
+        # The OAuth callback comes only from configured public origins; a hosting
+        # hostname is never hardcoded or rewritten. auth.resolve_google_redirect_uri
+        # fails closed when nothing is configured outside development.
 
         if self.supabase_db_url and (
             "var/parallax.db" in self.database_url or not self.database_url

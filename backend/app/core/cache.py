@@ -1,7 +1,10 @@
-"""In-memory high-throughput TTL cache for serverless & production deployments.
+"""In-memory high-throughput TTL cache.
 
-Ensures hot endpoints (editions, categories, public events, admin rollups)
-respond in <1ms without hitting Supabase PostgreSQL repeatedly.
+Best effort by design: entries live in one process, so a multi-instance
+deployment has several copies and an invalidation only reaches the instance that
+handled the write. Every entry is short-lived (public reads 60s, admin rollups
+shorter) and callers must treat a miss as normal. Anything that must be exact
+should read the database instead of relying on this cache.
 """
 
 from __future__ import annotations

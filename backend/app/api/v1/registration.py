@@ -393,7 +393,13 @@ async def _qr_payload(
     from app.services import tickets as ticket_service
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
     reg_num = row.registration_number if row and row.registration_number else f"PRX-{str(ctx.user.id)[:6].upper()}"
-    base_url = str(request.base_url).rstrip("/")
+    # Behind a proxy request.base_url can be an internal host; the configured
+    # public origin is authoritative. Only fall back to the request in dev.
+    settings = get_settings()
+    base_url = (
+        (settings.app_base_url or settings.frontend_origin or "").rstrip("/")
+        or str(request.base_url).rstrip("/")
+    )
     # Signed code, not the bare registration number: the public verification
     # page must not be enumerable.
     token = f"{base_url}/c/{ticket_service.public_registration_code(reg_num)}"

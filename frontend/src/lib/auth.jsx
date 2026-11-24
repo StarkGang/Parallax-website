@@ -51,15 +51,8 @@ export function AuthProvider({ children }) {
     load();
   }, [load]);
 
-  useEffect(() => {
-    if (typeof window !== 'undefined' && typeof window.clarity === 'function' && user?.id) {
-      try {
-        window.clarity('identify', user.id, undefined, undefined, user.fullName || user.email);
-      } catch (err) {
-        // Ignore clarity tagging errors if blocked by adblock
-      }
-    }
-  }, [user]);
+  // Analytics is intentionally not loaded: the site has no consent banner yet,
+  // and session recordings must never cover /manage or /portal screens.
 
   const login = useCallback(
     async ({ email, role = 'participant', fullName }) => {
@@ -90,6 +83,8 @@ export function AuthProvider({ children }) {
       reload: load,
       roles,
       isStaff,
+      mfaRequired: Boolean(user?.mfaRequired),
+      mfaEnabled: Boolean(user?.mfaEnabled),
       isSuperAdmin: roles.includes('super_admin') || roles.includes('owner'),
     };
   }, [user, loading, login, logout, load]);

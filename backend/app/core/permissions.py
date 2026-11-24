@@ -61,7 +61,6 @@ ALL_PERMISSIONS = {
     "attendance.read",
     "attendance.write",
     "announcement.write",
-    "certificate.write",
     "report.read",
     "audit.read",
     "export.data",

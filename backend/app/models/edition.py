@@ -252,15 +252,3 @@ class Announcement(Base, UUIDPrimaryKey, Timestamps):
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
-class Certificate(Base, UUIDPrimaryKey, Timestamps):
-    __tablename__ = "certificates"
-
-    edition_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("convention_editions.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
-    number: Mapped[str] = mapped_column(String(60), unique=True, nullable=False)
-    file_key: Mapped[str | None] = mapped_column(String(300))
-    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

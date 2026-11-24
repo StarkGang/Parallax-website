@@ -53,6 +53,16 @@ export function onUnauthorized(handler) {
   unauthorizedHandler = handler;
 }
 
+let stepUpHandler = null;
+
+/**
+ * Register the step-up prompt. Resolves true once a fresh authenticator code
+ * has been accepted; the request that needed it is then retried once.
+ */
+export function onStepUpRequired(handler) {
+  stepUpHandler = handler;
+}
+
 export function setCsrfToken(token) {
   csrfToken = token;
 }
@@ -101,7 +111,7 @@ export function api(path, options = {}) {
 
 async function runRequest(
   path,
-  { method = 'GET', body, form, retry = true, timeoutMs } = {},
+  { method = 'GET', body, form, retry = true, steppedUp = false, timeoutMs } = {},
 ) {
   const headers = {};
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -167,9 +177,22 @@ async function runRequest(
       return runRequest(path, { method, body, form, retry: false, timeoutMs });
     }
     if (res.status === 401) unauthorizedHandler?.();
-    throw new ApiError(error?.message || `Request failed (${res.status})`, {
+    const code = error?.code || '';
+    if (code === 'STEP_UP_REQUIRED' && stepUpHandler && !steppedUp) {
+      const confirmed = await stepUpHandler(error);
+      if (confirmed) {
+        return runRequest(path, { method, body, form, retry: false, steppedUp: true, timeoutMs });
+      }
+    }
+    // A staff account that cannot complete enrolment/conversion yet gets a
+    // sentence they can act on rather than a bare forbidden screen.
+    const message =
+      code === 'MFA_REQUIRED'
+        ? 'Two-factor authentication is required. Open /manage to finish setting it up.'
+        : error?.message || `Request failed (${res.status})`;
+    throw new ApiError(message, {
       status: res.status,
-      code: error?.code || '',
+      code,
       details: error?.details ?? null,
     });
   }
@@ -204,6 +227,10 @@ export const authApi = {
   login: (payload) => api('/auth/login', { method: 'POST', body: payload }),
   logout: () => api('/auth/logout', { method: 'POST' }),
   me: () => api('/me'),
+  mfaSetup: () => api('/auth/mfa/setup', { method: 'POST' }),
+  mfaVerify: (payload) => api('/auth/mfa/verify', { method: 'POST', body: payload }),
+  mfaChallenge: (payload) => api('/auth/mfa/challenge', { method: 'POST', body: payload }),
+  mfaStepUp: (payload) => api('/auth/mfa/step-up', { method: 'POST', body: payload }),
   sessions: () => api('/me/sessions'),
   profile: () => api('/me/profile'),
   updateProfile: (payload) => api('/me/profile', { method: 'PATCH', body: payload }),
@@ -243,11 +270,6 @@ export const portalApi = {
     api(`/editions/${editionId}/payments/${orderId}/mock`, { method: 'POST' }),
   verifyPayment: (editionId, payload) =>
     api(`/editions/${editionId}/payments/verify`, { method: 'POST', body: payload }),
-};
-
-export const razorpayCheckoutApi = {
-  createOrder: (payload) => api('/create-order', { method: 'POST', body: payload }),
-  verifyPayment: (payload) => api('/verify-payment', { method: 'POST', body: payload }),
 };
 
 export const registrationApi = {
@@ -356,6 +378,10 @@ export const adminApi = {
     api(`${adminBase(editionId)}/verifications${query(params)}`),
   verificationDocument: (editionId, verificationId) =>
     api(`${adminBase(editionId)}/verifications/${verificationId}/document`),
+  resendVerificationCode: (editionId, verificationId) =>
+    api(`${adminBase(editionId)}/verifications/${verificationId}/email-code`, {
+      method: 'POST',
+    }),
   decideVerification: (editionId, verificationId, payload) =>
     api(`${adminBase(editionId)}/verifications/${verificationId}/decide`, {
       method: 'POST',

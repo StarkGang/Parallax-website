@@ -95,19 +95,6 @@ class TeamMember(Base, UUIDPrimaryKey, Timestamps):
     __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_member"),)
 
 
-class TeamInvite(Base, UUIDPrimaryKey):
-    __tablename__ = "team_invites"
-
-    team_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    uses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    max_uses: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
-
 class Registration(Base, UUIDPrimaryKey, Timestamps):
     __tablename__ = "registrations"
 
@@ -292,4 +279,5 @@ class RateLimitCounter(Base, UUIDPrimaryKey):
     count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     __table_args__ = (UniqueConstraint("bucket", "subject", "window_start", name="uq_rate_limit"),)
+
 

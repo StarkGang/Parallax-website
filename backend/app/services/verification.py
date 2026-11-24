@@ -161,6 +161,13 @@ async def submit(
             verification.status = "pending"
             verification.notes = "No roster match; queued for organiser review."
     elif method == "college_email":
+        if not get_settings().email_available:
+            raise AppError(
+                "Institutional email verification is not available yet. "
+                "Use the eligibility roster or upload your student ID instead.",
+                code="EMAIL_UNAVAILABLE",
+                status_code=409,
+            )
         if not institution_email:
             raise AppError(
                 "Enter your institutional email address.",
@@ -213,6 +220,72 @@ async def submit(
     )
     await db.flush()
     return serialize(verification)
+
+
+async def regenerate_email_code(
+    db: AsyncSession, request: Request, verification: EligibilityVerification, *, actor_id: uuid.UUID, actor_role: str
+) -> None:
+    """Issue a fresh confirmation code for a pending institutional-email check.
+
+    Used by staff when the attendee says the message never arrived. Only
+    possible when a provider is configured, and fully audited.
+    """
+    if not get_settings().email_available:
+        raise AppError(
+            "No email provider is configured, so a code cannot be delivered.",
+            code="EMAIL_UNAVAILABLE",
+            status_code=409,
+        )
+    if verification.method != "college_email" or verification.status != "pending":
+        raise AppError(
+            "Only a pending institutional-email verification can receive a new code.",
+            code="CODE_NOT_APPLICABLE",
+            status_code=409,
+        )
+    profile = await db.scalar(
+        select(ParticipantProfile).where(ParticipantProfile.user_id == verification.user_id)
+    )
+    recipient = getattr(profile, "institution_email", None) if profile else None
+    if not recipient:
+        raise AppError(
+            "This participant has no institutional email on file.",
+            code="CODE_NO_RECIPIENT",
+            status_code=409,
+        )
+    now = datetime.now(UTC)
+    rows = list(
+        (
+            await db.execute(
+                select(VerificationEmailCode).where(
+                    VerificationEmailCode.verification_id == verification.id,
+                    VerificationEmailCode.consumed_at.is_(None),
+                )
+            )
+        ).scalars()
+    )
+    for old in rows:
+        old.consumed_at = now
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    db.add(
+        VerificationEmailCode(
+            verification_id=verification.id,
+            code_hash=hash_token(f"vc:{verification.id}:{code}"),
+            expires_at=now + timedelta(minutes=10),
+        )
+    )
+    await email_outbox.enqueue(
+        db, recipient=recipient, template="verification_code", payload={"code": code}
+    )
+    await record(
+        db,
+        request,
+        actor_id=actor_id,
+        actor_role=actor_role,
+        action="verification.email_code_regenerated",
+        resource_type="eligibility_verification",
+        resource_id=str(verification.id),
+    )
+    await db.flush()
 
 
 async def confirm_email(

@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_get, cache_set
@@ -56,22 +56,22 @@ async def config(db: AsyncSession = Depends(get_db)) -> PublicConfig:
     if cached_val is not None:
         return cached_val
     settings = get_settings()
-    slug = None
-    support = None
     try:
         edition = await current_edition(db)
-        slug = edition.slug
-        support = edition.contact_email
     except Exception:
-        pass
+        # Never cache a half-resolved config: the client would keep booting
+        # without an edition for a whole TTL. Let it retry instead.
+        logger.warning("public_config_edition_unresolved", exc_info=True)
+        raise
     result = PublicConfig(
         environment=settings.app_env,
         dev_login=settings.dev_login_available,
         google_login=settings.google_configured,
         payments_enabled=settings.payments_enabled,
         razorpay_key_id=settings.razorpay_key_id if settings.payments_enabled else None,
-        edition_slug=slug,
-        support_email=support,
+        edition_slug=edition.slug,
+        support_email=edition.contact_email,
+        email_available=settings.email_available,
     )
     cache_set("public:config", result, ttl_seconds=60)
     return result
@@ -364,9 +364,39 @@ class ContactInquiryRequest(BaseModel):
     message: str = Field(default="", max_length=50000)
 
 
+async def _deliver_inquiry(payload: dict) -> None:
+    """Forward a contact message to the team after the visitor is answered.
+
+    Nothing is written to the database, so a notification failure is logged
+    (with the message) rather than silently dropping it.
+    """
+    try:
+        result = await send_telegram_inquiry(**payload)
+    except Exception as exc:  # noqa: BLE001 - notification is best effort
+        logger.warning(
+            "inquiry_notification_failed",
+            error=type(exc).__name__,
+            name=payload.get("name"),
+            email=payload.get("email"),
+            category=payload.get("category"),
+            message=payload.get("message"),
+        )
+        return
+    if not result.get("sent"):
+        logger.warning(
+            "inquiry_not_notified",
+            reason=result.get("reason"),
+            name=payload.get("name"),
+            email=payload.get("email"),
+            category=payload.get("category"),
+            message=payload.get("message"),
+        )
+
+
 @router.post("/inquiries", dependencies=[Depends(limiter("public_inquiry", 5, 600))])
 async def submit_inquiry(
     request: Request,
+    background: BackgroundTasks,
 ) -> dict:
     raw = await request.body()
     data: dict = {}
@@ -395,18 +425,42 @@ async def submit_inquiry(
     category = category[:100]
 
     ip = request.client.host if request.client else None
-    result = await send_telegram_inquiry(
-        name=name,
-        email=email,
-        category=category,
-        message=message,
-        ip=ip,
+    settings = get_settings()
+    can_notify = bool(
+        settings.effective_telegram_bot_token
+        and settings.effective_telegram_chat_id
+        and not settings.is_test
     )
+    if can_notify:
+        background.add_task(
+            _deliver_inquiry,
+            {
+                "name": name,
+                "email": email,
+                "category": category,
+                "message": message,
+                "ip": ip,
+            },
+        )
+    else:
+        logger.info(
+            "inquiry_logged_no_channel",
+            name=name,
+            email=email,
+            category=category,
+            message=message,
+        )
+
     return {
         "data": {
             "sent": True,
-            "telegram": result,
-            "message": "Your message has been received. Our team will contact you shortly.",
+            "notified": can_notify,
+            "message": (
+                "Your message has been received. Our team will contact you shortly."
+                if can_notify
+                else "Your message was received and logged for the organising team. Live "
+                "alerts are not configured right now, so a reply may take longer."
+            ),
         }
     }
 

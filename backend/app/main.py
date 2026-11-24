@@ -1,5 +1,6 @@
 """Application factory: middleware, routers, lifespan and health checks."""
 
+import asyncio
 import mimetypes
 import os
 import uuid
@@ -24,7 +25,6 @@ from app.api.v1 import (
     me,
     participant,
     public,
-    razorpay_checkout,
     registration,
     webhooks,
 )
@@ -216,7 +216,10 @@ class BodyLimitMiddleware:
                 if not replayed:
                     replayed = True
                     return {"type": "http.request", "body": body, "more_body": False}
-                return {"type": "http.disconnect"}
+                # A second read is an empty body, not a disconnect: Starlette
+                # treats http.disconnect as a cancelled client and aborts the
+                # response.
+                return {"type": "http.request", "body": b"", "more_body": False}
 
             return await self.app(scope, replay, send)
 
@@ -227,10 +230,8 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
     """CSRF layer 2: mutations must come from the exact SPA origin. Webhooks are exempt."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.method not in SAFE_METHODS and not (
-            request.url.path.startswith("/api/v1/webhooks/")
-            or request.url.path.endswith("/create-order")
-            or request.url.path.endswith("/verify-payment")
+        if request.method not in SAFE_METHODS and not request.url.path.startswith(
+            "/api/v1/webhooks/"
         ):
             origin = request.headers.get("origin")
             settings = get_settings()
@@ -265,12 +266,16 @@ async def _bootstrap_local_dev() -> None:
     from app.db.session import get_engine
     from app.seed import seed_if_empty
 
-    if settings.auto_create_tables:
+    if settings.auto_create_tables and (settings.is_development or settings.is_test):
         try:
             async with get_engine().begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
         except Exception as exc:
             logger.warning("schema_init_failed", error=str(exc))
+    elif settings.auto_create_tables:
+        # Production schema is owned by Alembic: `alembic upgrade head` is the
+        # deploy step, so a stale AUTO_CREATE_TABLES cannot silently add tables.
+        logger.warning("auto_create_tables_ignored", env=settings.app_env)
 
     if settings.seed_demo_data or settings.is_development:
         try:
@@ -280,14 +285,87 @@ async def _bootstrap_local_dev() -> None:
             logger.warning("seed_failed", error=type(exc).__name__)
 
 
+def assert_mfa_startable() -> None:
+    """Refuse to start with MFA enforced but impossible to complete.
+
+    The endpoints exist, but there is no MFA screen yet. Starting anyway would
+    lock every staff account out of the admin area, so fail loudly instead.
+    """
+    settings = get_settings()
+    if not settings.mfa_enforced:
+        return
+    if not settings.mfa_ui_ready:
+        raise RuntimeError(
+            "MFA_ENFORCED=true but MFA_UI_READY=false: staff would be locked out "
+            "because the client cannot complete a challenge yet. Set MFA_UI_READY=true "
+            "only once the MFA screens ship, or set MFA_ENFORCED=false."
+        )
+
+
+async def _email_dispatch_loop(interval_seconds: int) -> None:
+    """Drain the email outbox on a long-lived process.
+
+    Only started when a provider is configured; serverless deployments use the
+    admin dispatch route instead.
+    """
+    from app.integrations.email import send_batch
+
+    while True:
+        await asyncio.sleep(max(15, interval_seconds))
+        try:
+            async with session_scope() as db:
+                await send_batch(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - dispatch never breaks the app
+            logger.warning("email_dispatch_failed", error=type(exc).__name__)
+
+
+async def _expiry_sweep_loop(interval_seconds: int) -> None:
+    """Expire abandoned checkouts on a long-lived process (opt-in).
+
+    Serverless deployments keep the flag off and use the admin cron route.
+    """
+    from app.services.payments import expire_unpaid
+
+    while True:
+        await asyncio.sleep(max(60, interval_seconds))
+        try:
+            async with session_scope() as db:
+                await expire_unpaid(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - housekeeping must never crash the app
+            logger.warning("expiry_sweep_failed", error=type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(debug=settings.app_debug, json_logs=not settings.is_development)
+    assert_mfa_startable()
     await _bootstrap_local_dev()
+    sweep_task = None
+    if settings.expiry_sweep_enabled:
+        sweep_task = asyncio.create_task(
+            _expiry_sweep_loop(settings.expiry_sweep_interval_seconds),
+            name="parallax-expiry-sweep",
+        )
+    email_task = None
+    if settings.email_available:
+        email_task = asyncio.create_task(
+            _email_dispatch_loop(settings.email_dispatch_interval_seconds),
+            name="parallax-email-dispatch",
+        )
     logger.info("api_started", env=settings.app_env, payments=settings.payments_enabled)
-    yield
-    await dispose_engine()
+    try:
+        yield
+    finally:
+        if sweep_task is not None:
+            sweep_task.cancel()
+        if email_task is not None:
+            email_task.cancel()
+        await dispose_engine()
 
 
 def create_app() -> FastAPI:
@@ -350,8 +428,6 @@ def create_app() -> FastAPI:
     app.include_router(admin.router, prefix="/api/v1")
     app.include_router(admin_registration.router, prefix="/api/v1")
     app.include_router(webhooks.router, prefix="/api/v1")
-    app.include_router(razorpay_checkout.router, prefix="/api")
-    app.include_router(razorpay_checkout.router, prefix="/api/v1")
 
     # Top-level callback aliases for Google OAuth redirect URIs (/google/callback, /auth/, /auth)
     @app.get(

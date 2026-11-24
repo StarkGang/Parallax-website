@@ -35,7 +35,7 @@ async def send_telegram_inquiry(
     bot_token = settings.effective_telegram_bot_token
     chat_id = settings.effective_telegram_chat_id
 
-    if not bot_token or not chat_id:
+    if not bot_token or not chat_id or settings.is_test:
         logger.info(
             "telegram_notification_skipped",
             reason="BOT_TOKEN or TELEGRAM_CHAT_ID not configured in environment.",
@@ -150,7 +150,7 @@ async def send_telegram_registration(
     bot_token = settings.effective_telegram_bot_token
     chat_id = settings.effective_telegram_chat_id
 
-    if not bot_token or not chat_id:
+    if not bot_token or not chat_id or settings.is_test:
         return {"sent": False, "reason": "not_configured"}
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -213,7 +213,7 @@ async def send_telegram_payment_notification(
     settings = get_settings()
     bot_token = settings.effective_telegram_bot_token
     chat_id = settings.effective_telegram_chat_id
-    if not bot_token or not chat_id:
+    if not bot_token or not chat_id or settings.is_test:
         return {"sent": False, "reason": "not_configured"}
 
     # Deduplicate: prevent spamming duplicate alerts for the same order and event
@@ -380,7 +380,7 @@ async def send_telegram_alert(
     settings = get_settings()
     bot_token = settings.effective_telegram_bot_token
     chat_id = settings.effective_telegram_chat_id
-    if not bot_token or not chat_id:
+    if not bot_token or not chat_id or settings.is_test:
         return {"sent": False, "reason": "not_configured"}
 
     lines = [
@@ -422,7 +422,11 @@ def file_telegram_alert(
     global _last_alert_sent_at
 
     settings = get_settings()
-    if not settings.effective_telegram_bot_token or not settings.effective_telegram_chat_id:
+    if (
+        not settings.effective_telegram_bot_token
+        or not settings.effective_telegram_chat_id
+        or settings.is_test
+    ):
         return
 
     now = time.monotonic()

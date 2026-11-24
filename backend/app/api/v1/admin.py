@@ -14,7 +14,7 @@ from app.api.deps import AuthContext, require_permission, require_any_permission
 from app.integrations.storage import get_storage
 from app.core.cache import cache_delete_pattern
 from app.core.errors import AppError
-from app.core.errors import Conflict, NotFound, ValidationFailed
+from app.core.errors import Conflict, NotFound, StepUpRequired, ValidationFailed
 from app.core.permissions import permissions_for
 from app.core.rate_limit import limiter
 from app.core.uploads import read_upload_limited
@@ -91,10 +91,86 @@ async def overview(
 async def sync_data(
     edition_id: uuid.UUID,
     ctx: AuthContext = Depends(require_permission("stats.read")),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     from app.core.cache import cache_clear
+
+    expired = await payment_service.expire_unpaid(db)
+    await db.commit()
     cache_clear()
-    return {"data": {"synced": True, "timestamp": datetime.now(UTC).isoformat()}}
+    return {
+        "data": {
+            "synced": True,
+            "expiredOrdersAndReservations": expired,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    }
+
+
+@router.get("/email-outbox")
+async def email_outbox_summary(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("settings.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delivery state of transactional email, plus whether a provider exists."""
+    from app.core.config import get_settings
+    from app.integrations.email import ACTIVE_STATUSES, MAX_ATTEMPTS
+    from app.models.commerce import EmailOutbox
+
+    rows = (
+        await db.execute(
+            select(EmailOutbox.status, func.count()).group_by(EmailOutbox.status)
+        )
+    ).all()
+    return {
+        "data": {
+            "available": get_settings().email_available,
+            "dryRun": get_settings().email_dry_run,
+            "maxAttempts": MAX_ATTEMPTS,
+            "activeStatuses": list(ACTIVE_STATUSES),
+            "counts": {status: count for status, count in rows},
+        }
+    }
+
+
+@router.post(
+    "/email-outbox/dispatch",
+    dependencies=[Depends(limiter("admin_email_dispatch", 10, 60))],
+)
+async def dispatch_email_outbox(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("settings.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.core.config import get_settings
+    from app.integrations.email import send_batch
+
+    if not get_settings().email_available:
+        return {
+            "data": {
+                "sent": 0,
+                "available": False,
+                "message": "No email provider is configured, so nothing was sent.",
+            }
+        }
+    sent = await send_batch(db)
+    return {"data": {"sent": sent, "available": True}}
+
+
+@router.post(
+    "/maintenance/expire-orders",
+    dependencies=[Depends(limiter("admin_expire_orders", 10, 60))],
+)
+async def expire_orders(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("settings.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Cron-friendly sweep: expire abandoned checkouts and release holds."""
+    expired = await payment_service.expire_unpaid(db)
+    await db.commit()
+    return {"data": {"expired": expired}}
 
 
 @router.get("/my-permissions")
@@ -483,7 +559,12 @@ async def users(
     page_size: int = Query(50, ge=1, le=200),
 ) -> dict:
     rows, total = await user_service.list_users(
-        db, edition_id, q=q, page=page, page_size=page_size
+        db,
+        edition_id,
+        q=q,
+        page=page,
+        page_size=page_size,
+        include_pii=ctx.has("user.read_pii", edition_id),
     )
     return {"data": rows, "total": total, "page": page, "pageSize": page_size}
 
@@ -747,10 +828,35 @@ async def decide_verification(
     return {"data": {"status": v.status}}
 
 
+@router.post(
+    "/verifications/{verification_id}/email-code",
+    dependencies=[Depends(limiter("admin_verification_code", 30, 60))],
+)
+async def regenerate_verification_code(
+    edition_id: uuid.UUID,
+    verification_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("verification.review")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    v = await db.get(EligibilityVerification, verification_id)
+    if v is None or v.edition_id != edition_id:
+        raise NotFound("Verification not found.")
+    await verif_service.regenerate_email_code(
+        db,
+        request,
+        v,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+    )
+    await db.commit()
+    return {"data": {"sent": True}}
+
+
 @router.get("/registrations")
 async def registrations(
     edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_permission("events.read")),
+    ctx: AuthContext = Depends(require_any_permission("registration.read", "events.read")),
     db: AsyncSession = Depends(get_db),
     event_id: uuid.UUID | None = None,
     status: str | None = None,
@@ -812,6 +918,8 @@ async def registrations(
         ).all()
         refund_map = {oid: int(amt or 0) for oid, amt in r_rows}
 
+    show_pii = ctx.has("user.read_pii", edition_id)
+
     data = []
     for r, u, e, o, col in rows:
         is_included = r.kind == "included" or r.fee_paise == 0
@@ -825,9 +933,9 @@ async def registrations(
                 "id": str(r.id),
                 "registrationNumber": r.registration_number,
                 "userName": u.full_name,
-                "userEmail": u.email,
-                "userPhone": col.phone if col else None,
-                "userCollege": col.college_name if col else None,
+                "userEmail": u.email if show_pii else user_service.mask_email(u.email),
+                "userPhone": (col.phone if col else None) if show_pii else None,
+                "userCollege": (col.college_name if col else None) if show_pii else None,
                 "eventId": str(e.id),
                 "eventTitle": e.title,
                 "venueRoom": e.venue_room,
@@ -1672,7 +1780,18 @@ async def db_playground_seed(
 
     Restricted strictly to super_admin and edition_admin. All actions are logged to
     the immutable audit table and immediately broadcast to the organizer Telegram channel.
+
+    This is a development escape hatch: it does not exist in production, and when
+    MFA is enforced it is a step-up action.
     """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not (settings.is_debug or settings.is_development or settings.is_test):
+        raise NotFound("Not found.")
+    if settings.mfa_enforced and ctx.is_staff and not ctx.step_up_fresh:
+        raise StepUpRequired("Confirm your authenticator code to continue.")
+
     from app.services.telegram import send_telegram_alert
     from app.services.passes import activate_pass_for_registration
     from app.services.tickets import issue_for_registration, issue_for_pass

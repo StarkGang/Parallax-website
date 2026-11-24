@@ -260,19 +260,32 @@ def _set_oauth_cookie(response: Response, payload: dict) -> None:
 
 
 def resolve_google_redirect_uri(request: Request | None = None) -> str:
+    """The exact callback registered with Google.
+
+    Only configuration decides this: an explicit GOOGLE_REDIRECT_URI, else the
+    configured public origin. Outside development an unset origin fails closed
+    instead of guessing a host.
+    """
     settings = get_settings()
-    if settings.google_redirect_uri and settings.google_redirect_uri.startswith("http"):
-        if ".vercel.app" in settings.google_redirect_uri and not settings.google_redirect_uri.startswith("https://parallax-iste.vercel.app"):
-            return "https://parallax-iste.vercel.app/google/callback"
+    if settings.google_redirect_uri:
         return settings.google_redirect_uri
 
-    if request:
+    base = settings.app_base_url or settings.frontend_origin
+    if base:
+        return f"{base.rstrip('/')}/google/callback"
+
+    if settings.is_development and request is not None:
         host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
         if "localhost" in host or "127.0.0.1" in host:
             proto = request.headers.get("x-forwarded-proto") or "http"
             return f"{proto}://{host}/google/callback"
 
-    return "https://parallax-iste.vercel.app/google/callback"
+    raise AppError(
+        "Google sign-in is not configured for this deployment. "
+        "Set APP_BASE_URL (or FRONTEND_ORIGIN) to the public origin.",
+        code="OAUTH_NOT_CONFIGURED",
+        status_code=503,
+    )
 
 
 @router.get("/google/login", dependencies=[Depends(limiter("auth_login", 20, 600))])
@@ -330,14 +343,21 @@ async def google_callback(
     if error or not code or not state:
         return _fail_redirect()
 
-    # Verify state: try stateless signed token from query param first, then signed cookie
-    data = _unsign(state)
-    if not data:
-        data = _unsign(request.cookies.get(settings.oauth_cookie))
+    # The state must match the nonce this browser was issued in its HttpOnly
+    # cookie. A query-string state on its own is never accepted.
+    cookie_data = _unsign(request.cookies.get(settings.oauth_cookie))
+    if not cookie_data:
+        security_event("oauth_state_missing_cookie")
+        return _fail_redirect("signin_failed")
 
-    if not data:
-        security_event("oauth_state_invalid")
-        return _fail_redirect()
+    data = _unsign(state)
+    nonce = (data or {}).get("nonce")
+    if not nonce or nonce != cookie_data.get("nonce"):
+        security_event("oauth_state_mismatch")
+        return _fail_redirect("signin_failed")
+
+    # Trust only the cookie payload for verifier/redirect/next.
+    data = cookie_data
 
     if int(datetime.now(UTC).timestamp()) - int(data.get("issued", 0)) > 600:
         return _fail_redirect("session_expired")

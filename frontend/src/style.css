@@ -7361,3 +7361,39 @@ iframe.razorpay-checkout-frame {
   background: #fff;
 }
 
+
+/* STAFF TWO-FACTOR */
+.mfa-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  margin: 18px 0;
+}
+
+.mfa-qr canvas {
+  background: #fff;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.recovery-code-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.recovery-code-grid code {
+  display: block;
+  padding: 10px 12px;
+  background: rgba(8, 12, 20, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.modal-backdrop > * {
+  width: min(440px, 100%);
+}

@@ -1,21 +1,24 @@
 """Payments: Razorpay order generation, webhooks, mock payment in dev and refunds."""
 
+import asyncio
 import base64
 import hmac
 import hashlib
 import json
-import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_delete_pattern
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, ValidationFailed
+from app.core.logging import get_logger
 from app.models.commerce import (
     ConventionPass,
     PaymentOrder,
@@ -35,7 +38,7 @@ from app.services.tickets import (
     revoke_for_registration,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger("payments")
 
 # Bound how long a checkout click can wait on the payment provider. A stalled
 # gateway must fail fast instead of leaving the browser without feedback.
@@ -182,6 +185,33 @@ async def gateway_refund(payment_id: str, amount_paise: int) -> str | None:
         return data["id"]
 
 
+def _gateway_refund_sync(payment_id: str, amount_paise: int) -> str | None:
+    """Blocking Razorpay refund call, executed in a worker thread.
+
+    The refund path used to await an async HTTP call on the request loop for a
+    blocking-style financial operation; running it in a thread keeps the loop
+    responsive while still reporting the gateway result before anything is
+    recorded as refunded.
+    """
+    settings = get_settings()
+    if not settings.payments_enabled:
+        if settings.is_development:
+            return f"mock_rfnd_{uuid.uuid4().hex[:12]}"
+        raise AppError(
+            "Refunds are not configured with a payment gateway.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
+    with httpx.Client(timeout=GATEWAY_TIMEOUT) as client:
+        resp = client.post(
+            f"https://api.razorpay.com/v1/payments/{payment_id}/refund",
+            headers=_auth_header(),
+            json={"amount": amount_paise},
+        )
+        resp.raise_for_status()
+        return resp.json().get("id")
+
+
 async def create_order(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -219,18 +249,46 @@ async def create_order(
 async def mark_order_paid(
     db: AsyncSession, order: PaymentOrder, transaction_id: str | None = None
 ) -> None:
+    """Fulfil an order exactly once, even under concurrent callers.
+
+    The Razorpay webhook and the browser's verify call can land at the same
+    time. The row lock serialises them and the transaction insert ignores the
+    duplicate payment id, so the second caller sees "paid" and returns instead
+    of raising a unique-constraint 500 after the customer already paid.
+    """
+    locked = (
+        await db.execute(
+            select(PaymentOrder).where(PaymentOrder.id == order.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked is None:
+        raise NotFound("Payment order not found.")
+    order = locked
     if order.status in ("paid", "refunded"):
         return
     order.status = "paid"
     order.paid_at = datetime.now(UTC)
 
-    tx = PaymentTransaction(
-        order_id=order.id,
-        gateway_payment_id=transaction_id or f"pay_{uuid.uuid4().hex[:12]}",
-        status="captured",
-        amount_paise=order.amount_paise,
+    payment_ref = transaction_id or f"pay_{order.id.hex[:16]}"
+    dialect = db.bind.dialect.name if db.bind is not None else "postgresql"
+    insert_stmt = sqlite_insert if dialect == "sqlite" else pg_insert
+    await db.execute(
+        insert_stmt(PaymentTransaction)
+        .values(
+            order_id=order.id,
+            gateway_payment_id=payment_ref,
+            status="captured",
+            amount_paise=order.amount_paise,
+        )
+        .on_conflict_do_nothing(index_elements=["gateway_payment_id"])
     )
-    db.add(tx)
+    tx = (
+        await db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.gateway_payment_id == payment_ref
+            )
+        )
+    ).scalar_one()
 
     if order.purpose == "pass" and order.linked_record_id:
         user_pass = await db.get(ConventionPass, order.linked_record_id)
@@ -287,7 +345,33 @@ async def mark_order_paid(
 
 
 async def expire_unpaid(db: AsyncSession) -> int:
-    return 0
+    """Expire abandoned checkouts and free the capacity they were holding.
+
+    Nothing used to call this, so every abandoned Razorpay modal left a
+    `created` order forever and reserved event seats never came back.
+    """
+    from app.services.registrations import expire_reservations
+
+    settings = get_settings()
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.unpaid_order_ttl_minutes)
+    stale = list(
+        (
+            await db.execute(
+                select(PaymentOrder).where(
+                    PaymentOrder.status == "created",
+                    PaymentOrder.created_at < cutoff,
+                )
+            )
+        ).scalars()
+    )
+    for order in stale:
+        order.status = "expired"
+    released = await expire_reservations(db)
+    if stale:
+        cache_delete_pattern("public:*")
+        cache_delete_pattern("admin:dashboard:*")
+        logger.info("unpaid_orders_expired", count=len(stale))
+    return len(stale) + released
 
 
 def verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
@@ -484,9 +568,35 @@ async def refund_order(
         .scalars()
         .first()
     )
-    gateway_id = None
-    if transaction is not None:
-        gateway_id = await gateway_refund(transaction.gateway_payment_id, amount_paise)
+    # Without a captured transaction there is nothing to refund at the gateway.
+    # Recording a "processed" refund here used to revoke passes/tickets while
+    # the attendee's money stayed with the organiser.
+    if transaction is None:
+        raise ValidationFailed(
+            "This order has no captured payment, so it cannot be refunded through the gateway."
+        )
+
+    try:
+        gateway_id = await asyncio.to_thread(
+            _gateway_refund_sync, transaction.gateway_payment_id, amount_paise
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "gateway_refund_failed", order=str(order.id), error=str(exc)[:200]
+        )
+        raise AppError(
+            "The payment gateway did not accept the refund. Nothing was changed; try again.",
+            code="REFUND_GATEWAY_ERROR",
+            status_code=502,
+        ) from exc
+    if not gateway_id:
+        raise AppError(
+            "The payment gateway did not return a refund id. Nothing was changed; try again.",
+            code="REFUND_GATEWAY_ERROR",
+            status_code=502,
+        )
 
     refund = Refund(
         order_id=order.id,
@@ -557,10 +667,6 @@ def mock_payment_id() -> str:
     return f"mock_tx_{uuid.uuid4().hex[:12]}"
 
 
-def order_url_token(order_id: uuid.UUID) -> str:
-    return f"ord_{order_id.hex}"
-
-
 __all__ = [
     "_auth_header",
     "attach_gateway_order",
@@ -577,6 +683,5 @@ __all__ = [
     "refund_order",
     "order_for",
     "mock_payment_id",
-    "order_url_token",
 ]
 

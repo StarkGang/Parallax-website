@@ -1855,7 +1855,8 @@ export function PortalTeams() {
 }
 
 export function PortalVerification() {
-  const { editionId } = useSite();
+  const { editionId, config } = useSite();
+  const emailAvailable = Boolean(config?.emailAvailable);
   const { user, reload } = useAuth();
   const verification = useAsync(() => portalApi.verification(editionId), [editionId], {
     enabled: Boolean(editionId),
@@ -1955,7 +1956,9 @@ export function PortalVerification() {
           <Field label="Method">
             <select value={method} onChange={(event) => setMethod(event.target.value)}>
               <option value="roster">Eligibility roster match</option>
-              <option value="college_email">Institutional email</option>
+              {emailAvailable ? (
+                <option value="college_email">Institutional email</option>
+              ) : null}
               <option value="document">Student document</option>
             </select>
           </Field>
@@ -1990,7 +1993,7 @@ export function PortalVerification() {
         </Panel>
       ) : null}
 
-      {status?.method === 'college_email' && status?.status === 'pending' ? (
+      {emailAvailable && status?.method === 'college_email' && status?.status === 'pending' ? (
         <Panel>
           <Eyebrow>EMAIL CONFIRMATION</Eyebrow>
           <p className="muted">Enter the six-digit code sent to your institutional address.</p>

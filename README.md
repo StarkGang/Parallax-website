@@ -219,6 +219,22 @@ Open <http://127.0.0.1:8000> for the app. If `frontend/dist` is missing, the roo
 
 For frontend hot reload while developing, `cd frontend && npm run dev` still works: Vite serves the app at <http://localhost:5173> and proxies `/api` and `/health` to the backend. Set `VITE_API_PROXY` if the backend is elsewhere. Frontend and backend origin settings must agree for development session and CSRF checks. The app expects the backend's current edition to load before it renders routes.
 
+### Database migrations
+
+Schema changes are owned by Alembic; the app only creates tables at startup in
+development and test (`AUTO_CREATE_TABLES` is ignored elsewhere).
+
+```sh
+cd backend
+alembic upgrade head                               # deploy step: apply schema
+alembic revision --autogenerate -m "what changed"  # after editing models
+alembic downgrade -1                               # roll back one revision
+```
+
+`migrations/env.py` reads `DATABASE_URL` from the app settings, so run it with
+the same environment file the API uses. Applying it to the production database
+is a deliberate operator action; tests never do it.
+
 ### Frontend scripts
 
 ```sh
@@ -227,7 +243,7 @@ npm run build        # Production files in frontend/dist/
 npm run preview      # Preview the last production build
 npm run format       # Format frontend files with Prettier
 npm run format:check # Check formatting
-npm test             # Node test runner (no frontend tests included yet)
+npm test             # Node test runner (date/format helpers)
 ```
 
 

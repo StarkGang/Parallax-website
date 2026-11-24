@@ -134,7 +134,7 @@ export function AdminLayout() {
         sessionStorage.removeItem('px_cached_config');
       } catch {}
       site.refresh();
-      setSyncToast('Caches purged & synchronized with database!');
+      setSyncToast('Server caches purged. Public pages can lag up to 60s at the edge.');
       setTimeout(() => setSyncToast(null), 3500);
     } catch {
       clearAsyncCache();
@@ -1411,6 +1411,13 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
     e.preventDefault();
     setError(null);
     setResult(null);
+    if (
+      !window.confirm(
+        'Seed passes or registrations directly in the database? This writes real data and is audited.',
+      )
+    ) {
+      return;
+    }
 
     if (!emailOrId.trim()) {
       setError('Please provide participant email or user ID');
@@ -2751,6 +2758,25 @@ export function AdminVerifications() {
               {row.documentName ? (
                 <button className="table-action" onClick={() => openDocument(row.id)}>
                   View Document
+                </button>
+              ) : null}
+              {row.status === 'pending' && row.method === 'college_email' ? (
+                <button
+                  className="table-action"
+                  onClick={async () => {
+                    setMessage(null);
+                    try {
+                      await adminApi.resendVerificationCode(editionId, row.id);
+                      setMessage({
+                        tone: 'success',
+                        text: `A new confirmation code was sent to ${row.fullName}.`,
+                      });
+                    } catch (error) {
+                      setMessage({ tone: 'error', text: error.message });
+                    }
+                  }}
+                >
+                  Resend code
                 </button>
               ) : null}
               {row.status === 'pending' ? (
@@ -4264,6 +4290,7 @@ export function AdminSettings() {
               <button
                 className="table-action danger"
                 onClick={async () => {
+                  if (!window.confirm(`Archive the icon "${icon.name}"? Pages stop showing it.`)) return;
                   try {
                     await adminApi.archiveIcon(editionId, icon.id);
                     await icons.reload();

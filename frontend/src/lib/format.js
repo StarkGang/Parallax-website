@@ -42,12 +42,21 @@ export const fileSize = (bytes) => {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+// Convention dates are always Indian Standard Time, whatever the browser's
+// timezone. Reading the year off a local Date would flip a 31 Dec/1 Jan range
+// into a same-year label for browsers west of IST.
+const istPart = (value, type, options) =>
+  new Intl.DateTimeFormat('en-GB', { ...options, timeZone: IST })
+    .formatToParts(new Date(value))
+    .find((part) => part.type === type)?.value;
+
 export const dateRange = (start, end) => {
   if (!start) return 'Dates to be announced';
   const a = new Date(start);
   const b = end ? new Date(end) : null;
   if (!b) return date(start);
-  const sameYear = a.getFullYear() === b.getFullYear();
+  const sameYear =
+    istPart(a, 'year', { year: 'numeric' }) === istPart(b, 'year', { year: 'numeric' });
   const left = sameYear
     ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', timeZone: IST }).format(a)
     : date(a);
@@ -55,14 +64,33 @@ export const dateRange = (start, end) => {
   return `${left} - ${right}`;
 };
 
+const IST_OFFSET = '+05:30';
+
+/** datetime-local value for an ISO instant, always rendered in IST. */
 export const toLocalInput = (iso) => {
   if (!iso) return '';
   const d = new Date(iso);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (Number.isNaN(d.getTime())) return '';
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: IST,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(d)
+      .map((part) => [part.type, part.value]),
+  );
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
 };
 
-export const fromLocalInput = (value) => (value ? new Date(value).toISOString() : null);
+/** Interpret a datetime-local value as IST rather than the browser's zone. */
+export const fromLocalInput = (value) =>
+  value ? new Date(`${value}:00${IST_OFFSET}`).toISOString() : null;
 
 export const initials = (name = '') =>
   name

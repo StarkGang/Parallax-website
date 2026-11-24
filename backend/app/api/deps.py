@@ -40,14 +40,18 @@ class AuthContext:
         return any(m.role != Role.PARTICIPANT for m in self.memberships)
 
     def role_for(self, edition_id: uuid.UUID | None) -> str | None:
+        # The role that acts *on this edition* comes first: an audit entry for
+        # another edition must not be attributed to super_admin just because
+        # the global grant exists. Global super_admin is only the fallback.
+        if edition_id:
+            for membership in self.memberships:
+                if membership.edition_id == edition_id:
+                    return membership.role
         if any(m.role in {Role.SUPER_ADMIN, "super_admin"} for m in self.memberships):
             return Role.SUPER_ADMIN
         if not edition_id:
             roles = self.roles
             return roles[0] if roles else None
-        for membership in self.memberships:
-            if membership.edition_id == edition_id:
-                return membership.role
         return None
 
     def has(self, permission: str, edition_id: uuid.UUID | None = None) -> bool:
@@ -176,7 +180,13 @@ def require_any_permission(*permissions: str):
         if not any(ctx.has(p, edition_id) for p in permissions):
             raise Forbidden("You do not have access to this action.")
         settings = get_settings()
-        if settings.mfa_enforced and ctx.is_staff and ctx.session.auth_level != "staff_mfa":
+        # Only roles that can actually enrol are challenged; check-in staff and
+        # other roles without an MFA requirement must not hit this wall.
+        if (
+            settings.mfa_enforced
+            and ctx.staff_mfa_required
+            and ctx.session.auth_level != "staff_mfa"
+        ):
             raise Forbidden("Two-factor authentication is required.", code="MFA_REQUIRED")
         return ctx
 
@@ -198,14 +208,6 @@ def require_min_role(*roles: str):
     return dependency
 
 
-def participant_only(ctx: AuthContext = Depends(current_context)) -> AuthContext:
-    if not ctx.memberships:
-        return ctx
-    if all(m.role == Role.PARTICIPANT for m in ctx.memberships):
-        return ctx
-    return ctx
-
-
 async def require_event_access(
     db: AsyncSession, ctx: AuthContext, event_id: uuid.UUID, scope: str, event_edition_id: uuid.UUID
 ) -> None:
@@ -214,10 +216,6 @@ async def require_event_access(
     if event_id in ctx.coordinator_event_ids:
         return
     raise Forbidden("You are not assigned to this event.")
-
-
-def get_db_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
-    return db
 
 
 def unauthenticated() -> None:
@@ -234,7 +232,5 @@ __all__ = [
     "require_permission",
     "require_any_permission",
     "require_min_role",
-    "participant_only",
-    "get_db_session",
     "Role",
 ]

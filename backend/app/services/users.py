@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import NotFound, ValidationFailed
-from app.core.permissions import Role
+from app.core.permissions import Role, requires_mfa
 from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
 from app.core.sessions import revoke_all_sessions
 from app.models.commerce import ConventionPass, Registration
@@ -175,6 +175,21 @@ async def _safe_current_edition(db: AsyncSession) -> ConventionEdition | None:
         return (await db.execute(select(ConventionEdition).limit(1))).scalar_one_or_none()
 
 
+def mask_email(email: str | None) -> str | None:
+    """Hide the local part but keep it recognisable for staff without PII rights."""
+    if not email or "@" not in email:
+        return email
+    local, _, domain = email.partition("@")
+    return f"{local[:1]}***@{domain}"
+
+
+def mask_phone(phone: str | None) -> str | None:
+    if not phone:
+        return phone
+    digits = phone[-4:]
+    return f"***{digits}"
+
+
 async def me_payload(db: AsyncSession, user: User, session: Session) -> MeResponse:
     memberships = list(
         (
@@ -212,6 +227,11 @@ async def me_payload(db: AsyncSession, user: User, session: Session) -> MeRespon
 
     is_complete = await profile_complete(db, user)
     v_status = verification.status if verification else "unverified"
+    settings = get_settings()
+    staff_mfa_role = any(requires_mfa(m.role) for m in memberships)
+    mfa_required = bool(
+        settings.mfa_enforced and staff_mfa_role and session.auth_level != "staff_mfa"
+    )
 
     return MeResponse(
         id=user.id,
@@ -228,7 +248,7 @@ async def me_payload(db: AsyncSession, user: User, session: Session) -> MeRespon
         ],
         auth_level=session.auth_level,
         mfa_enabled=bool(mfa and mfa.status == "active"),
-        mfa_required=False,
+        mfa_required=mfa_required,
         profile_complete=is_complete,
         student_verified=bool(verification and verification.status == "verified"),
         current_edition_id=edition_id,
@@ -341,7 +361,7 @@ async def list_users(
     q: str | None = None,
     page: int = 1,
     page_size: int = 50,
-    include_pii: bool = True,
+    include_pii: bool = False,  # callers must opt in with user.read_pii
 ) -> tuple[list[dict[str, Any]], int]:
     stmt = select(User)
     if edition_id is not None:
@@ -392,36 +412,42 @@ async def list_users(
         ).scalars()
     )
 
+    # Two IN(...) queries instead of two per row: a 50-user page used to cost
+    # 101 round trips.
+    user_ids = [u.id for u in users]
+    profiles: dict[uuid.UUID, ParticipantProfile] = {}
+    roles_by_user: dict[uuid.UUID, list[str]] = {}
+    if user_ids:
+        for profile in (
+            await db.execute(
+                select(ParticipantProfile).where(ParticipantProfile.user_id.in_(user_ids))
+            )
+        ).scalars():
+            profiles[profile.user_id] = profile
+        for user_id, role in (
+            await db.execute(
+                select(EditionMembership.user_id, EditionMembership.role).where(
+                    EditionMembership.user_id.in_(user_ids),
+                    EditionMembership.status == "active",
+                )
+            )
+        ).all():
+            roles_by_user.setdefault(user_id, []).append(role)
+
     out = []
     for u in users:
-        p = (
-            await db.execute(
-                select(ParticipantProfile).where(ParticipantProfile.user_id == u.id)
-            )
-        ).scalar_one_or_none()
-
-        m_roles = list(
-            (
-                await db.execute(
-                    select(EditionMembership.role).where(
-                        EditionMembership.user_id == u.id,
-                        EditionMembership.status == "active",
-                    )
-                )
-            ).scalars()
-        )
-
+        p = profiles.get(u.id)
         out.append(
             {
                 "id": str(u.id),
                 "fullName": u.full_name,
-                "email": u.email,
+                "email": u.email if include_pii else mask_email(u.email),
                 "emailVerified": u.email_verified,
                 "status": u.status,
                 "collegeName": p.college_name if p else None,
-                "phone": u.phone_e164,
+                "phone": u.phone_e164 if include_pii else None,
                 "studentIdentifier": p.student_identifier_last4 if p else None,
-                "roles": m_roles,
+                "roles": roles_by_user.get(u.id, []),
                 "verificationStatus": "unverified",
                 "passStatus": None,
                 "createdAt": u.created_at.isoformat() if u.created_at else None,

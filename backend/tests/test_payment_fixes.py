@@ -217,4 +217,7 @@ async def test_dispatch_payment_telegram_alert_logs_and_never_raises():
 class MagicMockSettings:
     effective_telegram_bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
     effective_telegram_chat_id = "-100123456789"
+    # Actual delivery is suppressed under the test profile; this test opts back
+    # in to prove deduplication, with HTTP mocked below.
+    is_test = False
 
