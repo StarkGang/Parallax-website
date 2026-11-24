@@ -14,6 +14,7 @@ from app.core.errors import Conflict, NotFound
 from app.db.session import get_db
 from app.integrations.storage import get_document_storage
 from app.schemas.registration import (
+    AdminRegistrationDetailsUpdate,
     CategoryChangeDecision,
     RefundAction,
     RegistrationConfigUpdate,
@@ -88,6 +89,8 @@ async def list_registrations(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500, alias="pageSize"),
 ) -> dict:
+    # The desk must see expired requests already enforced, not as live holds.
+    await service.lazy_enforce_for_read(db, edition_id=edition_id)
     rows, total, counts = await service.admin_rows(
         db,
         edition_id,
@@ -116,6 +119,7 @@ async def registration_detail(
     ctx: AuthContext = Depends(require_permission("registration.read")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await service.lazy_enforce_for_read(db, edition_id=edition_id)
     return {"data": await service.admin_detail(db, edition_id, registration_id)}
 
 
@@ -149,6 +153,28 @@ async def document_content(
             "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
         },
     )
+
+
+@router.patch("/{registration_id}/details")
+async def update_details(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    payload: AdminRegistrationDetailsUpdate,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("registration.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await service.registration_by_id(db, edition_id, registration_id)
+    await service.admin_update_details(
+        db,
+        request,
+        row,
+        payload.model_dump(exclude_unset=True),
+        ctx.user,
+        _role(ctx, edition_id),
+    )
+    await db.commit()
+    return {"data": await service.admin_detail(db, edition_id, registration_id)}
 
 
 @router.post("/{registration_id}/notes")
@@ -192,12 +218,10 @@ async def decide(
             reason_code=payload.reason_code,
             reason=payload.reason,
             notes=payload.notes,
-            initiate_refund_workflow=bool(
-                payload.initiate_refund
-                and (
-                    ctx.has("finance.write", edition_id)
-                    or ctx.has_global("finance.write")
-                )
+            initiate_refund_workflow=bool(payload.initiate_refund),
+            can_initiate_refund=bool(
+                ctx.has("finance.write", edition_id)
+                or ctx.has_global("finance.write")
             ),
         )
     await db.commit()

@@ -1,10 +1,12 @@
-"""Admin schemas for dashboard, events, policies, verifications, checkin and users."""
+"""Admin schemas for dashboard, events, policies, checkin and users."""
 
 import uuid
 from datetime import datetime
-from pydantic import Field
+from typing import Literal
 
-from app.schemas.common import CamelModel
+from pydantic import Field, field_validator
+
+from app.schemas.common import CamelModel, StrictCamelModel
 
 
 class Metric(CamelModel):
@@ -17,21 +19,30 @@ class DashboardStats(CamelModel):
     edition_id: uuid.UUID
     edition_name: str
     passes_sold: int = 0
-    passes_pending: int = 0
     revenue_paise: int = 0
     refunded_paise: int = 0
+    net_revenue_paise: int = 0
     registrations_confirmed: int = 0
     registrations_pending: int = 0
     registrations_cancelled: int = 0
-    verifications_pending: int = 0
     checked_in: int = 0
     events_published: int = 0
     events_total: int = 0
     seats_capacity: int = 0
     seats_taken: int = 0
+    # Capacity is per event unit, so the totals are reported per unit as well;
+    # a single number mixed people and teams.
+    capacity_by_unit: dict[str, int] = {}
+    seats_taken_by_unit: dict[str, int] = {}
     recent_registrations: list[dict] = []
     sales_by_day: list[dict] = []
     category_split: list[dict] = []
+    # Attendee logistics for the desk, kitchen and hostel teams.
+    gender_split: list[dict] = []
+    food_split: list[dict] = []
+    accommodation: dict = {}
+    pass_categories: list[dict] = []
+    event_registrations: list[dict] = []
 
 
 class PolicyView(CamelModel):
@@ -56,7 +67,7 @@ class PolicyView(CamelModel):
     created_by_name: str | None = None
 
 
-class PolicyUpdate(CamelModel):
+class PolicyUpdate(StrictCamelModel):
     pass_price_paise: int
     lunch_included_days: list[str] = []
     included_event_count: int
@@ -81,7 +92,7 @@ class PolicyCheck(CamelModel):
     impact: dict = {}
 
 
-class EventUpsert(CamelModel):
+class EventUpsert(StrictCamelModel):
     category_id: uuid.UUID
     slug: str = Field(pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$")
     title: str
@@ -89,6 +100,8 @@ class EventUpsert(CamelModel):
     description_md: str = ""
     rules_md: str = ""
     prizes_md: str = ""
+    solo_guide_md: str = ""
+    team_guide_md: str = ""
     format: str = Field(pattern="^(individual|team)$")
     team_min_size: int = 1
     team_max_size: int = 1
@@ -134,11 +147,10 @@ class EventAdminView(CamelModel):
     venue_room: str | None = None
     banner_url: str | None = None
     price_history: list[dict] = []
-    coordinator_names: list[str] = []
     created_at: datetime
 
 
-class CategoryUpsert(CamelModel):
+class CategoryUpsert(StrictCamelModel):
     name: str
     slug: str = Field(pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$")
     display_order: int = 0
@@ -156,41 +168,20 @@ class AdminUserRow(CamelModel):
     phone: str | None = None
     student_identifier: str | None = None
     roles: list[str] = []
-    verification_status: str = "unverified"
     pass_status: str | None = None
     created_at: datetime
     last_login_at: datetime | None = None
 
 
-class MembershipGrant(CamelModel):
+class MembershipGrant(StrictCamelModel):
     email: str
     role: str = Field(
-        pattern="^(edition_admin|event_coordinator|finance_admin|eligibility_verifier|checkin_staff)$"
+        pattern="^(edition_admin|event_coordinator|finance_admin|checkin_staff)$"
     )
 
 
-class UserStatusUpdate(CamelModel):
+class UserStatusUpdate(StrictCamelModel):
     status: str = Field(pattern="^(active|suspended)$")
-    reason: str | None = None
-
-
-class VerificationRow(CamelModel):
-    id: uuid.UUID
-    user_id: uuid.UUID
-    full_name: str
-    email: str
-    college_name: str | None = None
-    method: str
-    status: str
-    document_name: str | None = None
-    submitted_at: datetime
-    reviewed_at: datetime | None = None
-    rejection_reason: str | None = None
-    student_identifier: str | None = None
-
-
-class VerificationDecision(CamelModel):
-    decision: str = Field(pattern="^(verified|rejected)$")
     reason: str | None = None
 
 
@@ -206,7 +197,7 @@ class PaymentRow(CamelModel):
     paid_at: datetime | None = None
 
 
-class RefundCreate(CamelModel):
+class RefundCreate(StrictCamelModel):
     order_id: uuid.UUID
     amount_paise: int
     reason_code: str
@@ -226,7 +217,46 @@ class RefundRow(CamelModel):
     processed_at: datetime | None = None
 
 
-class AnnouncementUpsert(CamelModel):
+class CustomCredentialUpsert(StrictCamelModel):
+    """Studio card payload. The code is optional: blank means "generate one".
+
+    Length caps mirror the columns, and name/role reject blanks: a card printed
+    with an empty name fails the one job a badge has, which is identifying
+    whoever is wearing it.
+    """
+
+    code: str | None = None
+    # Set when the card is built for a registered attendee. The server keeps one
+    # card per registration, so saving the same attendee again reopens it.
+    registration_id: uuid.UUID | None = None
+    name: str = Field(min_length=1, max_length=120)
+    role: str = Field(min_length=1, max_length=120)
+    college: str | None = Field(default=None, max_length=200)
+    branch: str | None = Field(default=None, max_length=160)
+    tier: str | None = Field(default=None, max_length=120)
+    # Logistics printed on the back face and shown at the desk on scan.
+    gender: Literal["male", "female"] | None = None
+    food_preference: Literal["veg", "non_veg"] | None = None
+    needs_accommodation: bool = False
+    design: dict = Field(default_factory=dict)
+
+    @field_validator("name", "role", mode="before")
+    @classmethod
+    def _require_text(cls, value: object) -> object:
+        """Whitespace is not a name. Reject it before it reaches the printer."""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("must not be blank")
+            return stripped
+        return value
+
+
+class CustomCredentialRevoke(StrictCamelModel):
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class AnnouncementUpsert(StrictCamelModel):
     title: str
     body_md: str
     audience: str = Field(default="public", pattern="^(public|participants|staff)$")
@@ -259,7 +289,7 @@ class AuditRow(CamelModel):
     created_at: datetime
 
 
-class CheckinRequest(CamelModel):
+class CheckinRequest(StrictCamelModel):
     token: str
     event_id: uuid.UUID | None = None
     day: str | None = None
@@ -299,7 +329,7 @@ class IconView(CamelModel):
     url: str
 
 
-class EditionUpdate(CamelModel):
+class EditionUpdate(StrictCamelModel):
     name: str | None = None
     tagline: str | None = None
     venue: str | None = None
@@ -308,37 +338,41 @@ class EditionUpdate(CamelModel):
     ends_at: datetime | None = None
     registration_opens_at: datetime | None = None
     registration_closes_at: datetime | None = None
-    status: str | None = Field(default=None, pattern="^(draft|published|archived)$")
+    status: str | None = Field(
+        default=None, pattern="^(draft|published|open|closed|archived|cancelled)$"
+    )
     contact_email: str | None = None
-    allowed_email_domains: list[str] | None = None
     branding: dict | None = None
 
 
-class AdminForceCancelPayload(CamelModel):
+class AdminForceCancelPayload(StrictCamelModel):
     reason: str = "Removed from event by administration"
+    # Inside the cancellation window the desk has to say so explicitly: the
+    # attendee-facing rule refuses these cancellations for a reason.
+    force: bool = False
     issue_refund: bool = False
     refund_amount_paise: int | None = None
     refund_reason_note: str | None = None
 
 
-class AdminProcessRefundPayload(CamelModel):
+class AdminProcessRefundPayload(StrictCamelModel):
     amount_paise: int | None = None
     reason_note: str | None = None
 
 
-class AdminManualAttendancePayload(CamelModel):
+class AdminManualAttendancePayload(StrictCamelModel):
     user_id: uuid.UUID
     event_id: uuid.UUID | None = None
     day: str | None = None
     note: str | None = None
 
 
-class DbPlaygroundSeedPayload(CamelModel):
+class DbPlaygroundSeedPayload(StrictCamelModel):
     user_email_or_id: str
     target: str = Field(description="'pass' | 'event' | 'both'")
     event_ids: list[uuid.UUID] = Field(default_factory=list)
     reason: str = Field(min_length=3, description="Justification for manual seed/recovery")
-    price_paise: int = 0
+    # The price is taken from the edition policy, never from the request.
     mark_college_reg_approved: bool = True
     payment_reference: str | None = None
 
@@ -359,8 +393,6 @@ __all__ = [
     "AdminUserRow",
     "MembershipGrant",
     "UserStatusUpdate",
-    "VerificationRow",
-    "VerificationDecision",
     "PaymentRow",
     "RefundCreate",
     "RefundRow",
@@ -372,5 +404,7 @@ __all__ = [
     "AttendanceRow",
     "IconView",
     "EditionUpdate",
+    "CustomCredentialUpsert",
+    "CustomCredentialRevoke",
 ]
 

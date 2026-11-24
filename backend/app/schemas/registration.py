@@ -1,33 +1,38 @@
 """Request contracts for college registration, verification and configuration."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import Field, field_validator
 
-from app.schemas.common import CamelModel
+from app.schemas.common import StrictCamelModel
 
 DOC_CODES = {"photo", "college_id", "iste_card"}
 
 
-class DocumentRequirement(CamelModel):
+class DocumentRequirement(StrictCamelModel):
     type: str = Field(min_length=2, max_length=40)
     label: str = Field(min_length=2, max_length=160)
     required: bool = True
 
 
-class RegistrationProfile(CamelModel):
+class RegistrationProfile(StrictCamelModel):
     category_id: uuid.UUID
     full_name: str = Field(min_length=2, max_length=160)
     email: str = Field(max_length=320)
     phone: str | None = Field(default=None, max_length=24)
-    college_name: str = Field(min_length=2, max_length=200)
+    college_name: str = Field(default="", max_length=200)
     course: str | None = Field(default=None, max_length=120)
     branch: str | None = Field(default=None, max_length=120)
     year_of_study: str | None = Field(default=None, max_length=40)
+    date_of_birth: date | None = None
     city: str | None = Field(default=None, max_length=120)
     state: str | None = Field(default=None, max_length=120)
+    # Asked while buying a pass; the desk, kitchen and hostel read them.
+    gender: Literal["male", "female"] | None = None
+    food_preference: Literal["veg", "non_veg"] | None = None
+    needs_accommodation: bool = False
 
     @field_validator("email")
     @classmethod
@@ -38,12 +43,12 @@ class RegistrationProfile(CamelModel):
         return value
 
 
-class CategoryChangeRequest(CamelModel):
+class CategoryChangeRequest(StrictCamelModel):
     category_id: uuid.UUID
     note: str | None = Field(default=None, max_length=1000)
 
 
-class RegistrationDecision(CamelModel):
+class RegistrationDecision(StrictCamelModel):
     decision: Literal["approved", "rejected"]
     reason_code: str | None = Field(default=None, max_length=60)
     reason: str | None = Field(default=None, max_length=2000)
@@ -51,35 +56,35 @@ class RegistrationDecision(CamelModel):
     initiate_refund: bool = True
 
 
-class RequestDocuments(CamelModel):
+class RequestDocuments(StrictCamelModel):
     documents: list[str] = Field(default_factory=list)
     message: str = Field(min_length=3, max_length=2000)
 
 
-class RegistrationNote(CamelModel):
+class RegistrationNote(StrictCamelModel):
     note: str = Field(min_length=1, max_length=2000)
 
 
-class RefundAction(CamelModel):
+class RefundAction(StrictCamelModel):
     action: Literal["initiate", "processing", "completed", "failed", "retry"]
     amount_paise: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=2000)
     gateway_refund_id: str | None = Field(default=None, max_length=120)
 
 
-class PaymentVerification(CamelModel):
+class PaymentVerification(StrictCamelModel):
     order_id: uuid.UUID
     razorpay_payment_id: str = Field(min_length=3, max_length=120)
     razorpay_signature: str = Field(min_length=10, max_length=256)
 
 
-class CategoryChangeDecision(CamelModel):
+class CategoryChangeDecision(StrictCamelModel):
     decision: Literal["approved", "rejected"]
     note: str | None = Field(default=None, max_length=2000)
     settlement: Literal["additional_payment", "refund", "none"] | None = None
 
 
-class NotificationTemplates(CamelModel):
+class NotificationTemplates(StrictCamelModel):
     payment_success: str | None = None
     submitted: str | None = None
     approved: str | None = None
@@ -90,7 +95,7 @@ class NotificationTemplates(CamelModel):
     refund_failed: str | None = None
 
 
-class RegistrationSettingsUpdate(CamelModel):
+class RegistrationSettingsUpdate(StrictCamelModel):
     registration_enabled: bool | None = None
     opens_at: datetime | None = None
     closes_at: datetime | None = None
@@ -119,7 +124,7 @@ class RegistrationSettingsUpdate(CamelModel):
         return cleaned
 
 
-class RegistrationCategoryUpdate(CamelModel):
+class RegistrationCategoryUpdate(StrictCamelModel):
     name: str | None = Field(default=None, min_length=2, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     fee_paise: int | None = Field(default=None, ge=0, le=10_000_000)
@@ -142,14 +147,30 @@ class RegistrationCategoryUpdate(CamelModel):
         return value
 
 
-class RegistrationConfigUpdate(CamelModel):
+class RegistrationConfigUpdate(StrictCamelModel):
     settings: RegistrationSettingsUpdate | None = None
     categories: dict[str, RegistrationCategoryUpdate] = Field(default_factory=dict)
+
+
+class AdminRegistrationDetailsUpdate(StrictCamelModel):
+    full_name: str = Field(min_length=2, max_length=160)
+    phone: str | None = Field(default=None, max_length=24)
+    college_name: str = Field(min_length=2, max_length=200)
+    course: str | None = Field(default=None, max_length=120)
+    branch: str | None = Field(default=None, max_length=120)
+    year_of_study: str | None = Field(default=None, max_length=40)
+    date_of_birth: date | None = None
+    city: str | None = Field(default=None, max_length=120)
+    state: str | None = Field(default=None, max_length=120)
+    gender: Literal["male", "female"] | None = None
+    food_preference: Literal["veg", "non_veg"] | None = None
+    needs_accommodation: bool = False
 
 
 __all__ = [
     "DocumentRequirement",
     "RegistrationProfile",
+    "AdminRegistrationDetailsUpdate",
     "CategoryChangeRequest",
     "RegistrationDecision",
     "RequestDocuments",

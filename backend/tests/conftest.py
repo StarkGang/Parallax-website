@@ -41,6 +41,10 @@ os.environ["SERVER_SECRET_KEY"] = "test-secret-key-that-is-at-least-32-bytes-lon
 os.environ["BOOTSTRAP_OWNER_EMAIL"] = "owner@parallax.local"
 os.environ["DEV_ADMIN_EMAIL"] = "owner@parallax.local"
 os.environ["DEV_PARTICIPANT_EMAIL"] = "participant@parallax.local"
+# A webhook secret lets the payment webhook route run in tests. Payments stay
+# disabled (mock pay paths only); this secret is only consulted by the webhook
+# route, which the registration suite drives with a real HMAC signature.
+os.environ["RAZORPAY_WEBHOOK_SECRET"] = "test_webhook_secret_at_least_16_bytes"
 
 from app.core.config import get_settings
 from app.db.base import Base
@@ -76,6 +80,24 @@ async def test_engine(tmp_path_factory):
     yield engine
 
     await dispose_engine()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def reset_login_and_api_limits(test_engine) -> AsyncGenerator[None, None]:
+    """Start every test with empty limiter counters.
+
+    Tests sign in as the same seeded accounts over and over, so without this the
+    per-email login bucket (20 per 5 minutes) fills up halfway through the suite
+    and unrelated tests fail with 429. Clearing the counters is honest: limits
+    still apply within a test, which is where they are asserted.
+    """
+    from sqlalchemy import delete
+
+    from app.models.commerce import RateLimitCounter
+
+    async with test_engine.begin() as conn:
+        await conn.execute(delete(RateLimitCounter))
+    yield
 
 
 @pytest_asyncio.fixture

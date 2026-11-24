@@ -33,8 +33,6 @@ from app.schemas.public import (
 )
 from app.schemas.participant import (
     CancelRequest,
-    EmailConfirm,
-    PassOrderRequest,
     PassView,
     PaymentOrderView,
     RegistrationView,
@@ -46,8 +44,6 @@ from app.schemas.participant import (
     TeamMemberView,
     TeamView,
     TicketView,
-    VerificationSubmit,
-    VerificationView,
 )
 from app.schemas.admin import (
     AdminUserRow,
@@ -72,8 +68,6 @@ from app.schemas.admin import (
     RefundCreate,
     RefundRow,
     UserStatusUpdate,
-    VerificationDecision,
-    VerificationRow,
 )
 
 __all__ = [
@@ -103,8 +97,6 @@ __all__ = [
     "ScheduleDay",
     "ScheduleItem",
     "CancelRequest",
-    "EmailConfirm",
-    "PassOrderRequest",
     "PassView",
     "PaymentOrderView",
     "RegistrationView",
@@ -116,8 +108,6 @@ __all__ = [
     "TeamMemberView",
     "TeamView",
     "TicketView",
-    "VerificationSubmit",
-    "VerificationView",
     "AdminUserRow",
     "AnnouncementAdminView",
     "AnnouncementUpsert",
@@ -140,7 +130,5 @@ __all__ = [
     "RefundCreate",
     "RefundRow",
     "UserStatusUpdate",
-    "VerificationDecision",
-    "VerificationRow",
 ]
 

@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     # activity, so a stolen session dies after a month at the latest.
     session_idle_ttl_participant_min: int = 480  # 8 hours
     session_absolute_ttl_participant_min: int = 43200  # 30 days
-    session_idle_ttl_staff_min: int = 60  # 1 hour
+    session_idle_ttl_staff_min: int = 1440  # 24 hours
     session_absolute_ttl_staff_min: int = 43200  # 30 days
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
@@ -211,7 +211,9 @@ class Settings(BaseSettings):
     # any capacity they held is released. The background sweep is opt-in so a
     # serverless deployment can drive it from a cron instead.
     unpaid_order_ttl_minutes: int = 60
-    expiry_sweep_enabled: bool = False
+    # Holds and unpaid orders leak when nothing sweeps them, so this is on by
+    # default. Serverless deployments can still disable it and use the cron route.
+    expiry_sweep_enabled: bool = True
     expiry_sweep_interval_seconds: int = 900
 
     # Bootstrap & monitoring

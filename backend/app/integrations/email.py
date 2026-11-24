@@ -1,6 +1,6 @@
 """Transactional emails outbox: background dispatch or mock in dev."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -17,6 +17,9 @@ logger = get_logger("email")
 # A permanently failing address must not be retried forever.
 MAX_ATTEMPTS = 5
 ACTIVE_STATUSES = ("queued", "failed", "pending")
+# Retry backoff, so a provider outage does not burn all five attempts in one
+# dispatch tick. Index is the attempt count that already failed.
+RETRY_DELAYS_SECONDS = (0, 60, 300, 900, 3600)
 
 
 async def enqueue(
@@ -31,14 +34,18 @@ async def enqueue(
     UI claimed a notification had been sent. Returning None keeps the caller
     honest and the outbox clean.
     """
-    if not get_settings().email_available:
+    configured = get_settings().email_available
+    if not configured:
+        # Without a provider the row is still written, as ``skipped``: the desk
+        # can then see that a notification was owed, instead of an empty outbox
+        # while the UI claims the attendee was told.
         logger.debug("email_skipped_not_configured", template=template)
-        return None
     entry = EmailOutbox(
         recipient=recipient,
         template=template,
         payload=payload or {},
-        status="queued",
+        status="queued" if configured else "skipped",
+        scheduled_at=datetime.now(UTC),
     )
     db.add(entry)
     await db.flush()
@@ -56,6 +63,8 @@ async def send_batch(db: AsyncSession, limit: int = 50) -> int:
             await db.execute(
                 select(EmailOutbox)
                 .where(
+                    # Skips are a record of a notification that was owed while no
+                    # provider was configured; they are never sent.
                     EmailOutbox.status.in_(ACTIVE_STATUSES),
                     EmailOutbox.attempts < MAX_ATTEMPTS,
                     EmailOutbox.scheduled_at <= datetime.now(UTC),
@@ -105,20 +114,37 @@ async def send_batch(db: AsyncSession, limit: int = 50) -> int:
             logger.warning("email_send_failed", error=str(exc), recipient=row.recipient)
             row.status = "failed"
             row.last_error = str(exc)[:255]
+            attempts = int(row.attempts or 0)
+            if attempts >= MAX_ATTEMPTS:
+                # Give up loudly: a silently abandoned transactional email means
+                # an attendee never hears about their own registration.
+                try:
+                    from app.services.telegram import send_telegram_alert
+
+                    await send_telegram_alert(
+                        f"Email delivery failed {attempts}x for {row.recipient} "
+                        f"({row.template}): {str(exc)[:160]}"
+                    )
+                except Exception:  # noqa: BLE001 - alerting must not fail the batch
+                    logger.warning("email_failure_alert_not_sent", recipient=row.recipient)
+            else:
+                # Retry later instead of hammering the provider in this tick.
+                delay = RETRY_DELAYS_SECONDS[min(attempts, len(RETRY_DELAYS_SECONDS) - 1)]
+                row.scheduled_at = datetime.now(UTC) + timedelta(seconds=delay)
     await db.commit()
     return sent
 
 
 def _subject(template: str) -> str:
+    # Mirrors ``college_registrations.EMAIL_TEMPLATES``; anything not listed here
+    # falls back to the generic subject below.
     subjects = {
-        "verification_code": "Your Parallax verification code",
-        "pass_confirmed": "Your Parallax pass is confirmed",
-        "registration_confirmed": "Parallax registration confirmed",
         "registration_payment_success": "Parallax payment received",
         "registration_submitted": "Parallax registration submitted for verification",
         "registration_approved": "Your Parallax registration is approved",
         "registration_rejected": "Your Parallax registration needs attention",
         "registration_documents_correction": "Correct your Parallax registration documents",
+        "registration_compliance_enforced": "Your Parallax event seats were released",
         "registration_refund_initiated": "Your Parallax refund has been initiated",
         "registration_refund_completed": "Your Parallax refund is complete",
         "registration_refund_failed": "Your Parallax refund needs review",
@@ -133,17 +159,13 @@ def _body(template: str, payload: dict[str, Any]) -> str:
     The desk templates carry their rendered message, but each one still gets an
     explicit opening line so an email never arrives with only generic copy.
     """
-    if template == "verification_code":
-        return (
-            f"Your verification code is {payload.get('code', '')}.\n\n"
-            "It expires in 10 minutes. If you did not request it, ignore this email."
-        )
     opening = {
         "registration_submitted": "We received your Parallax registration and it is now with the review desk.",
         "registration_payment_success": "Your payment was received and your registration is confirmed.",
         "registration_approved": "Your Parallax registration has been approved.",
         "registration_rejected": "Your Parallax registration needs attention before it can be approved.",
         "registration_documents_correction": "Please upload corrected documents for your Parallax registration.",
+        "registration_compliance_enforced": "The window to answer the registration desk closed, so your event seats and team placement were released.",
         "registration_refund_initiated": "A refund for your Parallax registration has been initiated.",
         "registration_refund_completed": "Your Parallax refund has been completed.",
         "registration_refund_failed": "Your Parallax refund could not be completed and needs review.",

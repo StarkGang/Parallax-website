@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, Timestamps, UUIDPrimaryKey, utcnow
+from app.db.base import Base, Timestamps, UUIDPrimaryKey
 
 
 class ConventionEdition(Base, UUIDPrimaryKey, Timestamps):
@@ -36,13 +36,10 @@ class ConventionEdition(Base, UUIDPrimaryKey, Timestamps):
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     registration_opens_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     registration_closes_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    allowed_email_domains: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     contact_email: Mapped[str | None] = mapped_column(String(320))
     contact_phone: Mapped[str | None] = mapped_column(String(24))
     logo_icon_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("icons.id", ondelete="SET NULL"))
     banner_key: Mapped[str | None] = mapped_column(String(300))
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
@@ -67,10 +64,6 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
         Boolean, default=True, nullable=False
     )
     selection_change_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    group_discount_threshold: Mapped[int | None] = mapped_column(Integer)
-    group_discount_percent: Mapped[int | None] = mapped_column(Integer)
-    allow_free_entry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    allow_team_addon_split: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     team_fee_basis_default: Mapped[str] = mapped_column(String(20), default="flat_per_team", nullable=False)
     hold_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
     refund_rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
@@ -143,6 +136,11 @@ class Event(Base, UUIDPrimaryKey, Timestamps):
     summary: Mapped[str] = mapped_column(String(400), nullable=False)
     description_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
     description_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Per-event participation guides. ``description`` sells the event; these
+    # explain what a solo entrant and a team actually do and get. Admin-editable
+    # prose only - no pricing lives here.
+    solo_guide_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    team_guide_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
     rules_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
     rules_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
     prizes_md: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -184,56 +182,6 @@ class EventPriceHistory(Base, UUIDPrimaryKey, Timestamps):
     new_addon_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reason: Mapped[str | None] = mapped_column(Text)
-
-
-class RosterEntry(Base, UUIDPrimaryKey, Timestamps):
-    __tablename__ = "roster_entries"
-
-    edition_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("convention_editions.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    college: Mapped[str | None] = mapped_column(String(200))
-    student_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    email_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    claimed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
-
-class EligibilityVerification(Base, UUIDPrimaryKey, Timestamps):
-    __tablename__ = "eligibility_verifications"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    edition_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("convention_editions.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    method: Mapped[str] = mapped_column(String(20), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
-    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    document_key: Mapped[str | None] = mapped_column(String(300))
-    document_name: Mapped[str | None] = mapped_column(String(200))
-    notes: Mapped[str | None] = mapped_column(Text)
-    rejection_reason: Mapped[str | None] = mapped_column(Text)
-    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "edition_id", name="uq_verification_user_edition"),
-    )
-
-
-class VerificationEmailCode(Base, UUIDPrimaryKey):
-    __tablename__ = "verification_email_codes"
-
-    verification_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("eligibility_verifications.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Announcement(Base, UUIDPrimaryKey, Timestamps):

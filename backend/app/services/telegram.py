@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import html
 import io
 import time
@@ -17,6 +18,64 @@ logger = structlog.get_logger()
 
 # Telegram text messages cannot exceed 4096 characters
 TELEGRAM_MAX_TEXT_LEN = 4000
+
+_request_tasks: contextvars.ContextVar[set[asyncio.Task] | None] = contextvars.ContextVar(
+    "telegram_request_tasks", default=None
+)
+
+
+def init_telegram_request_scope() -> contextvars.Token:
+    """Create a per-request task set so concurrent requests never wait on each other."""
+    return _request_tasks.set(set())
+
+
+def _swallow_task_exception(task: asyncio.Task) -> None:
+    """Prevent 'Task exception was never retrieved' warnings on secondary alerts."""
+    try:
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.warning("telegram_background_task_error", error=str(exc))
+    except Exception:
+        pass
+
+
+def track_telegram_task(coro, *, name: str = "parallax-telegram") -> asyncio.Task | None:
+    """Schedule a Telegram coroutine and track it in the current request scope."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return None
+    task = loop.create_task(coro, name=name)
+    task.add_done_callback(_swallow_task_exception)
+    bucket = _request_tasks.get()
+    if bucket is not None:
+        bucket.add(task)
+        task.add_done_callback(bucket.discard)
+    return task
+
+
+async def flush_telegram_tasks(
+    token: contextvars.Token | None = None, timeout: float = 1.5
+) -> None:
+    """Await any in-flight Telegram dispatches for this request with a strict time cap."""
+    try:
+        bucket = _request_tasks.get()
+        if bucket:
+            _, pending = await asyncio.wait(list(bucket), timeout=timeout)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+    except Exception:
+        pass
+    finally:
+        if token is not None:
+            try:
+                _request_tasks.reset(token)
+            except Exception:
+                pass
 
 
 async def send_telegram_inquiry(
@@ -199,7 +258,7 @@ _payment_alerts_seen: dict[str, float] = {}
 
 
 async def send_telegram_payment_notification(
-    event_type: str,  # 'initiated' | 'success' | 'failed'
+    event_type: str,  # 'initiated' | 'success' | 'failed' | 'refund'
     order_id: str,
     amount_paise: int,
     purpose: str,
@@ -208,8 +267,10 @@ async def send_telegram_payment_notification(
     attendee_name: str | None = None,
     attendee_email: str | None = None,
     error_message: str | None = None,
+    refund_id: str | None = None,
+    refund_status: str | None = None,
 ) -> dict:
-    """Send real-time payment alerts (initiated, success, failed) to Telegram with deduplication and low timeout."""
+    """Send real-time payment/refund alerts to Telegram with deduplication and low timeout."""
     settings = get_settings()
     bot_token = settings.effective_telegram_bot_token
     chat_id = settings.effective_telegram_chat_id
@@ -259,6 +320,22 @@ async def send_telegram_payment_notification(
             f"📦 <b>Order ID:</b> <code>{safe_order_id}</code>\n"
             f"⏰ <b>Confirmed At:</b> {now_utc}"
         )
+    elif event_type == "refund":
+        safe_refund_id = html.escape(str(refund_id or "—"))
+        safe_refund_status = html.escape(
+            str(refund_status or "processing").replace("_", " ").title()
+        )
+        header = "💸 <b>Refund Initiated</b>"
+        body = (
+            f"👤 <b>Attendee:</b> {safe_name}\n"
+            f"📧 <b>Email:</b> {safe_email}\n"
+            f"💰 <b>Refund Amount:</b> {amount_inr}\n"
+            f"🎯 <b>Purpose:</b> {safe_purpose}\n"
+            f"📦 <b>Order ID:</b> <code>{safe_order_id}</code>\n"
+            f"🧾 <b>Refund ID:</b> <code>{safe_refund_id}</code>\n"
+            f"📌 <b>Refund Status:</b> {safe_refund_status}\n"
+            f"⏰ <b>Requested At:</b> {now_utc}"
+        )
     elif event_type == "failed":
         safe_err = html.escape(str(error_message or "Bank declined or transaction cancelled")[:200])
         header = "⚠️ <b>Payment Attempt Failed</b>"
@@ -304,8 +381,10 @@ def dispatch_payment_telegram_alert(
     attendee_name: str | None = None,
     attendee_email: str | None = None,
     error_message: str | None = None,
+    refund_id: str | None = None,
+    refund_status: str | None = None,
 ) -> None:
-    """Non-blocking, deduplicated payment dispatch suitable for Vercel/serverless environments."""
+    """Non-blocking, deduplicated payment/refund dispatch suitable for Vercel/serverless environments."""
     async def _safe_dispatch_runner() -> None:
         try:
             res = await send_telegram_payment_notification(
@@ -318,6 +397,8 @@ def dispatch_payment_telegram_alert(
                 attendee_name=attendee_name,
                 attendee_email=attendee_email,
                 error_message=error_message,
+                refund_id=refund_id,
+                refund_status=refund_status,
             )
             if not res.get("sent"):
                 logger.warning(
@@ -336,8 +417,7 @@ def dispatch_payment_telegram_alert(
             )
 
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(
+        track_telegram_task(
             _safe_dispatch_runner(),
             name="parallax-payment-telegram-alert",
         )
@@ -396,7 +476,7 @@ async def send_telegram_alert(
     text = "\n".join(lines)[:TELEGRAM_MAX_TEXT_LEN]
     base_url = f"https://api.telegram.org/bot{bot_token}"
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=1.2)) as client:
             res = await client.post(
                 f"{base_url}/sendMessage",
                 json={
@@ -443,15 +523,82 @@ def file_telegram_alert(
         for key in list(_seen_alerts)[:100]:
             _seen_alerts.pop(key, None)
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No event loop (sync context such as a CLI script): drop the alert.
-        return
-
-    loop.create_task(
+    track_telegram_task(
         send_telegram_alert(title, fields, severity=severity, footer=footer),
         name="parallax-telegram-alert",
+    )
+
+
+CRITICAL_AUDIT_ACTIONS: dict[str, tuple[str, str]] = {
+    "user.status_updated": ("👤 User Status Changed", "warning"),
+    "staff.invited": ("🛡️ Staff Invite Created", "warning"),
+    "membership.granted": ("🛡️ Admin Role Granted", "warning"),
+    "registration.cancelled": ("🚫 Event Entry Cancelled", "warning"),
+    "registration.force_cancelled": ("🚫 Registration Force-Cancelled", "warning"),
+    "registration.refunded": ("💸 Registration Refunded", "warning"),
+    "college_registration.created": ("📝 Pass Registration Started", "info"),
+    "college_registration.payment_verified": ("💰 Pass Payment Verified", "info"),
+    "college_registration.approved": ("✅ Pass Registration Approved", "info"),
+    "college_registration.rejected": ("❌ Pass Registration Rejected", "warning"),
+    "college_registration.resubmitted": ("📤 Pass Documents Resubmitted", "info"),
+    "college_registration.documents_requested": ("📄 Resubmission Requested", "info"),
+    "college_registration.compliance_enforced": ("⏱️ Pass Hold Expired and Released", "warning"),
+    "college_registration.category_change_requested": ("🔁 Pass Tier Change Requested", "info"),
+    "college_registration.category_change_rejected": ("🔁 Pass Tier Change Rejected", "warning"),
+    "college_registration.refund_initiated": ("💸 Pass Refund Initiated", "warning"),
+    "college_registration.refund_approved": ("💸 Pass Refund Approved", "warning"),
+    "college_registration.refund_rejected": ("⚠️ Pass Refund Rejected", "warning"),
+    "college_registration.config_updated": ("⚙️ Registration Settings Updated", "info"),
+    "college_registration.config_category_updated": ("⚙️ Pass Tier Config Updated", "info"),
+    "event.upserted": ("📅 Event Created or Updated", "info"),
+    "event.closed_cascade": ("🔒 Event Closed", "warning"),
+    "edition.cancelled_cascade": ("⚠️ Edition Cancelled (cascade)", "critical"),
+    "policy.created": ("⚙️ Registration Policy Created", "info"),
+    "announcement.upserted": ("📣 Announcement Published", "info"),
+    "announcement.deleted": ("📣 Announcement Deleted", "info"),
+    "team.leader_handover": ("👥 Team Leadership Transferred", "info"),
+    "team.admin_disband": ("👥 Team Disbanded by Admin", "warning"),
+    "team.admin_lock_toggle": ("🔒 Team Roster Lock Toggled", "info"),
+    "custom_credential.create": ("🪪 Credential Issued", "info"),
+    "custom_credential.update": ("🪪 Credential Updated", "info"),
+    "custom_credential.revoke": ("🪪 Custom ID Credential Revoked", "warning"),
+    "custom_credential.checkin": ("✅ Credential Checked In", "info"),
+    "attendance.marked_manual": ("✅ Attendance Marked Manually", "info"),
+    "attendance.revoked": ("↩️ Attendance Reversed", "warning"),
+}
+
+
+def notify_critical_audit(
+    *,
+    action: str,
+    resource_type: str,
+    resource_id: str | None,
+    actor_id: object | None,
+    actor_role: str | None,
+    ip_prefix: str | None,
+) -> None:
+    """Best-effort Telegram dispatch for crucial admin/security audit events."""
+    meta = CRITICAL_AUDIT_ACTIONS.get(action)
+    if meta is None:
+        return
+    settings = get_settings()
+    if (
+        not settings.effective_telegram_bot_token
+        or not settings.effective_telegram_chat_id
+        or settings.is_test
+    ):
+        return
+    title, severity = meta
+    fields: dict[str, object] = {
+        "Action": action,
+        "Resource": f"{resource_type} ({resource_id or '—'})",
+        "Actor": f"{actor_id or 'system'} ({actor_role or 'unknown'})",
+    }
+    if ip_prefix:
+        fields["IP"] = ip_prefix
+    track_telegram_task(
+        send_telegram_alert(title, fields, severity=severity, footer="Audit trail"),
+        name=f"parallax-audit-{action}",
     )
 
 

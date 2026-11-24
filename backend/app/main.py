@@ -118,7 +118,22 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             else uuid.uuid4().hex
         )
         request_id_ctx.set(request_id)
-        response: Response = await call_next(request)
+        tg_token = None
+        try:
+            from app.services.telegram import flush_telegram_tasks, init_telegram_request_scope
+
+            tg_token = init_telegram_request_scope()
+        except Exception:
+            pass
+        try:
+            response: Response = await call_next(request)
+        finally:
+            try:
+                from app.services.telegram import flush_telegram_tasks
+
+                await flush_telegram_tasks(tg_token, timeout=1.5)
+            except Exception:
+                pass
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -333,6 +348,13 @@ async def _expiry_sweep_loop(interval_seconds: int) -> None:
         try:
             async with session_scope() as db:
                 await expire_unpaid(db)
+                from app.services.college_registrations import enforce_lapsed_compliance
+                from app.services.idempotency import cleanup as cleanup_idempotency
+                from app.services.users import cleanup_expired_invites
+
+                await enforce_lapsed_compliance(db, limit=50)
+                await cleanup_idempotency(db)
+                await cleanup_expired_invites(db)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - housekeeping must never crash the app
@@ -346,6 +368,16 @@ async def lifespan(app: FastAPI):
     assert_mfa_startable()
     await _bootstrap_local_dev()
     sweep_task = None
+    # One sweep at boot clears whatever accumulated while the process was down.
+    try:
+        from app.services.payments import expire_unpaid
+        from app.services.college_registrations import enforce_lapsed_compliance
+
+        async with session_scope() as sweep_db:
+            await expire_unpaid(sweep_db)
+            await enforce_lapsed_compliance(sweep_db, limit=50)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not block startup
+        logger.warning("startup_expiry_sweep_failed", error=type(exc).__name__)
     if settings.expiry_sweep_enabled:
         sweep_task = asyncio.create_task(
             _expiry_sweep_loop(settings.expiry_sweep_interval_seconds),

@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import EmailStr, Field, field_validator
 
-from app.schemas.common import CamelModel
+from app.schemas.common import CamelModel, StrictCamelModel
 
 
 class RoleGrant(CamelModel):
@@ -24,9 +25,7 @@ class MeResponse(CamelModel):
     mfa_enabled: bool = False
     mfa_required: bool = False
     profile_complete: bool = False
-    student_verified: bool = False
     current_edition_id: uuid.UUID | None = None
-    verification_status: str | None = "unverified"
     created_at: datetime | None = None
 
 
@@ -34,7 +33,7 @@ class MeEnvelope(CamelModel):
     data: MeResponse
 
 
-class DevLoginRequest(CamelModel):
+class DevLoginRequest(StrictCamelModel):
     role: str = "participant"
     email: str | None = None
 
@@ -54,7 +53,7 @@ class SessionInfo(CamelModel):
     current: bool = False
 
 
-class ProfilePatch(CamelModel):
+class ProfilePatch(StrictCamelModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=160)
     phone: str | None = Field(default=None, max_length=24)
     college_name: str | None = Field(default=None, max_length=200)
@@ -62,6 +61,11 @@ class ProfilePatch(CamelModel):
     course: str | None = Field(default=None, max_length=120)
     branch: str | None = Field(default=None, max_length=120)
     year_of_study: int | None = Field(default=None, ge=1, le=6)
+    city: str | None = Field(default=None, max_length=120)
+    state: str | None = Field(default=None, max_length=120)
+    gender: Literal["male", "female"] | None = None
+    food_preference: Literal["veg", "non_veg"] | None = None
+    needs_accommodation: bool | None = None
     student_identifier: str | None = Field(default=None, max_length=60)
     institution_email: str | None = Field(default=None, max_length=320)
 
@@ -85,22 +89,28 @@ class ProfileResponse(CamelModel):
     course: str | None = None
     branch: str | None = None
     year_of_study: int | None = None
+    city: str | None = None
+    state: str | None = None
+    gender: Literal["male", "female"] | None = None
+    food_preference: Literal["veg", "non_veg"] | None = None
+    needs_accommodation: bool = False
     student_identifier_last4: str | None = None
     institution_email: str | None = None
     profile_complete: bool
-    verification_required: bool = True
+    profile_locked: bool = False
 
 
 class MfaSetupResponse(CamelModel):
     otpauth_uri: str
+    secret: str
     secret_preview: str
 
 
-class MfaVerifyRequest(CamelModel):
+class MfaVerifyRequest(StrictCamelModel):
     code: str = Field(min_length=6, max_length=8)
 
 
-class MfaChallengeRequest(CamelModel):
+class MfaChallengeRequest(StrictCamelModel):
     code: str | None = Field(default=None, max_length=8)
     recovery_code: str | None = Field(default=None, max_length=24)
 
@@ -114,7 +124,7 @@ class DeletionRequestResponse(CamelModel):
     message: str
 
 
-class AdminInviteCreate(CamelModel):
+class AdminInviteCreate(StrictCamelModel):
     email: EmailStr
     roles: list[str] = Field(min_length=1)
     edition_id: uuid.UUID | None = None

@@ -200,14 +200,21 @@ keeps the flow optional for this convention.
 ## 6. Roles and permissions
 
 Roles are database memberships, optionally scoped to an edition:
-`super_admin`, `edition_admin`, `finance_admin`, `eligibility_verifier`,
-`event_coordinator`, `checkin_staff`, `participant`.
+`super_admin`, `edition_admin`, `finance_admin`, `event_coordinator`,
+`checkin_staff`, `participant`. (`eligibility_verifier` was retired with the old
+verification feature; the migration converts any leftover row.)
 
 `app/core/permissions.py` owns the permission catalogue and the single
 role → permissions map. Routes declare `require_permission("…")`; there is no
 implicit allow. `super_admin` passes every check. `edition_admin` holds the full
 catalogue except refund approval. Staff roles can be granted per edition with
 `POST /admin/memberships` or invited with `POST /admin/staff-invites`.
+
+An account holds **one staff role per edition**. Granting a second role replaces
+the first (the response names the replaced role), claiming a new invite retires
+the old role, and permission checks read that single role, so a leftover
+duplicate row can never widen what someone can do. `super_admin` is never revoked
+by a grant.
 
 `GET /api/v1/editions/{edition_id}/admin/my-permissions` returns the caller's
 role and effective permissions, which the console uses to shape the UI.
@@ -267,7 +274,9 @@ always references a complete rule set.
 
 Fields that drive behaviour:
 
-- `pass_price_paise` — mandatory per-participant pass price
+- `pass_price_paise` — fallback pass price. Attendees pay their **registration
+  tier** (`registration_categories.fee_paise`); this value only covers manual
+  passes and desk seeding, so never quote it as "the pass price".
 - `lunch_included_days` — e.g. `["day1","day2"]`
 - `included_event_count` + `included_selection_mode` (`exact` or `up_to`)
 - `included_value_cap_paise` + `cap_inclusive` — cap on the sum of **base
@@ -286,8 +295,10 @@ version (optionally overriding a price lock).
 
 ## 9. Pass, selection and registration flows
 
-1. **Pass order** — `POST /editions/{id}/pass/order` creates a `ConventionPass`
-   plus a `PaymentOrder` for `pass_price_paise`.
+1. **Pass purchase** — the college registration *is* the pass purchase. The
+   chosen **registration tier** (`registration_categories.fee_paise`) is
+   snapshotted onto the registration and its `PaymentOrder`; there is no
+   separate pass order anymore.
 2. **Payment** — with payments disabled, `POST
    /editions/{id}/payments/{order_id}/mock` marks the order paid. With Razorpay
    enabled, the browser completes checkout and the webhook (or the status poll)
@@ -331,22 +342,129 @@ leak usable entry credentials.
 `GET /admin/recent-checkins` and `GET /admin/attendance?day=YYYY-MM-DD` power the
 door desk and attendance views.
 
+### Custom credentials (people who are not registrations)
+
+Staff, faculty, sponsors, press and guests have no user account or registration,
+so their badges are stored in `custom_credentials` (`models/credential.py`,
+`services/credentials.py`). Each row is a normal printed ID that the same desk
+accepts for identification.
+
+A card built from a registration (the studio's attendee picker) is linked to it
+and carries **no token of its own**: its QR is the attendee's own entry payload,
+the string their portal pass prints (`entryQr` on the registration and on the
+saved card; `entry_payload` in `services/tickets.py`). Scanning a linked card is
+therefore scanning the attendee's pass — attendance, duplicates, suspensions,
+unpaid upgrades and event rules all come from that one path, and a card cannot
+grant anything the registration does not have. A registration with nothing
+issued yet (unpaid, no number) has no entry payload, so its card prints no QR.
+Unlinked cards keep their own `PXC` token and never admit anyone by themselves.
+
+- Printed ID: `PXC-XXXXXX` (6 characters, alphabet excludes `I O 0 1` so it can
+  be read off a card and typed). Unique per edition; a duplicate returns
+  `409 CREDENTIAL_CODE_TAKEN`, as does an ID that matches a participant's
+  registration number.
+- QR payload: `PXC-<credential uuid hex>-<16 hex signature>`, signed with the
+  same HMAC as tickets, so an edited payload fails resolution instead of
+  admitting someone.
+- `POST /admin/checkin` tries tickets first and falls back to credentials, so one
+  scan box and one camera loop serve both kinds of card. A revoked card returns
+  `409 CREDENTIAL_REVOKED`.
+- `GET /public/c/{value}` resolves either kind and renders a verification page
+  (valid/revoked) for phone cameras, or JSON for API clients.
+
+Routes: `GET|POST /admin/custom-credentials`,
+`PATCH /admin/custom-credentials/{id}` and
+`POST /admin/custom-credentials/{id}/revoke`, all behind `credential.write`
+(super admin and edition admin). Revoking keeps the row as the audit trail and
+blocks printing; editing a revoked card is refused.
+`POST /admin/custom-credentials/photo` stores a card photo and returns its URL.
+The studio uploads there instead of embedding a browser `blob:` URL, which died
+with the tab and left a reprinted card faceless.
+
+Guards the API enforces itself, not just the studio buttons: a blank or
+whitespace-only `name`/`role` is rejected (`422`), fields are trimmed before they
+are stored, lengths match the columns, and `design` is capped at 4 KB of
+serialisable JSON because it is presentation only.
+
+The desk dispatches on the token shape (`PX` for tickets, `PXC` for cards), so
+scanning a studio card costs one query instead of a failed ticket lookup first.
+A hand-typed ID has no required prefix, so the ticket-then-credential fallback
+stays for that case.
+
+### Gender, meal and accommodation
+
+The pass form asks for gender, veg/non-veg and whether the attendee needs
+accommodation, alongside college, branch and year. They are real columns on
+`college_registrations` and on `custom_credentials`, shown at the desk when a QR
+is scanned (`gender`, `foodPreference`, `needsAccommodation` in the check-in
+response).
+
+Storage is one small integer per answer: gender `0` = male, `1` = female; meal
+`0` = veg, `1` = non-veg. Only male and female are offered. The API and the UI
+keep speaking names, encoded and decoded in one place (`core/attendee.py`), so no
+screen invents a third spelling.
+
+- Gender and meal are required by `POST /registration/submit`, the endpoint that
+  creates the payment order. A direct API client cannot buy a pass while
+  skipping them; the answer comes back as `422 MANDATORY_DETAILS_MISSING` with
+  `missingFields: ["Gender", "Meal Preference"]`. They stay optional on the
+  profile endpoint, which doubles as the draft save during document upload.
+- Food and accommodation stay editable after payment: they are logistics the
+  kitchen and hostel need to change, not verified identity. An edit may correct
+  them but never blank them out once the pass is paid, because the counts have
+  already been cooked and allocated. `PUT /registration/profile` is a full
+  replace, so an omitted or null answer is a request to remove it: a paid row
+  answers `409 LOGISTICS_LOCKED` instead of silently keeping the old value.
+- A studio card prints them on the back face ("Female · Veg · Hostel stay") and
+  hides the line when nothing is on record.
+
 ---
 
 ## 11. Verification
 
-Students are verified in three ways (`services/verification.py`):
+There is no separate eligibility-verification service. Student verification
+happens inside the college registration:
 
-| Method | Flow |
+| Document | Purpose |
 | --- | --- |
-| `roster` | Match student identifier/email against the imported eligibility roster. |
-| `college_email` | Send a code to an accepted institutional domain, store its hash, confirm with `POST /verification/confirm`. |
-| `document` | Upload a JPEG/PNG/PDF student document to private storage; staff review it. |
+| `photo` | Passport-size photo printed on the pass and the studio ID card. |
+| `college_id` | Proof the attendee studies at the college they claimed. |
+| `iste_card` | ISTE membership proof, only where the chosen tier asks for it. |
 
-Submission requires a complete profile (college, course, year, student ID).
-Staff see the queue at `GET /admin/verifications`, fetch a short-lived signed
-document URL, and post a decision (`verified`/`rejected` + reason). Rejections
-are resubmittable; decisions update the user's verification status and audit log.
+The participant uploads them at
+`POST /editions/{id}/registration/documents/{doc_type}`. Staff read the queue at
+`GET /admin/registration`, open a document through
+`GET /admin/registration/{registration_id}/documents/{document_id}/content` and
+decide at `POST /admin/registration/{registration_id}/decision` (approve, reject
+or ask for specific documents again). Rejections are resubmittable, and every
+decision is audited.
+
+### 24-hour registration compliance window
+
+When the college-registration desk asks for corrected documents or approves a
+category change that needs a top-up payment, the registration stores a 24-hour
+window in `college_registrations.compliance_kind` / `compliance_deadline_at`.
+The participant dashboard shows a countdown warning and the same request is
+emailed immediately.
+
+An expired window is enforced lazily wherever the data is read, not only when
+the attendee acts: opening the public events catalogue or event detail, the
+participant event-selection page, the participant's registrations/tickets/team
+pages, and the admin dashboard, event, roster and registration screens all run
+a throttled sweep before returning seats or rosters. `lazy_sweep_due` keeps the
+common case to one indexed query per edition every few seconds, and only
+commits when a row was actually enforced. It also runs on the next profile save
+or checkout in that edition, by `POST /admin/maintenance/enforce-compliance`,
+and by the optional background sweep. Enforcement releases every event seat the
+attendee holds, refunds paid event orders (or parks them for finance when the
+gateway fails), and removes them from team rosters. Team leadership moves to the
+next member instead of disbanding an innocent team, so a teammate opening the
+team page sees the change immediately. Team create/join also sweep first so a
+stale roster cannot occupy the last entry. `compliance_enforced_at` is claimed
+with a conditional `UPDATE` inside a savepoint, making enforcement exactly-once
+even when the read sweep and cron run at the same time; after answering the
+request the attendee must select events and join a team again. A rejected pass
+uses the same release path and additionally refunds the pass itself.
 
 ---
 
@@ -405,6 +523,7 @@ All paths are under `/api/v1` unless noted.
 | GET | `/public/editions/{slug}/events/{event_slug}` | Event detail with rendered Markdown |
 | GET | `/public/editions/{slug}/schedule` | Sessions grouped by day |
 | GET | `/public/editions/{slug}/announcements` | Published announcements |
+| GET | `/public/c/{value}` | Ticket or custom-credential verification (HTML for cameras, JSON for clients) |
 | GET | `/public/editions/{slug}/policy` | Current pricing policy |
 | GET | `/public/icons/{icon_id}` | Public icon bytes |
 | GET | `/public/documents/{key}` | Guarded document route |
@@ -428,7 +547,6 @@ All paths are under `/api/v1` unless noted.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/pass` | Pass + selection state |
-| POST | `/pass/order` | Create the pass order |
 | PUT | `/pass/selections` | Save included selections |
 | GET/POST | `/registrations` | List / register add-ons |
 | DELETE | `/registrations/{id}` | Cancel a registration |
@@ -436,8 +554,6 @@ All paths are under `/api/v1` unless noted.
 | POST | `/teams/join` | Join with invite code |
 | DELETE | `/teams/{id}` | Leave a team |
 | POST | `/teams/{id}/rotate-invite` | Rotate the invite code (leader) |
-| GET/POST | `/verification` | Read / submit verification |
-| POST | `/verification/confirm` | Confirm institutional email code |
 | GET | `/tickets`  /  `/tickets/{id}/qr` | Entry tickets and QR |
 | GET | `/payments/{order_id}` | Payment status |
 | POST | `/payments/{order_id}/mock` | Sandbox payment (payments disabled) |
@@ -457,10 +573,11 @@ All paths are under `/api/v1` unless noted.
 | GET/POST | `/memberships`  /  POST `/staff-invites` | Staff access |
 | GET | `/registrations` | Registration records |
 | GET | `/payments`  /  GET/POST `/refunds` | Finance ledger |
-| GET | `/verifications`  /  GET `/verifications/{id}/document`  /  POST `/verifications/{id}/decide` | Review queue |
+| GET | `/registration`  /  GET `/registration/{id}`  /  POST `/registration/{id}/decision` | College registration desk and document review |
 | GET/POST/PATCH/DELETE | `/announcements` | Bulletin |
 | GET | `/audit` | Audit log |
 | POST | `/checkin`  /  GET `/recent-checkins`  /  GET `/attendance` | Door desk |
+| GET/POST/PATCH | `/custom-credentials`  /  POST `/custom-credentials/{id}/revoke`  /  POST `/custom-credentials/photo` | Studio-issued ID cards |
 
 ### Webhooks
 
@@ -505,10 +622,10 @@ Key pages map to endpoints as follows:
 | --- | --- |
 | Home / About / Venue / FAQ / Contact | public edition, events, announcements, policy |
 | Events / Event detail | public categories, events, event detail |
-| Pass | public policy + `POST /pass/order` |
+| Pass | public policy + live registration tiers |
 | Portal overview / pass | `GET /pass`, payments, tickets |
 | Select events | `PUT /pass/selections`, add-on `POST /registrations` |
-| Registrations / Teams / Verification | participant endpoints |
+| Registrations / Teams | participant endpoints |
 | Tickets | `GET /tickets`, QR route |
 | Staff console | the `/admin/*` group, including check-in and audit |
 

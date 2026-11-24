@@ -5,9 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
@@ -28,6 +27,7 @@ from app.schemas.registration import (
 )
 from app.services import college_registrations as service
 from app.services import editions as edition_service
+from app.services import idempotency as idempotency_service
 from app.services import payments as payment_service
 
 router = APIRouter(prefix="/editions/{edition_id}/registration", tags=["registration"])
@@ -47,6 +47,7 @@ async def get_registration(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await _edition(db, edition_id)
+    await service.lazy_enforce_for_read(db, edition_id=edition_id)
     config = await service.public_config(db, edition_id)
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
     notifications = [
@@ -182,6 +183,7 @@ async def document_content(
 async def submit_registration(
     edition_id: uuid.UUID,
     request: Request,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -193,10 +195,17 @@ async def submit_registration(
             code="PAYMENTS_NOT_CONFIGURED",
             status_code=503,
         )
+    # A retried or double-clicked submit must not create a second payable order.
+    replay_payload = {"editionId": str(edition_id), "route": "submit"}
+    cached = await idempotency_service.replay(
+        db, ctx.user.id, "registration.submit", idempotency_key, replay_payload
+    )
+    if cached is not None:
+        return cached[1]
     row, order = await service.submit_for_payment(db, request, ctx.user, edition)
     await db.commit()
     view = await service.serialize_registration(db, row)
-    return {
+    out = {
         "data": {
             "registration": view,
             "payment": (
@@ -212,6 +221,11 @@ async def submit_registration(
             ),
         }
     }
+    await idempotency_service.store(
+        db, ctx.user.id, "registration.submit", idempotency_key, replay_payload, out
+    )
+    await db.commit()
+    return out
 
 
 @router.post("/payment/verify", dependencies=[Depends(limiter("registration_payment_verify", 20, 60))])
@@ -391,33 +405,22 @@ async def _qr_payload(
     is a frontend concern, so no SVG is generated or served here.
     """
     from app.services import tickets as ticket_service
+
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    reg_num = row.registration_number if row and row.registration_number else f"PRX-{str(ctx.user.id)[:6].upper()}"
-    # Behind a proxy request.base_url can be an internal host; the configured
-    # public origin is authoritative. Only fall back to the request in dev.
-    settings = get_settings()
-    base_url = (
-        (settings.app_base_url or settings.frontend_origin or "").rstrip("/")
-        or str(request.base_url).rstrip("/")
+    base_url = ticket_service.entry_base_url(str(request.base_url).rstrip("/"))
+    # One definition, shared with the ID card studio: paid means the pass ticket,
+    # otherwise the signed public code.
+    token = await ticket_service.registration_entry_payload(db, row, base_url=base_url)
+    if token:
+        return token
+    # Nothing issued yet: the portal still shows a code for the desk to read,
+    # signed so the public page cannot be enumerated.
+    reg_num = (
+        row.registration_number
+        if row and row.registration_number
+        else f"PRX-{str(ctx.user.id)[:6].upper()}"
     )
-    # Signed code, not the bare registration number: the public verification
-    # page must not be enumerable.
-    token = f"{base_url}/c/{ticket_service.public_registration_code(reg_num)}"
-    if row and row.payment_status in {"paid", "completed"}:
-        from app.models.commerce import ConventionPass
-        user_pass = (
-            await db.execute(
-                select(ConventionPass).where(
-                    ConventionPass.user_id == ctx.user.id,
-                    ConventionPass.edition_id == edition_id,
-                ).order_by(ConventionPass.created_at.desc()).limit(1)
-            )
-        ).scalars().first()
-        if user_pass:
-            ticket = await ticket_service._existing_for_pass(db, ctx.user.id, user_pass.id)
-            if ticket:
-                token = f"{base_url}/c/{ticket_service.ticket_token_for(ticket.id)}"
-    return token
+    return f"{base_url}/c/{ticket_service.public_registration_code(reg_num)}"
 
 
 @router.get(

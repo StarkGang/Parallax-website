@@ -156,24 +156,13 @@ async def test_mark_order_paid_is_idempotent(db_session: AsyncSession):
     )
     db_session.add(order)
     await db_session.flush()
-    user_pass = ConventionPass(
-        edition_id=order.edition_id,
-        user_id=order.user_id,
-        price_paise=50000,
-        policy_version=1,
-        status="pending",
-    )
-    db_session.add(user_pass)
+    # A historic purpose="pass" order is no longer fulfilled: no entitlement is
+    # activated, the money is parked for finance. The idempotency guarantee (one
+    # transaction row, one refund request, paid exactly once) still holds.
+    await payments.mark_order_paid(db_session, order, transaction_id="pay_dup_1")
     await db_session.flush()
-    order.linked_record_id = user_pass.id
+    await payments.mark_order_paid(db_session, order, transaction_id="pay_dup_1")
     await db_session.flush()
-
-    issue = AsyncMock()
-    with patch("app.services.payments.issue_for_pass", issue):
-        await payments.mark_order_paid(db_session, order, transaction_id="pay_dup_1")
-        await db_session.flush()
-        await payments.mark_order_paid(db_session, order, transaction_id="pay_dup_1")
-        await db_session.flush()
 
     count = await db_session.scalar(
         select(func.count())
@@ -182,8 +171,14 @@ async def test_mark_order_paid_is_idempotent(db_session: AsyncSession):
     )
     assert count == 1
     assert order.status == "paid"
-    assert issue.await_count == 1
-    assert user_pass.status == "active"
+    parked = list(
+        (
+            await db_session.execute(select(Refund).where(Refund.order_id == order.id))
+        ).scalars()
+    )
+    assert len(parked) == 1
+    assert parked[0].status == "pending"
+    assert parked[0].amount_paise == order.amount_paise
 
 
 @pytest.mark.asyncio

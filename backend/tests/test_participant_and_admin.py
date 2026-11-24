@@ -1,11 +1,20 @@
 """Tests for participant workflow and admin portal operations."""
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from app.models.user import User
+from app.services.editions import current_policy
+from app.services.passes import activate_pass_for_registration
 
 
 @pytest.mark.asyncio
-async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient):
+async def test_participant_pass_flow_and_tickets(
+    participant_client: AsyncClient, db_session
+):
     client = participant_client
 
     # Get current edition
@@ -17,32 +26,42 @@ async def test_participant_pass_flow_and_tickets(participant_client: AsyncClient
     p_resp = await client.get(f"/api/v1/editions/{edition_id}/pass")
     assert p_resp.status_code == 200
 
-    # 2. Create pass order
-    order_resp = await client.post(f"/api/v1/editions/{edition_id}/pass/order")
-    assert order_resp.status_code == 200
-    order_data = order_resp.json()["data"]
-    order_id = order_data["orderId"]
-    assert order_data["amountPaise"] == 50000
+    # 2. Activate the pass exactly the way the college-registration flow does:
+    #    the college registration IS the convention-pass purchase, and its
+    #    verification mirrors a pass + entry ticket into the pass tables.
+    user = (
+        (
+            await db_session.execute(
+                select(User).where(
+                    User.email_normalized == "participant@parallax.local"
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert user is not None
+    policy = await current_policy(db_session, uuid.UUID(edition_id))
+    user_pass = await activate_pass_for_registration(
+        db_session, user.id, uuid.UUID(edition_id), policy, 50000
+    )
+    await db_session.commit()
+    assert user_pass is not None and user_pass.status == "active"
 
-    # 3. Pay for order via mock
-    pay_resp = await client.post(f"/api/v1/editions/{edition_id}/payments/{order_id}/mock")
-    assert pay_resp.status_code == 200
-    assert pay_resp.json()["data"]["paid"] is True
-
-    # 4. Check pass is now active
+    # 3. Check pass is now active (via the API)
     active_pass_resp = await client.get(f"/api/v1/editions/{edition_id}/pass")
     assert active_pass_resp.status_code == 200
     pass_data = active_pass_resp.json()["data"]
     assert pass_data["status"] == "active"
 
-    # 5. Check ticket issued
+    # 4. Check ticket issued
     tkt_resp = await client.get(f"/api/v1/editions/{edition_id}/tickets")
     assert tkt_resp.status_code == 200
     tickets = tkt_resp.json()["data"]
     assert len(tickets) >= 1
     assert tickets[0]["kind"] == "pass"
 
-    # 6. ID-card pass redirects to the interactive frontend view.
+    # 5. ID-card pass redirects to the interactive frontend view.
     card_resp = await client.get(
         f"/api/v1/editions/{edition_id}/registration/pass-card",
         follow_redirects=False,

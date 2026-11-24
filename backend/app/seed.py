@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.permissions import Role
 from app.models.edition import (
     Announcement,
     ConventionEdition,
@@ -427,7 +428,6 @@ async def seed_if_empty(db: AsyncSession) -> None:
             registration_closes_at=datetime(2027, 1, 8, 3, 30, tzinfo=UTC),
             status="published",
             contact_email="iste@nssce.ac.in",
-            allowed_email_domains=["nssce.ac.in", "gmail.com"],
         )
         db.add(edition)
         await db.flush()
@@ -595,7 +595,9 @@ async def seed_if_empty(db: AsyncSession) -> None:
             EditionMembership(
                 user_id=admin_user.id,
                 edition_id=edition.id,
-                role="owner",
+                # "owner" is not in core.permissions.Role, so the seeded
+                # account could sign in and do nothing at all.
+                role=Role.SUPER_ADMIN.value,
                 status="active",
             )
         )

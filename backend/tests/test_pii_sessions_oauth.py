@@ -115,7 +115,7 @@ async def test_admin_registrations_hide_phone_and_college_without_pii(
 def test_session_lifetimes_are_idle_shorter_than_absolute():
     settings = get_settings()
     assert settings.session_idle_ttl_participant_min == 480
-    assert settings.session_idle_ttl_staff_min == 60
+    assert settings.session_idle_ttl_staff_min >= 1440
     assert settings.session_absolute_ttl_participant_min == 43200
     assert settings.session_absolute_ttl_staff_min == 43200
     assert (

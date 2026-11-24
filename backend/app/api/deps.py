@@ -11,17 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.csrf import enforce_csrf
 from app.core.errors import Forbidden, NotFound, StepUpRequired, Unauthenticated
-from app.core.permissions import Role, STEP_UP_ACTIONS, has_permission, requires_mfa
+from app.core.permissions import (
+    Role,
+    STEP_UP_ACTIONS,
+    has_permission,
+    highest_role,
+    requires_mfa,
+)
 from app.core.sessions import SessionContext, resolve_session
 from app.db.session import get_db
 from app.models.user import (
     EditionMembership,
-    EventCoordinatorAssignment,
     Session,
     User,
 )
 
-STEP_UP_WINDOW = timedelta(minutes=5)
+STEP_UP_WINDOW = timedelta(minutes=15)
 
 
 @dataclass
@@ -29,7 +34,6 @@ class AuthContext:
     user: User
     session: Session
     memberships: list[EditionMembership] = field(default_factory=list)
-    coordinator_event_ids: set[uuid.UUID] = field(default_factory=set)
 
     @property
     def roles(self) -> list[str]:
@@ -43,28 +47,28 @@ class AuthContext:
         # The role that acts *on this edition* comes first: an audit entry for
         # another edition must not be attributed to super_admin just because
         # the global grant exists. Global super_admin is only the fallback.
+        # One role per edition: a leftover duplicate grant must not stack.
         if edition_id:
-            for membership in self.memberships:
-                if membership.edition_id == edition_id:
-                    return membership.role
+            scoped = [m.role for m in self.memberships if m.edition_id == edition_id]
+            if scoped:
+                return highest_role(scoped)
         if any(m.role in {Role.SUPER_ADMIN, "super_admin"} for m in self.memberships):
             return Role.SUPER_ADMIN
         if not edition_id:
-            roles = self.roles
-            return roles[0] if roles else None
+            return highest_role(self.roles)
         return None
 
     def has(self, permission: str, edition_id: uuid.UUID | None = None) -> bool:
-        for membership in self.memberships:
-            if membership.role in {Role.SUPER_ADMIN, "super_admin"}:
-                return True
-            if edition_id and membership.edition_id != edition_id:
-                continue
-            if has_permission(membership.role, permission):
-                return True
-            if membership.role == Role.PARTICIPANT and permission.startswith("self."):
-                return True
-        return False
+        if any(m.role in {Role.SUPER_ADMIN, "super_admin"} for m in self.memberships):
+            return True
+        if permission.startswith("self.") and any(
+            m.role in {Role.PARTICIPANT, "participant"} for m in self.memberships
+        ):
+            return True
+        # Per-edition permissions come from that edition's single role, so a
+        # stale stacked grant cannot widen the account's reach.
+        role = self.role_for(edition_id)
+        return bool(role) and has_permission(role, permission)
 
     def has_global(self, permission: str) -> bool:
         if any(m.role in {Role.SUPER_ADMIN, "super_admin"} for m in self.memberships):
@@ -106,20 +110,10 @@ async def current_context(
             )
         ).scalars()
     )
-    assignments = list(
-        (
-            await db.execute(
-                select(EventCoordinatorAssignment.event_id).where(
-                    EventCoordinatorAssignment.user_id == resolved.user.id
-                )
-            )
-        ).scalars()
-    )
     return AuthContext(
         user=resolved.user,
         session=resolved.session,
         memberships=memberships,
-        coordinator_event_ids=set(assignments),
     )
 
 
@@ -163,9 +157,11 @@ def require_permission(permission: str, *, step_up: bool = False, mfa: bool = Fa
                         "Two-factor authentication is required for staff accounts.",
                         code="MFA_REQUIRED",
                     )
-            if step_up or permission in STEP_UP_ACTIONS:
-                if ctx.staff_mfa_required and not ctx.step_up_fresh:
-                    raise StepUpRequired("Confirm your authenticator code to continue.")
+            # Step-up is only required on mutating/destructive HTTP methods, never for read-only navigation (GET/HEAD)
+            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                if step_up or permission in STEP_UP_ACTIONS:
+                    if ctx.staff_mfa_required and not ctx.step_up_fresh:
+                        raise StepUpRequired("Confirm your authenticator code to continue.")
         request.state.actor_role = ctx.role_for(edition_id) or (ctx.roles[0] if ctx.roles else None)
         return ctx
 
@@ -208,16 +204,6 @@ def require_min_role(*roles: str):
     return dependency
 
 
-async def require_event_access(
-    db: AsyncSession, ctx: AuthContext, event_id: uuid.UUID, scope: str, event_edition_id: uuid.UUID
-) -> None:
-    if ctx.has(scope, event_edition_id):
-        return
-    if event_id in ctx.coordinator_event_ids:
-        return
-    raise Forbidden("You are not assigned to this event.")
-
-
 def unauthenticated() -> None:
     raise Unauthenticated("Sign in to continue.")
 
@@ -228,7 +214,6 @@ __all__ = [
     "current_user",
     "edition_id_from_request",
     "optional_context",
-    "require_event_access",
     "require_permission",
     "require_any_permission",
     "require_min_role",

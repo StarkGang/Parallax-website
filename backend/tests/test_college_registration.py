@@ -57,6 +57,8 @@ async def _profile(
             "course": "B.Tech",
             "branch": "Computer Science",
             "yearOfStudy": "3",
+            "gender": "male",
+            "foodPreference": "veg",
             "city": "Palakkad",
             "state": "Kerala",
         },
@@ -681,3 +683,102 @@ async def test_paid_registration_unlocks_pass_ticket_events_and_teams(
     )
     assert created.status_code == 200, created.text
     assert created.json()["data"]["inviteCode"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_pass_stays_dead_no_resurrection_or_booking(client: AsyncClient, db_session):
+    """After a rejection the pass must stay dead: no resurrection on the next
+    portal visit, no event selection, no add-on purchase, no team creation,
+    and no document-correction detour that would un-reject the registration.
+    """
+    edition_id = await _edition_id(client)
+    email = "rejected.gate@test.local"
+    await _login(client, email)
+    registration = await _register_paid(
+        client, edition_id, email=email, category_code="polytechnic"
+    )
+    reg_id = registration["id"]
+
+    slug = (await client.get("/api/v1/public/editions/current")).json()["data"]["slug"]
+    events = (await client.get(f"/api/v1/public/editions/{slug}/events?pageSize=100")).json()["data"]
+    individual = [e for e in events if e["format"] == "individual"]
+    team_event = next(e for e in events if e["format"] == "team")
+
+    # The attendee forms a team while their pass is still active.
+    created_team = await client.post(
+        f"/api/v1/editions/{edition_id}/teams",
+        json={"eventId": team_event["id"], "name": "Doomed Squad"},
+    )
+    assert created_team.status_code == 200, created_team.text
+
+    # Admin rejects WITHOUT refund.
+    await _login(client, "owner@parallax.local", role="admin")
+    rejected = await client.post(
+        f"/api/v1/editions/{edition_id}/admin/registration/{reg_id}/decision",
+        json={
+            "decision": "rejected",
+            "reasonCode": "invalid_document",
+            "reason": "Proof unreadable.",
+            "initiateRefund": False,
+        },
+    )
+    assert rejected.status_code == 200, rejected.text
+
+    # Back as the participant: the pass must not resurrect on read...
+    await _login(client, email)
+    pass_view = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
+    assert pass_view["status"] == "cancelled"
+
+    # ...event selection is blocked...
+    selection = await client.put(
+        f"/api/v1/editions/{edition_id}/pass/selections",
+        json={"eventIds": [e["id"] for e in individual[:2]]},
+    )
+    assert selection.status_code == 409, selection.text
+    assert selection.json()["error"]["code"] == "PASS_BLOCKED"
+
+    # ...paid add-on booking is blocked...
+    addon = await client.post(
+        f"/api/v1/editions/{edition_id}/registrations",
+        json={"eventIds": [individual[0]["id"]]},
+    )
+    assert addon.status_code == 409, addon.text
+    assert addon.json()["error"]["code"] == "PASS_BLOCKED"
+
+    # ...and team creation is blocked.
+    team = await client.post(
+        f"/api/v1/editions/{edition_id}/teams",
+        json={"eventId": team_event["id"], "name": "Dead Pass Squad"},
+    )
+    assert team.status_code in (403, 409, 422), team.text
+
+    # A team that existed BEFORE the rejection is disbanded: a rejected
+    # attendee cannot stay on a roster.
+    teams_after = (await client.get(f"/api/v1/editions/{edition_id}/teams")).json()["data"]
+    assert all(t["status"] == "disbanded" for t in teams_after)
+
+    # The desk cannot un-reject via "request documents".
+    await _login(client, "owner@parallax.local", role="admin")
+    docs = await client.post(
+        f"/api/v1/editions/{edition_id}/admin/registration/{reg_id}/request-documents",
+        json={"documents": ["college_id"], "message": "Send a clearer scan."},
+    )
+    assert docs.status_code == 409, docs.text
+    assert docs.json()["error"]["code"] == "ALREADY_REJECTED"
+
+    # Approving after a rejection is the legitimate undo path: it must bring
+    # the pass back to active.
+    approved = await client.post(
+        f"/api/v1/editions/{edition_id}/admin/registration/{reg_id}/decision",
+        json={"decision": "approved", "notes": "Reconsidered: document was legible."},
+    )
+    assert approved.status_code == 200, approved.text
+
+    await _login(client, email)
+    pass_view = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
+    assert pass_view["status"] == "active"
+    selection = await client.put(
+        f"/api/v1/editions/{edition_id}/pass/selections",
+        json={"eventIds": [e["id"] for e in individual[:2]]},
+    )
+    assert selection.status_code == 200, selection.text

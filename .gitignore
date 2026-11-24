@@ -119,3 +119,9 @@ idcard-*.png
 qr-brand-*.png
 ui-gallery-*.png
 render.html
+/shots
+
+
+# Local audit notes (read-only reviews, not shipped)
+/docs/audits/
+AUDIT*.md

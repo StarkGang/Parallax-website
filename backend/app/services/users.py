@@ -8,13 +8,14 @@ from fastapi import Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.attendee import decode_food, decode_gender, encode_food, encode_gender
 from app.core.config import get_settings
-from app.core.errors import NotFound, ValidationFailed
+from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role, requires_mfa
-from app.core.security import decrypt_pii, encrypt_pii, hash_token, new_token
+from app.core.security import encrypt_pii, hash_token, new_token
 from app.core.sessions import revoke_all_sessions
 from app.models.commerce import ConventionPass, Registration
-from app.models.edition import ConventionEdition, EligibilityVerification
+from app.models.edition import ConventionEdition
 from app.models.user import (
     EditionMembership,
     MfaCredential,
@@ -26,7 +27,6 @@ from app.models.user import (
 from app.schemas.auth import MeResponse, RoleGrant
 from app.services.audit import record
 from app.services.editions import current_edition
-from app.services.verification import profile_complete
 
 
 def normalize_email(email: str) -> str:
@@ -98,8 +98,18 @@ async def upsert_google_user(
 
 
 async def apply_bootstrap_and_invites(
-    db: AsyncSession, user: User, request: Request | None = None
+    db: AsyncSession,
+    user: User,
+    request: Request | None = None,
+    invite_token: str | None = None,
 ) -> None:
+    """Grant the bootstrap owner and claim the invite the user actually opened.
+
+    Signing in used to claim *every* open invite for the email address, so a
+    person who was only invited as check-in staff also received the super-admin
+    invite sitting unused in the same address's inbox. A role now requires the
+    token from its own link.
+    """
     settings = get_settings()
     owner = normalize_email(settings.bootstrap_owner_email) if settings.bootstrap_owner_email else ""
 
@@ -129,12 +139,16 @@ async def apply_bootstrap_and_invites(
                 )
                 await db.flush()
 
-    # 2. Check pending staff invites for user's email
+    # 2. Claim the invite whose token this browser presented, and only that one.
+    token = (invite_token or "").strip()
+    if not token:
+        return
     invites = list(
         (
             await db.execute(
                 select(StaffInvite).where(
                     StaffInvite.email_normalized == user.email_normalized,
+                    StaffInvite.token_hash == hash_token(token),
                     StaffInvite.claimed_at.is_(None),
                     StaffInvite.expires_at > datetime.now(UTC),
                 )
@@ -153,6 +167,24 @@ async def apply_bootstrap_and_invites(
             )
         ).scalar_one_or_none()
 
+        # One staff role per edition: claiming an invite for a new role retires
+        # the old one instead of stacking a second permission set on the account.
+        others = list(
+            (
+                await db.execute(
+                    select(EditionMembership).where(
+                        EditionMembership.user_id == user.id,
+                        EditionMembership.edition_id == invite.edition_id,
+                        EditionMembership.status == "active",
+                        EditionMembership.role.notin_(invite.roles),
+                        EditionMembership.role != Role.SUPER_ADMIN,
+                    )
+                )
+            ).scalars()
+        )
+        for row in others:
+            await db.delete(row)
+
         if existing_m is None:
             db.add(
                 EditionMembership(
@@ -162,9 +194,28 @@ async def apply_bootstrap_and_invites(
                     status="active",
                 )
             )
+        else:
+            existing_m.status = "active"
         invite.claimed_at = datetime.now(UTC)
         invite.claimed_by = user.id
         await db.flush()
+
+
+async def cleanup_expired_invites(db: AsyncSession) -> int:
+    """Delete invites that expired unclaimed.
+
+    Nothing swept them, so the table grew forever and the admin screen kept
+    listing invitations nobody could use.
+    """
+    from sqlalchemy import delete
+
+    result = await db.execute(
+        delete(StaffInvite).where(
+            StaffInvite.claimed_at.is_(None),
+            StaffInvite.expires_at < datetime.now(UTC),
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 async def _safe_current_edition(db: AsyncSession) -> ConventionEdition | None:
@@ -175,19 +226,27 @@ async def _safe_current_edition(db: AsyncSession) -> ConventionEdition | None:
         return (await db.execute(select(ConventionEdition).limit(1))).scalar_one_or_none()
 
 
+async def profile_complete(db: AsyncSession, user: User) -> bool:
+    """True when the attendee has the college details an ID card needs."""
+    profile = await db.scalar(
+        select(ParticipantProfile).where(ParticipantProfile.user_id == user.id)
+    )
+    if profile is None:
+        return False
+    return bool(
+        user.full_name
+        and profile.college_name
+        and profile.course
+        and profile.year_of_study
+    )
+
+
 def mask_email(email: str | None) -> str | None:
     """Hide the local part but keep it recognisable for staff without PII rights."""
     if not email or "@" not in email:
         return email
     local, _, domain = email.partition("@")
     return f"{local[:1]}***@{domain}"
-
-
-def mask_phone(phone: str | None) -> str | None:
-    if not phone:
-        return phone
-    digits = phone[-4:]
-    return f"***{digits}"
 
 
 async def me_payload(db: AsyncSession, user: User, session: Session) -> MeResponse:
@@ -205,17 +264,6 @@ async def me_payload(db: AsyncSession, user: User, session: Session) -> MeRespon
     edition = await _safe_current_edition(db)
     edition_id = edition.id if edition else None
 
-    verification = None
-    if edition_id:
-        verification = (
-            await db.execute(
-                select(EligibilityVerification).where(
-                    EligibilityVerification.user_id == user.id,
-                    EligibilityVerification.edition_id == edition_id,
-                )
-            )
-        ).scalar_one_or_none()
-
     mfa = (
         await db.execute(
             select(MfaCredential).where(
@@ -226,7 +274,6 @@ async def me_payload(db: AsyncSession, user: User, session: Session) -> MeRespon
     ).scalar_one_or_none()
 
     is_complete = await profile_complete(db, user)
-    v_status = verification.status if verification else "unverified"
     settings = get_settings()
     staff_mfa_role = any(requires_mfa(m.role) for m in memberships)
     mfa_required = bool(
@@ -250,9 +297,7 @@ async def me_payload(db: AsyncSession, user: User, session: Session) -> MeRespon
         mfa_enabled=bool(mfa and mfa.status == "active"),
         mfa_required=mfa_required,
         profile_complete=is_complete,
-        student_verified=bool(verification and verification.status == "verified"),
         current_edition_id=edition_id,
-        verification_status=v_status,
         created_at=user.created_at,
     )
 
@@ -287,19 +332,23 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
             profile.college_name = profile.college_name or registration.college_name
             profile.course = profile.course or registration.course
             profile.branch = profile.branch or registration.branch
+            profile.city = profile.city or registration.city
+            profile.state = profile.state or registration.state
+            if profile.gender is None:
+                profile.gender = registration.gender
+            if profile.food_preference is None:
+                profile.food_preference = registration.food_preference
+            if not profile.needs_accommodation and registration.needs_accommodation:
+                profile.needs_accommodation = True
             if profile.year_of_study is None and registration.year_of_study:
                 try:
                     profile.year_of_study = int(str(registration.year_of_study).strip()[:1])
                 except (TypeError, ValueError):
                     pass
 
-    identifier = None
-    if profile and profile.student_identifier_enc:
-        try:
-            identifier = decrypt_pii(profile.student_identifier_enc)
-        except Exception:
-            identifier = None
-
+    # The full student identifier is deliberately not returned: the profile
+    # form no longer collects or displays it, and shipping a decrypted PII
+    # value to the browser for no reason is not worth the risk.
     return {
         "fullName": user.full_name,
         "email": user.email,
@@ -309,17 +358,57 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
         "course": profile.course if profile else None,
         "branch": profile.branch if profile else None,
         "yearOfStudy": profile.year_of_study if profile else None,
-        "studentIdentifier": identifier,
+        "city": profile.city if profile else None,
+        "state": profile.state if profile else None,
+        "gender": decode_gender(profile.gender) if profile else None,
+        "foodPreference": decode_food(profile.food_preference) if profile else None,
+        "needsAccommodation": bool(profile.needs_accommodation) if profile else False,
         "studentIdentifierLast4": profile.student_identifier_last4 if profile else None,
         "institutionEmail": profile.institution_email if profile else None,
         "profileComplete": await profile_complete(db, user),
-        "verificationRequired": True,
+        "profileLocked": await is_profile_locked(db, user.id),
     }
+
+
+async def is_profile_locked(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    """True once the user has paid for a registration or holds an active pass.
+
+    Before payment, the profile remains editable. Once payment is done and the
+    pass is bought, self-service profile edits are locked so identity, meal
+    and accommodation stay consistent with the kitchen, hostel and ID check.
+    """
+    from app.models.registration import CollegeRegistration
+
+    has_paid_reg = await db.scalar(
+        select(CollegeRegistration.id)
+        .where(
+            CollegeRegistration.user_id == user_id,
+            CollegeRegistration.payment_status.in_(["paid", "completed"]),
+            CollegeRegistration.verification_status != "cancelled",
+        )
+        .limit(1)
+    )
+    if has_paid_reg is not None:
+        return True
+    has_pass = await db.scalar(
+        select(ConventionPass.id)
+        .where(
+            ConventionPass.user_id == user_id,
+            ConventionPass.status == "active",
+        )
+        .limit(1)
+    )
+    return has_pass is not None
 
 
 async def update_profile(
     db: AsyncSession, request: Request, user: User, payload: dict[str, Any]
 ) -> dict[str, Any]:
+    if await is_profile_locked(db, user.id):
+        raise Conflict(
+            "Your profile is locked after registering or paying. Ask the organiser desk to update your details.",
+            code="PROFILE_LOCKED",
+        )
     profile = (
         await db.execute(
             select(ParticipantProfile).where(ParticipantProfile.user_id == user.id)
@@ -344,6 +433,16 @@ async def update_profile(
         profile.branch = payload["branch"]
     if "yearOfStudy" in payload:
         profile.year_of_study = payload["yearOfStudy"]
+    if "city" in payload:
+        profile.city = payload["city"]
+    if "state" in payload:
+        profile.state = payload["state"]
+    if "gender" in payload:
+        profile.gender = encode_gender(payload["gender"])
+    if "foodPreference" in payload:
+        profile.food_preference = encode_food(payload["foodPreference"])
+    if "needsAccommodation" in payload and payload["needsAccommodation"] is not None:
+        profile.needs_accommodation = bool(payload["needsAccommodation"])
     if "studentIdentifier" in payload and payload["studentIdentifier"]:
         raw_id = str(payload["studentIdentifier"]).strip()
         profile.student_identifier_enc = encrypt_pii(raw_id)
@@ -364,32 +463,6 @@ async def list_users(
     include_pii: bool = False,  # callers must opt in with user.read_pii
 ) -> tuple[list[dict[str, Any]], int]:
     stmt = select(User)
-    if edition_id is not None:
-        # An edition's staff may only browse people who actually touch that edition.
-        stmt = stmt.where(
-            or_(
-                User.id.in_(
-                    select(EditionMembership.user_id).where(
-                        EditionMembership.edition_id == edition_id
-                    )
-                ),
-                User.id.in_(
-                    select(ConventionPass.user_id).where(
-                        ConventionPass.edition_id == edition_id
-                    )
-                ),
-                User.id.in_(
-                    select(Registration.user_id).where(
-                        Registration.edition_id == edition_id
-                    )
-                ),
-                User.id.in_(
-                    select(EligibilityVerification.user_id).where(
-                        EligibilityVerification.edition_id == edition_id
-                    )
-                ),
-            )
-        )
     if q:
         needle = f"%{q.strip().lower()}%"
         stmt = stmt.where(
@@ -405,18 +478,18 @@ async def list_users(
     users = list(
         (
             await db.execute(
-                stmt.order_by(User.created_at.desc())
+                stmt.order_by(User.last_login_at.desc().nullslast(), User.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
         ).scalars()
     )
 
-    # Two IN(...) queries instead of two per row: a 50-user page used to cost
-    # 101 round trips.
     user_ids = [u.id for u in users]
     profiles: dict[uuid.UUID, ParticipantProfile] = {}
     roles_by_user: dict[uuid.UUID, list[str]] = {}
+    pass_statuses: dict[uuid.UUID, str] = {}
+    reg_counts: dict[uuid.UUID, int] = {}
     if user_ids:
         for profile in (
             await db.execute(
@@ -433,6 +506,42 @@ async def list_users(
             )
         ).all():
             roles_by_user.setdefault(user_id, []).append(role)
+        pass_stmt = select(ConventionPass.user_id, ConventionPass.status).where(
+            ConventionPass.user_id.in_(user_ids)
+        )
+        if edition_id:
+            pass_stmt = pass_stmt.where(ConventionPass.edition_id == edition_id)
+        for user_id, p_status in (
+            await db.execute(pass_stmt.order_by(ConventionPass.created_at.desc()))
+        ).all():
+            if user_id not in pass_statuses:
+                pass_statuses[user_id] = p_status
+
+        from app.models.registration import CollegeRegistration
+
+        cr_stmt = select(
+            CollegeRegistration.user_id, CollegeRegistration.verification_status
+        ).where(CollegeRegistration.user_id.in_(user_ids))
+        if edition_id:
+            cr_stmt = cr_stmt.where(CollegeRegistration.edition_id == edition_id)
+        for user_id, cr_status in (
+            await db.execute(cr_stmt.order_by(CollegeRegistration.created_at.desc()))
+        ).all():
+            if user_id not in pass_statuses and cr_status:
+                pass_statuses[user_id] = cr_status
+
+        reg_stmt = (
+            select(Registration.user_id, func.count(Registration.id))
+            .where(
+                Registration.user_id.in_(user_ids),
+                Registration.status != "cancelled",
+            )
+            .group_by(Registration.user_id)
+        )
+        if edition_id:
+            reg_stmt = reg_stmt.where(Registration.edition_id == edition_id)
+        for user_id, cnt in (await db.execute(reg_stmt)).all():
+            reg_counts[user_id] = int(cnt or 0)
 
     out = []
     for u in users:
@@ -445,11 +554,16 @@ async def list_users(
                 "emailVerified": u.email_verified,
                 "status": u.status,
                 "collegeName": p.college_name if p else None,
+                "course": p.course if p else None,
+                "branch": p.branch if p else None,
+                "yearOfStudy": p.year_of_study if p else None,
+                "city": p.city if p else None,
+                "state": p.state if p else None,
                 "phone": u.phone_e164 if include_pii else None,
                 "studentIdentifier": p.student_identifier_last4 if p else None,
                 "roles": roles_by_user.get(u.id, []),
-                "verificationStatus": "unverified",
-                "passStatus": None,
+                "passStatus": pass_statuses.get(u.id),
+                "eventCount": reg_counts.get(u.id, 0),
                 "createdAt": u.created_at.isoformat() if u.created_at else None,
                 "lastLoginAt": u.last_login_at.isoformat() if u.last_login_at else None,
             }
@@ -472,7 +586,82 @@ async def set_status(
         raise NotFound("User not found.")
     user.status = status
     if status == "suspended":
-        await revoke_all_sessions(db, user_id)
+        # revoke_all_sessions takes a reason; omitting it made every suspension
+        # a 500 before the status was even written.
+        await revoke_all_sessions(db, user_id, "account_suspended")
+        from app.services.passes import release_event_entitlements
+        from app.services.tickets import revoke_for_pass
+
+        passes = (
+            await db.execute(
+                select(ConventionPass).where(
+                    ConventionPass.user_id == user_id,
+                    ConventionPass.status.in_(["active", "pending", "suspended"]),
+                )
+            )
+        ).scalars().all()
+        edition_ids = list(
+            (
+                await db.execute(
+                    select(Registration.edition_id)
+                    .where(Registration.user_id == user_id)
+                    .distinct()
+                )
+            ).scalars()
+        )
+        # Suspending the account has to suspend the pass itself, not just the
+        # seats: an "active" pass kept the portal listing a valid pass and let
+        # the door scan it after the account was suspended.
+        for p in passes:
+            if p.status in ("active", "pending"):
+                p.status = "suspended"
+            await revoke_for_pass(db, p.id)
+        pass_editions = [p.edition_id for p in passes]
+        for eid in set(edition_ids + pass_editions):
+            await release_event_entitlements(
+                db,
+                user_id=user_id,
+                edition_id=eid,
+                reason=f"Account suspended by administration: {reason or 'Violation of convention policy'}",
+                actor_id=actor_id,
+            )
+    elif status == "active":
+        from app.models.registration import CollegeRegistration
+        from app.services.tickets import issue_for_pass
+
+        passes = (
+            await db.execute(
+                select(ConventionPass).where(
+                    ConventionPass.user_id == user_id,
+                    ConventionPass.status == "suspended",
+                )
+            )
+        ).scalars().all()
+        for p in passes:
+            # Re-activating the account must not hand back a pass that was
+            # rejected or refunded while the account was suspended.
+            dead = (
+                await db.execute(
+                    select(CollegeRegistration.id).where(
+                        CollegeRegistration.user_id == user_id,
+                        CollegeRegistration.edition_id == p.edition_id,
+                        (
+                            (CollegeRegistration.payment_status == "refunded")
+                            | (CollegeRegistration.verification_status == "rejected")
+                            | (
+                                CollegeRegistration.refund_status.in_(
+                                    ["initiated", "processing", "completed"]
+                                )
+                            )
+                        ),
+                    )
+                )
+            ).scalars().first()
+            if dead is not None:
+                p.status = "cancelled"
+                continue
+            p.status = "active"
+            await issue_for_pass(db, p)
     await record(
         db,
         request,
@@ -531,7 +720,17 @@ async def grant_membership(
     edition_id: uuid.UUID,
     actor_id: uuid.UUID | None = None,
     actor_role: str | None = None,
-) -> EditionMembership:
+) -> tuple[EditionMembership, list[str]]:
+    """Give one account exactly one staff role for this edition.
+
+    Granting used to stack: an event coordinator granted finance admin ended up
+    with both permission sets, and the console listed the same person twice, so
+    nobody could tell what a teammate was actually allowed to do. A new grant
+    now replaces the previous staff role; ``super_admin`` is never removed here,
+    because locking out the owner is how an edition becomes unmanageable.
+
+    Returns the membership and the roles it replaced.
+    """
     norm = normalize_email(email)
     user = (
         await db.execute(select(User).where(User.email_normalized == norm))
@@ -549,6 +748,27 @@ async def grant_membership(
             )
         )
     ).scalar_one_or_none()
+
+    # Retire every other staff role for this account in this edition.
+    others = list(
+        (
+            await db.execute(
+                select(EditionMembership).where(
+                    EditionMembership.user_id == user.id,
+                    EditionMembership.edition_id == edition_id,
+                    EditionMembership.status == "active",
+                    EditionMembership.role != role,
+                    EditionMembership.role != Role.SUPER_ADMIN,
+                )
+            )
+        ).scalars()
+    )
+    replaced = [row.role for row in others]
+    for row in others:
+        # Deleted, not flagged: a revoked row still shows up in raw table dumps
+        # and in the unique (user, edition, role) key, and the audit log already
+        # keeps the history of what was granted when.
+        await db.delete(row)
 
     if membership is None:
         membership = EditionMembership(
@@ -568,10 +788,10 @@ async def grant_membership(
         actor_role=actor_role,
         action="membership.granted",
         resource_type="membership",
-        after={"email": email, "role": role},
+        after={"email": email, "role": role, "replacedRoles": replaced},
     )
     await db.flush()
-    return membership
+    return membership, replaced
 
 
 async def my_sessions(
@@ -612,6 +832,58 @@ async def revoke_own_session(
 
 
 async def request_deletion(db: AsyncSession, user: User) -> None:
+    """Close the account without leaving paid entitlements behind.
+
+    This is not wired to a route yet. It used to flip a status nobody read, so
+    an account that asked for deletion kept a live pass and held seats. Sessions
+    already refuse any non-active status; this also releases the seats, revokes
+    the tickets and cancels the entry pass so nothing is left to honour.
+    """
+    from app.models.commerce import ConventionPass, PaymentOrder, Registration
+    from app.services.tickets import revoke_for_pass, revoke_for_registration
+
+    regs = list(
+        (
+            await db.execute(
+                select(Registration).where(
+                    Registration.user_id == user.id,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalars()
+    )
+    for reg in regs:
+        reg.status = "cancelled"
+        reg.cancelled_at = datetime.now(UTC)
+        reg.cancelled_by = "admin"
+        reg.cancellation_reason = "Account deletion requested"
+        await revoke_for_registration(db, reg.id)
+
+    passes = list(
+        (
+            await db.execute(
+                select(ConventionPass).where(ConventionPass.user_id == user.id)
+            )
+        ).scalars()
+    )
+    for user_pass in passes:
+        if user_pass.status == "active":
+            user_pass.status = "cancelled"
+            await revoke_for_pass(db, user_pass.id)
+
+    orders = list(
+        (
+            await db.execute(
+                select(PaymentOrder).where(
+                    PaymentOrder.user_id == user.id,
+                    PaymentOrder.status == "created",
+                )
+            )
+        ).scalars()
+    )
+    for order in orders:
+        order.status = "expired"
+
     user.status = "deletion_requested"
     await db.flush()
 

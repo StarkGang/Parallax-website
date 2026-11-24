@@ -33,7 +33,6 @@ class ConventionPass(Base, UUIDPrimaryKey, Timestamps):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     lunch_days: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("payment_orders.id", ondelete="SET NULL"))
 
     __table_args__ = (
         Index(
@@ -77,6 +76,19 @@ class Team(Base, UUIDPrimaryKey, Timestamps):
     invite_code_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="forming", nullable=False)
     max_size: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    min_size: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # ``solo|forming|ready|locked|disbanded``. ``status`` stays the roster gate
+    # (live/locked/disbanded) because every existing query reads it; this column
+    # says how far the roster is through formation.
+    formation_state: Mapped[str] = mapped_column(String(20), default="forming", nullable=False)
+    # The team owns its entry payment (``per_team``) so a leader leaving cannot
+    # orphan an order that already admitted the rest of the roster.
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_orders.id", ondelete="SET NULL"), index=True
+    )
+    paid_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class TeamMember(Base, UUIDPrimaryKey, Timestamps):
@@ -91,6 +103,7 @@ class TeamMember(Base, UUIDPrimaryKey, Timestamps):
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     is_leader: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_member"),)
 
@@ -109,6 +122,11 @@ class Registration(Base, UUIDPrimaryKey, Timestamps):
     )
     team_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), index=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Why this seat has this price: ``included|free|addon|team_per_team|
+    # team_per_participant``. Frozen at confirmation so a later allowance
+    # repack can never silently re-price a seat the attendee already holds.
+    price_basis: Mapped[str | None] = mapped_column(String(24))
+    quote_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
     fee_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="confirmed", nullable=False)
     reservation_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -117,6 +135,40 @@ class Registration(Base, UUIDPrimaryKey, Timestamps):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[str | None] = mapped_column(String(20), default=None)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class EventQuote(Base, UUIDPrimaryKey, Timestamps):
+    """A server-priced basket.
+
+    The worklist no longer computes money in the browser: it posts a set of
+    event ids, gets this row back, and checkout charges exactly ``due_paise``.
+    Keeping the quote as a real row is what makes "pay the difference"
+    auditable and idempotent.
+    """
+
+    __tablename__ = "event_quotes"
+
+    edition_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("convention_editions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lines: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    covered_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    due_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_orders.id", ondelete="SET NULL")
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_event_quote_user_status", "user_id", "status"),
+        Index("uq_event_quote_idempotency", "user_id", "idempotency_key", unique=True),
+    )
 
 
 class PaymentOrder(Base, UUIDPrimaryKey, Timestamps):
@@ -137,7 +189,6 @@ class PaymentOrder(Base, UUIDPrimaryKey, Timestamps):
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     notes: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PaymentTransaction(Base, UUIDPrimaryKey, Timestamps):
@@ -222,7 +273,21 @@ class AttendanceRecord(Base, UUIDPrimaryKey):
     device_label: Mapped[str | None] = mapped_column(String(80))
     result: Mapped[str] = mapped_column(String(20), default="admitted", nullable=False)
 
-    __table_args__ = (UniqueConstraint("user_id", "event_id", "day", name="uq_attendance"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_id", "day", name="uq_attendance"),
+        # A pass-level scan has no event, and SQL treats NULLs as distinct, so
+        # the constraint above cannot dedupe it at all: two scanners on one pass
+        # both inserted. A partial unique index covers that case.
+        Index(
+            "uq_attendance_pass_day",
+            "user_id",
+            "edition_id",
+            "day",
+            unique=True,
+            postgresql_where=text("event_id IS NULL"),
+            sqlite_where=text("event_id IS NULL"),
+        ),
+    )
 
 
 class IdempotencyKey(Base, UUIDPrimaryKey):

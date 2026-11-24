@@ -118,6 +118,39 @@ from app.schemas.auth import (
 )
 
 from app.services import users as user_service
+from app.services.telegram import send_telegram_alert, track_telegram_task
+
+
+def _notify_login(
+    user: User,
+    request: Request,
+    *,
+    method: str,
+    is_staff: bool,
+    roles: list[str] | None = None,
+) -> None:
+    """Queue a non-blocking Telegram notification for user or staff sign-in."""
+    try:
+        ip = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
+        role_label = ", ".join(r for r in (roles or []) if r != "participant") or "participant"
+        title = "Staff Sign-In" if is_staff else "User Sign-In"
+        track_telegram_task(
+            send_telegram_alert(
+                title=title,
+                fields={
+                    "User": f"{user.full_name or user.email} ({user.email})",
+                    "Method": method,
+                    "Role": role_label,
+                    "IP": ip,
+                },
+                severity="info",
+            )
+        )
+    except Exception:
+        pass
 
 
 
@@ -289,7 +322,9 @@ def resolve_google_redirect_uri(request: Request | None = None) -> str:
 
 
 @router.get("/google/login", dependencies=[Depends(limiter("auth_login", 20, 600))])
-async def google_login(request: Request, next: str = Query("/portal")) -> Response:
+async def google_login(
+    request: Request, next: str = Query("/portal"), invite: str | None = Query(None)
+) -> Response:
     settings = get_settings()
     if not settings.google_configured:
         return _fail_redirect("google_not_configured")
@@ -305,6 +340,9 @@ async def google_login(request: Request, next: str = Query("/portal")) -> Respon
         "verifier": verifier,
         "redirect_uri": redirect_uri,
         "next": valid_next(next),
+        # The staff invite token travels in the signed state, so the callback can
+        # claim exactly the invitation this person opened.
+        "invite": (invite or "")[:200],
         "issued": int(datetime.now(UTC).timestamp()),
     }
     state_token = _sign(state_payload)
@@ -419,7 +457,9 @@ async def google_callback(
             raise ValueError("email not verified")
 
         user, _created = await user_service.upsert_google_user(db, claims=claims, request=request)
-        await user_service.apply_bootstrap_and_invites(db, user, request=request)
+        await user_service.apply_bootstrap_and_invites(
+            db, user, request=request, invite_token=(data or {}).get("invite")
+        )
     except Exception as exc:
         security_event("signin_failed", error=type(exc).__name__)
         await db.rollback()
@@ -435,6 +475,7 @@ async def google_callback(
         session.auth_level = "staff_mfa" if is_staff else "basic"
         session.mfa_verified_at = datetime.now(UTC)
     await db.commit()
+    _notify_login(user, request, method="Google OAuth", is_staff=is_staff, roles=roles)
 
 
 
@@ -504,10 +545,11 @@ async def dev_login(
     else:
         await ensure_dev_participant(db, user)
     session, token = await create_session(db, user, request, is_staff=role == "admin")
-    if role == "admin":
+    if role == "admin" and not settings.mfa_enforced:
         session.auth_level = "staff_mfa"
         session.mfa_verified_at = datetime.now(UTC)
     await db.commit()
+    _notify_login(user, request, method="Dev Login", is_staff=(role == "admin"), roles=[role])
     target = valid_next(next)
     response = RedirectResponse(f"{settings.frontend_origin}{target}", status_code=302)
     set_session_cookie(response, token, is_staff=role == "admin")
@@ -694,56 +736,51 @@ async def _staff_credential(db: AsyncSession, user_id: uuid.UUID) -> MfaCredenti
 )
 
 async def mfa_setup(
-
-    ctx: AuthContext = Depends(current_context), db: AsyncSession = Depends(get_db)
-
+    reset: bool = False,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
 ) -> MfaSetupResponse:
-
     if not any(requires_mfa(role) for role in ctx.roles):
-
         raise Forbidden("Two-factor authentication is for staff accounts.")
 
-    secret = pyotp.random_base32()
-
     credential = await db.scalar(
-
         select(MfaCredential).where(MfaCredential.user_id == ctx.user.id)
-
     )
 
     if credential and credential.status == "active":
-
         raise AppError("An authenticator is already active.", code="MFA_ALREADY_ACTIVE", status_code=409)
 
-    if credential is None:
+    secret = None
+    if credential and credential.secret_encrypted and credential.status == "pending" and not reset:
+        try:
+            secret = decrypt_secret(credential.secret_encrypted)
+        except Exception:
+            secret = None
 
-        credential = MfaCredential(user_id=ctx.user.id, secret_encrypted=encrypt_secret(secret))
-
-        db.add(credential)
-
-    else:
-
-        credential.secret_encrypted = encrypt_secret(secret)
-
-        credential.status = "pending"
-
-    await db.commit()
+    if not secret:
+        secret = pyotp.random_base32()
+        if credential is None:
+            credential = MfaCredential(user_id=ctx.user.id, secret_encrypted=encrypt_secret(secret), status="pending")
+            db.add(credential)
+        else:
+            credential.secret_encrypted = encrypt_secret(secret)
+            credential.status = "pending"
+        await db.commit()
 
     uri = pyotp.TOTP(secret).provisioning_uri(
-
         name=ctx.user.email, issuer_name="Parallax ISTE Convention"
-
     )
 
-    return MfaSetupResponse(otpauth_uri=uri, secret_preview=f"{secret[:4]}…{secret[-4:]}")
-
-
-
+    return MfaSetupResponse(
+        otpauth_uri=uri,
+        secret=secret,
+        secret_preview=f"{secret[:4]}…{secret[-4:]}",
+    )
 
 
 def _verify_totp(secret: str, code: str) -> bool:
-
-    return bool(pyotp.TOTP(secret).verify(code.strip(), valid_window=1))
+    clean_code = code.strip().replace(" ", "").replace("-", "")
+    return bool(pyotp.TOTP(secret).verify(clean_code, valid_window=2))
 
 
 
@@ -802,7 +839,6 @@ async def mfa_verify(
 ) -> Response:
 
     credential = await _staff_credential(db, ctx.user.id)
-
     secret = decrypt_secret(credential.secret_encrypted)
 
     if not secret or not _verify_totp(secret, payload.code):
@@ -937,6 +973,15 @@ async def mfa_step_up(
 
     credential = await _staff_credential(db, ctx.user.id)
 
+    if credential.status != "active":
+        # A half-enrolled authenticator has a secret but no confirmation. Letting
+        # it step up handed a fresh MFA window to an unverified factor.
+        raise AppError(
+            "Finish enrolling your authenticator before stepping up.",
+            code="MFA_NOT_ACTIVE",
+            status_code=409,
+        )
+
     secret = decrypt_secret(credential.secret_encrypted)
 
     ok = False
@@ -957,7 +1002,7 @@ async def mfa_step_up(
 
     await db.commit()
 
-    return {"data": {"stepUp": True, "expiresInSeconds": 300}}
+    return {"data": {"stepUp": True, "expiresInSeconds": 900}}
 
 
 
@@ -1009,7 +1054,9 @@ async def direct_login(
     is_admin_configured = bool(settings.admin_email and email == settings.admin_email.lower())
     if is_owner or is_admin_configured:
         await ensure_dev_admin(db, user)
-    await user_service.apply_bootstrap_and_invites(db, user, request=request)
+    await user_service.apply_bootstrap_and_invites(
+        db, user, request=request, invite_token=request.query_params.get("invite")
+    )
     roles = await user_service_roles(db, user.id)
     is_staff = any(r != "participant" for r in roles)
     session, token = await create_session(db, user, request, is_staff=is_staff)
@@ -1017,9 +1064,11 @@ async def direct_login(
         session.auth_level = "staff_mfa" if is_staff else "basic"
         session.mfa_verified_at = datetime.now(UTC)
     await db.commit()
+    _notify_login(user, request, method="Direct Login", is_staff=is_staff, roles=roles)
+    # The session lives in an HttpOnly cookie; returning it in the body undid
+    # that protection for any script or log that could read the response.
     resp = JSONResponse({
         "data": {
-            "token": token,
             "user": {
                 "id": str(user.id),
                 "email": user.email,

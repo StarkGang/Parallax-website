@@ -86,15 +86,14 @@ After sign-in, `/portal` gives an overview and links to participant tools.
 
 | Route | Description |
 |---|---|
-| `/portal/pass` | Pass status and price, start a pass order, configured payment flow |
+| `/portal/pass` | Pass status and included-event allowance (the pass is bought with the college registration tier) |
 | `/portal/select-events` | Choose included events within the selection count and base-value cap (validated by the server) |
 | `/portal/registrations` | List registrations; cancel when policy and state allow |
 | `/portal/tickets` | Issued tickets with QR codes for entry |
 | `/portal/teams` | Create or join a team, manage invite code, leave a team |
-| `/portal/verification` | Student verification status and email/document submission |
 | `/portal/profile` | View and edit profile details supported by the API |
 
-The portal also shows pass, profile, and verification status, and provides sign-out. Staff accounts can switch between participant and staff views.
+The portal also shows pass, profile and registration status, and provides sign-out. Staff accounts can switch between participant and staff views.
 
 ### Staff console
 
@@ -264,8 +263,8 @@ npm test             # Node test runner (date/format helpers)
 
 - Public: `/`, `/about`, `/events`, `/events/:eventSlug`, `/pass`, `/schedule`, `/venue`, `/faq`, `/contact`
 - Auth: `/login`
-- Participant: `/portal`, `/portal/pass`, `/portal/select-events`, `/portal/registrations`, `/portal/tickets`, `/portal/teams`, `/portal/verification`, `/portal/profile`
-- Staff: `/manage`, `/manage/events`, `/manage/policy`, `/manage/registrations`, `/manage/users`, `/manage/verifications`, `/manage/payments`, `/manage/check-in`, `/manage/announcements`, `/manage/attendance`, `/manage/audit`, `/manage/settings`
+- Participant: `/portal`, `/portal/pass`, `/portal/select-events`, `/portal/registrations`, `/portal/tickets`, `/portal/teams`, `/portal/profile`
+- Staff: `/manage`, `/manage/events`, `/manage/policy`, `/manage/registrations`, `/manage/users`, `/manage/payments`, `/manage/check-in`, `/manage/id-cards`, `/manage/announcements`, `/manage/attendance`, `/manage/audit`, `/manage/settings`
 
 ---
 

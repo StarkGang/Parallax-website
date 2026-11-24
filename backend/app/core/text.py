@@ -55,13 +55,6 @@ def render_markdown(source: str | None, *, max_chars: int = 20000) -> str:
     )
 
 
-def plain_text(source: str | None, *, limit: int = 200) -> str:
-    if not source:
-        return ""
-    cleaned = nh3.clean(source, tags=set(), attributes={})
-    return " ".join(cleaned.split())[:limit]
-
-
 def safe_filename(value: str | None, *, fallback: str = "document.bin") -> str:
     """Strip characters that can break or inject into Content-Disposition."""
     cleaned = "".join(

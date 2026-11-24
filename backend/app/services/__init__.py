@@ -13,7 +13,6 @@ from app.services import (
     teams,
     tickets,
     users,
-    verification,
 )
 
 __all__ = [
@@ -29,6 +28,5 @@ __all__ = [
     "teams",
     "tickets",
     "users",
-    "verification",
 ]
 

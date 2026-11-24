@@ -20,11 +20,13 @@ from pathlib import Path
 
 from fastapi import Request
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from defusedxml import ElementTree
+
+from xml.etree import ElementTree as StdElementTree
 
 from PIL import Image
 
@@ -32,17 +34,47 @@ from PIL import Image
 
 from app.core.config import get_settings
 
-from app.core.errors import AppError, ValidationFailed
+from app.core.errors import Conflict, AppError, ValidationFailed
 
 from app.core.logging import get_logger
 
-from app.models.edition import Icon
+from app.integrations.storage import get_storage
+
+from app.models.edition import Event, Icon
 
 from app.services.audit import record
 
 
 
 ICON_ASSETS = Path(__file__).resolve().parent.parent / "assets" / "icons"
+
+# Icons belong in the object bucket next to the event banners, not in the
+# database: a bytea column meant every icon render was a database round trip,
+# backups carried megabytes of artwork, and the API had to stream images out
+# of Postgres. The column stays only as a fallback for rows written before;
+# new uploads are content-addressed objects.
+ICON_EXTENSIONS = {"image/svg+xml": "svg", "image/png": "png"}
+
+
+def icon_storage_key(edition_id: uuid.UUID, digest: str, mime: str) -> str:
+    ext = ICON_EXTENSIONS.get(mime, "bin")
+    return f"icons/{edition_id}/{digest}.{ext}"
+
+
+async def store_icon_bytes(
+    edition_id: uuid.UUID, payload: bytes, mime: str, digest: str
+) -> str | None:
+    """Upload the sanitised bytes; return the key, or None if the bucket is down.
+
+    A storage outage must not lose an icon the organiser just uploaded, so the
+    caller falls back to the column and the public route serves either.
+    """
+    key = icon_storage_key(edition_id, digest, mime)
+    try:
+        return await get_storage().put(key, payload, mime)
+    except Exception as exc:  # noqa: BLE001 - any storage failure falls back
+        logger.warning("icon_storage_failed", key=key, error=str(exc)[:200])
+        return None
 
 logger = get_logger("icons")
 
@@ -248,9 +280,13 @@ def sanitize_svg(data: bytes, *, recolorable: bool) -> tuple[bytes, int, int]:
 
     # anything outside the allow-list never reach the output.
 
-    ElementTree.register_namespace("", SVG_NS)
+    # register_namespace lives on the stdlib module only: defusedxml re-exports
 
-    output = ElementTree.tostring(root, encoding="utf-8")
+    # the parsing and serialising helpers but not the prefix registry.
+
+    StdElementTree.register_namespace("", SVG_NS)
+
+    output = StdElementTree.tostring(root, encoding="utf-8")
 
     if b"<script" in output.lower() or b"javascript:" in output.lower():
 
@@ -376,6 +412,8 @@ async def create_icon(
 
 
 
+    storage_key = await store_icon_bytes(edition_id, payload, mime, digest)
+
     icon = Icon(
 
         edition_id=edition_id,
@@ -386,7 +424,9 @@ async def create_icon(
 
         mime=mime,
 
-        data=payload,
+        data=None if storage_key else payload,
+
+        storage_key=storage_key,
 
         size_bytes=len(payload),
 
@@ -408,7 +448,7 @@ async def create_icon(
 
     await db.flush()
 
-    record(
+    await record(
 
         db,
 
@@ -500,7 +540,13 @@ async def ensure_library_icons(db: AsyncSession, edition_id: uuid.UUID) -> dict[
 
             await db.execute(
 
-                select(Icon).where(Icon.edition_id == edition_id, Icon.kind == "library")
+                select(Icon).where(
+                    Icon.edition_id == edition_id,
+                    Icon.kind == "library",
+                    # An archived icon must not be resurrected as active on the
+                    # next boot; it keeps its archived status and id.
+                    Icon.status != "deleted",
+                )
 
             )
 
@@ -530,6 +576,10 @@ async def ensure_library_icons(db: AsyncSession, edition_id: uuid.UUID) -> dict[
 
             continue
 
+        digest = hashlib.sha256(payload).hexdigest()
+
+        storage_key = await store_icon_bytes(edition_id, payload, mime, digest)
+
         icon = Icon(
 
             edition_id=edition_id,
@@ -542,7 +592,9 @@ async def ensure_library_icons(db: AsyncSession, edition_id: uuid.UUID) -> dict[
 
             mime=mime,
 
-            data=payload,
+            data=None if storage_key else payload,
+
+            storage_key=storage_key,
 
             size_bytes=len(payload),
 
@@ -550,7 +602,7 @@ async def ensure_library_icons(db: AsyncSession, edition_id: uuid.UUID) -> dict[
 
             height=height,
 
-            sha256=hashlib.sha256(payload).hexdigest(),
+            sha256=digest,
 
             recolorable=mime == "image/svg+xml",
 
@@ -570,9 +622,25 @@ async def ensure_library_icons(db: AsyncSession, edition_id: uuid.UUID) -> dict[
 
 
 
-def icon_url(icon_id: uuid.UUID) -> str:
+def icon_url(icon: Icon) -> str:
 
-    return f"/api/v1/public/icons/{icon_id}"
+    """Where the browser fetches this icon.
+
+
+    Storage-backed icons go straight to the bucket/CDN; rows written before
+    the move (and uploads made while the bucket was down) are still served by
+    the API route out of ``data``.
+    """
+
+    if icon.storage_key:
+
+        url = get_storage().public_url(icon.storage_key)
+
+        if url.startswith("http"):
+
+            return url
+
+    return f"/api/v1/public/icons/{icon.id}"
 
 
 
@@ -598,7 +666,7 @@ def icon_payload(icon: Icon) -> dict:
 
         "libraryKey": icon.library_key,
 
-        "url": icon_url(icon.id),
+        "url": icon_url(icon),
 
     }
 
@@ -626,7 +694,34 @@ async def archive(
     actor_id: uuid.UUID | None = None,
     actor_role: str | None = None,
 ) -> None:
+    # Archiving an icon that an event still renders leaves that event with a
+    # missing image, and the boot seeder would re-create the icon as active.
+    in_use = (
+        await db.execute(
+            select(func.count())
+            .select_from(Event)
+            .where(Event.icon_id == icon.id)
+        )
+    ).scalar() or 0
+    if in_use:
+        raise Conflict(
+            f"{in_use} event(s) still use this icon. Change them first.",
+            code="ICON_IN_USE",
+        )
     icon.status = "archived"
+
+    # The bytes are no longer referenced, so drop the object too: an archived
+    # icon used to keep its blob forever.
+    if icon.storage_key:
+        try:
+            await get_storage().delete(icon.storage_key)
+        except Exception as exc:  # noqa: BLE001 - archival must not fail on storage
+            logger.warning(
+                "icon_storage_delete_failed", key=icon.storage_key, error=str(exc)[:200]
+            )
+        icon.storage_key = None
+    icon.data = None
+
     await record(
         db,
         request,

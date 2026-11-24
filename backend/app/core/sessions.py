@@ -248,7 +248,15 @@ async def rotate_session(
     if auth_level == "staff_mfa":
         idle, absolute = _ttls(True)
         new_row.idle_expires_at = _now() + idle
-        new_row.absolute_expires_at = _now() + min(absolute, absolute)
+        # ``min(absolute, absolute)`` was always ``absolute``: stepping up for
+        # MFA handed the session a brand new hard cap, so a staff session could
+        # be kept alive forever by re-running the challenge. The new row may
+        # never outlive the session it replaces.
+        capped = _now() + absolute
+        carried = context.session.absolute_expires_at
+        if carried is not None:
+            capped = min(capped, _aware(carried))
+        new_row.absolute_expires_at = capped
         new_row.mfa_verified_at = _now()
     db.add(new_row)
     await db.flush()

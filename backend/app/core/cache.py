@@ -44,11 +44,6 @@ def cache_set(key: str, value: Any, ttl_seconds: float = 60.0) -> None:
     _CACHE[key] = (time.monotonic() + ttl_seconds, value)
 
 
-def cache_delete(key: str) -> None:
-    """Explicitly delete a cached key."""
-    _CACHE.pop(key, None)
-
-
 def cache_delete_pattern(pattern: str) -> None:
     """Delete all keys matching a wildcard pattern (e.g. 'events:*')."""
     matching = [k for k in _CACHE if fnmatch.fnmatch(k, pattern)]

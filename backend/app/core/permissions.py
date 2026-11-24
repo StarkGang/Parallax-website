@@ -12,7 +12,6 @@ class Role(StrEnum):
     SUPER_ADMIN = "super_admin"
     EDITION_ADMIN = "edition_admin"
     FINANCE_ADMIN = "finance_admin"
-    ELIGIBILITY_VERIFIER = "eligibility_verifier"
     EVENT_COORDINATOR = "event_coordinator"
     CHECKIN_STAFF = "checkin_staff"
     PARTICIPANT = "participant"
@@ -22,17 +21,11 @@ STAFF_ROLES = {
     Role.SUPER_ADMIN,
     Role.EDITION_ADMIN,
     Role.FINANCE_ADMIN,
-    Role.ELIGIBILITY_VERIFIER,
     Role.EVENT_COORDINATOR,
     Role.CHECKIN_STAFF,
 }
 
-MFA_REQUIRED_ROLES = {
-    Role.SUPER_ADMIN,
-    Role.EDITION_ADMIN,
-    Role.FINANCE_ADMIN,
-    Role.ELIGIBILITY_VERIFIER,
-}
+MFA_REQUIRED_ROLES = set(STAFF_ROLES)
 
 ALL_PERMISSIONS = {
     "edition.read",
@@ -50,7 +43,6 @@ ALL_PERMISSIONS = {
     "payment.read",
     "refund.request",
     "refund.approve",
-    "verification.review",
     "registration.read",
     "registration.write",
     "team.read",
@@ -80,6 +72,8 @@ ALL_PERMISSIONS = {
     "announcements.write",
     "checkin.read",
     "checkin.write",
+    # Studio-issued ID cards for staff, faculty, sponsors and guests.
+    "credential.write",
 }
 
 ROLE_PERMISSIONS: dict[Role, set[str]] = {
@@ -105,18 +99,6 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
         "export.data",
         "stats.read",
     },
-    Role.ELIGIBILITY_VERIFIER: {
-        "edition.read",
-        "event.read",
-        "events.read",
-        "user.read",
-        "users.read",
-        "user.read_pii",
-        "verification.review",
-        "registration.read",
-        "registration.write",
-        "report.read",
-    },
     Role.EVENT_COORDINATOR: {
         "edition.read",
         "event.read",
@@ -133,8 +115,8 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
         "checkin.read",
         "checkin.write",
         "announcements.read",
-        "announcement.write",
         "announcements.write",
+        "icon.write",
         "report.read",
         "stats.read",
     },
@@ -154,14 +136,11 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
     Role.PARTICIPANT: set(),
 }
 
-# Roles that need a fresh TOTP step-up for sensitive writes.
+# Roles that need a fresh TOTP step-up for destructive writes.
+# Only high-impact configurations require a step-up challenge when modified.
+# Day-to-day desk operations (events, check-in, attendee registrations) do not.
 STEP_UP_ACTIONS = {
-    "policy.write",
-    "event.write",
-    "refund.approve",
-    "membership.write",
-    "export.data",
-    "icon.write",
+    "settings.manage",
     "edition.write",
 }
 
@@ -176,6 +155,28 @@ def permissions_for(role: str) -> set[str]:
         if role == "super_admin":
             return set(ALL_PERMISSIONS)
         return set()
+
+
+# One staff role per account per edition. When rows from before that rule still
+# sit in the database, the highest privilege wins so a stale second grant cannot
+# widen what the account can do.
+ROLE_PRECEDENCE: tuple[str, ...] = (
+    "super_admin",
+    "edition_admin",
+    "finance_admin",
+    "event_coordinator",
+    "checkin_staff",
+    "participant",
+)
+
+
+def highest_role(roles: list[str] | tuple[str, ...] | set[str]) -> str | None:
+    """The one role that speaks for these grants, or None when there are none."""
+    rank = {role: index for index, role in enumerate(ROLE_PRECEDENCE)}
+    known = [role for role in roles if role in rank]
+    if not known:
+        return None
+    return min(known, key=lambda role: rank[role])
 
 
 def has_permission(role: str, permission: str) -> bool:

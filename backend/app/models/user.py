@@ -1,13 +1,15 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     JSON,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -45,6 +47,16 @@ class ParticipantProfile(Base, UUIDPrimaryKey, Timestamps):
     course: Mapped[str | None] = mapped_column(String(120))
     branch: Mapped[str | None] = mapped_column(String(120))
     year_of_study: Mapped[int | None] = mapped_column(Integer)
+    # The same operational answers the pass form asks: the door, the kitchen and
+    # the hostel read them. Stored as 0/1, spoken as names through core/attendee.
+    gender: Mapped[int | None] = mapped_column(SmallInteger)
+    food_preference: Mapped[int | None] = mapped_column(SmallInteger)
+    needs_accommodation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    city: Mapped[str | None] = mapped_column(String(120))
+    state: Mapped[str | None] = mapped_column(String(120))
     student_identifier_enc: Mapped[str | None] = mapped_column(Text)
     student_identifier_last4: Mapped[str | None] = mapped_column(String(8))
     institution_email: Mapped[str | None] = mapped_column(String(320))
@@ -121,18 +133,3 @@ class EditionMembership(Base, UUIDPrimaryKey, Timestamps):
     assigned_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     __table_args__ = (UniqueConstraint("user_id", "edition_id", "role", name="uq_membership"),)
-
-
-class EventCoordinatorAssignment(Base, UUIDPrimaryKey, Timestamps):
-    __tablename__ = "event_coordinator_assignments"
-
-    event_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    permission_scope: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    assigned_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
-    __table_args__ = (UniqueConstraint("event_id", "user_id", name="uq_coordinator_assignment"),)

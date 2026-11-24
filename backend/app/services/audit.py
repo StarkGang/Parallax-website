@@ -56,6 +56,19 @@ async def record(
         request_id=request_id_ctx.get(),
     )
     db.add(entry)
+    try:
+        from app.services.telegram import notify_critical_audit
+
+        notify_critical_audit(
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id else None,
+            actor_id=actor_id,
+            actor_role=actor_role,
+            ip_prefix=client_ip,
+        )
+    except Exception:
+        pass
 
 
 __all__ = ["SENSITIVE_KEYS", "redact", "record"]

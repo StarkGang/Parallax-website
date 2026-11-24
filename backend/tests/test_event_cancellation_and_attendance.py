@@ -110,6 +110,8 @@ async def test_admin_force_cancel_and_refund_and_roster(
         f"/api/v1/editions/{edition_id}/admin/registrations/{reg_id}/force-cancel",
         json={
             "reason": "Removed due to violation",
+            # The fixture event starts within the cancellation window.
+            "force": True,
             "issueRefund": True,
             "refundAmountPaise": 60000,  # Exceeds 50000 fee
         },
@@ -122,6 +124,7 @@ async def test_admin_force_cancel_and_refund_and_roster(
         f"/api/v1/editions/{edition_id}/admin/registrations/{reg_id}/force-cancel",
         json={
             "reason": "Removed from event by administration: Rule violation",
+            "force": True,
             "issueRefund": True,
             "refundAmountPaise": 25000,
             "refundReasonNote": "Partial refund on removal",

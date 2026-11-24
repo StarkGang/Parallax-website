@@ -58,15 +58,6 @@ def encrypt_pii(value: str) -> str:
     return _pii_fernet().encrypt(value.encode()).decode()
 
 
-def decrypt_pii(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        return _pii_fernet().decrypt(value.encode()).decode()
-    except InvalidToken:
-        return None
-
-
 def encrypt_secret(value: str, *, domain: str = "totp") -> str:
     settings = get_settings()
     material = settings.totp_encryption_key or settings.server_secret_key
@@ -84,15 +75,7 @@ def decrypt_secret(value: str, *, domain: str = "totp") -> str | None:
         return None
 
 
-def hash_pii(value: str) -> str:
-    return hmac_sha256(_keys()[0], value.strip().lower())
-
-
 def recovery_code() -> str:
     raw = secrets.token_hex(5).upper()
     return f"{raw[:5]}-{raw[5:]}"
-
-
-def short_reference(prefix: str = "PX") -> str:
-    return f"{prefix}-{secrets.token_hex(3).upper()}"
 

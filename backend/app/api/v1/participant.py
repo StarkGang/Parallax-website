@@ -1,38 +1,38 @@
 """Participant workflow: pass purchase, included selection, addons, teams, verification and tickets."""
 
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
-from app.core.errors import AppError, NotFound
+from app.core.errors import AppError, Conflict, NotFound
 from app.core.rate_limit import limiter, memory_limiter
-from app.core.uploads import read_upload_limited
 from app.db.session import get_db
 from app.models.commerce import Ticket
 from app.models.edition import ConventionEdition
 from app.schemas.participant import (
     AddonRequest,
-    EmailConfirm,
+    CheckoutRequest,
     PassView,
+    QuoteRequest,
     SelectionUpdate,
     TeamCreate,
     TeamJoin,
 )
 from app.schemas.registration import PaymentVerification
 from app.services import (
+    college_registrations as college_service,
     editions as edition_service,
     idempotency as idempotency_service,
     passes as pass_service,
     payments as payment_service,
+    pricing as pricing_service,
     registrations as reg_service,
     teams as team_service,
     tickets as ticket_service,
-    verification as verif_service,
 )
 
 router = APIRouter(prefix="/editions/{edition_id}", tags=["participant"])
@@ -53,6 +53,10 @@ async def get_pass(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    # Event selection shows live seats: release lapsed 24-hour holds first.
+    await college_service.lazy_enforce_for_read(
+        db, edition_id=edition.id, request=request
+    )
     user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
     if user_pass is None:
         return {"data": None}
@@ -72,50 +76,6 @@ async def get_pass(
     return {"data": view.model_dump(by_alias=True)}
 
 
-@router.post("/pass/order", dependencies=[Depends(limiter("pass_order", 10, 60))])
-async def create_pass_order(
-    edition_id: uuid.UUID,
-    request: Request,
-    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    edition = await _edition(db, edition_id)
-    policy = await edition_service.current_policy(db, edition.id)
-    settings = get_settings()
-    if not settings.payments_enabled and not settings.is_development:
-        raise AppError(
-            "Online payments are not configured. Contact the organisers.",
-            code="PAYMENTS_NOT_CONFIGURED",
-            status_code=503,
-        )
-
-    replayed = await idempotency_service.replay(
-        db, ctx.user.id, request.url.path, idempotency_key, {}
-    )
-    if replayed:
-        status_code, body = replayed
-        return body
-
-    user_pass, order = await pass_service.create_pass_order(
-        db, ctx.user.id, edition, policy
-    )
-    out = {
-        "data": {
-            "orderId": str(order.id),
-            "amountPaise": order.amount_paise,
-            "gatewayOrderId": order.gateway_order_id,
-            "razorpayKeyId": settings.razorpay_key_id,
-            "mock": settings.mock_payments_available,
-        }
-    }
-    await idempotency_service.store(
-        db, ctx.user.id, request.url.path, idempotency_key, {}, out
-    )
-    await db.commit()
-    return out
-
-
 @router.put("/pass/selections", dependencies=[Depends(limiter("pass_selections", 60, 60))])
 async def update_selections(
     edition_id: uuid.UUID,
@@ -125,15 +85,35 @@ async def update_selections(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    # A released seat must be bookable in the same request that discovers it.
+    await college_service.maybe_enforce_lapsed_compliance(
+        db, edition_id=edition.id, request=request
+    )
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
     user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
     if user_pass is None:
         raise NotFound("You do not have a pass for this edition.")
+    if user_pass.status != "active":
+        if user_pass.status == "suspended":
+            raise Conflict("Your convention pass has been suspended by the organisers.", code="PASS_BLOCKED")
+        raise Conflict(f"Your convention pass is {user_pass.status}. Event selection is closed.", code="PASS_BLOCKED")
     policy = await edition_service.current_policy(db, edition.id)
-    sel = await pass_service.set_selections(
+    sel, order = await pass_service.set_selections(
         db, request, user_pass, payload.event_ids, policy
     )
+    settings = get_settings()
+    if order is not None and not settings.payments_enabled and not settings.is_development:
+        raise AppError(
+            "Online payments are not configured. Contact the organisers.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
+    out_data = sel.model_dump(by_alias=True)
+    out_data["order"] = _team_payment_payload(order) if order is not None else None
     await db.commit()
-    return {"data": sel.model_dump(by_alias=True)}
+    return {"data": out_data}
 
 
 @router.post("/registrations", dependencies=[Depends(limiter("addon_create", 20, 60))])
@@ -146,7 +126,23 @@ async def create_registrations(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    # Capacity is re-read below; free lapsed holds first so a sold-out event
+    # does not reject a booking for a seat that is actually available.
+    await college_service.maybe_enforce_lapsed_compliance(
+        db, edition_id=edition.id, request=request
+    )
     settings = get_settings()
+    # Money-moving POSTs replay their stored answer for the same key instead of
+    # booking (and charging) twice. The header was accepted and ignored before.
+    replay_payload = {"editionId": str(edition_id), "eventIds": [str(e) for e in payload.event_ids]}
+    cached = await idempotency_service.replay(
+        db, ctx.user.id, "participant.registrations", idempotency_key, replay_payload
+    )
+    if cached is not None:
+        return cached[1]
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
     regs, order = await reg_service.create_addon_registrations(
         db, request, ctx.user.id, edition, payload.event_ids
     )
@@ -174,6 +170,15 @@ async def create_registrations(
         }
     }
     await db.commit()
+    await idempotency_service.store(
+        db,
+        ctx.user.id,
+        "participant.registrations",
+        idempotency_key,
+        replay_payload,
+        out,
+    )
+    await db.commit()
     return out
 
 
@@ -186,6 +191,7 @@ async def my_registrations(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await college_service.lazy_enforce_for_read(db, edition_id=edition_id)
     regs = await reg_service.list_for_user(db, ctx.user.id, edition_id)
     views = await reg_service.serialize_registrations(db, regs)
     return {"data": [v.model_dump(by_alias=True) for v in views]}
@@ -207,6 +213,253 @@ async def cancel_registration(
     return {"data": {"cancelled": True}}
 
 
+# --------------------------------------------------------------------------- #
+# Unified event worklist: one list, one server price, pay only the difference.
+# --------------------------------------------------------------------------- #
+@router.get(
+    "/worklist",
+    dependencies=[Depends(memory_limiter("worklist_read", 180, 60))],
+)
+async def get_worklist(
+    edition_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    await college_service.lazy_enforce_for_read(
+        db, edition_id=edition.id, request=request
+    )
+    policy = await edition_service.current_policy(db, edition.id)
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
+    data = await pricing_service.build_worklist(
+        db, user_id=ctx.user.id, edition=edition, policy=policy
+    )
+    data["gate"] = blocked
+    if blocked:
+        # The list still explains the event, but nothing is selectable: the
+        # portal shows the pass/registration reason instead of a dead Add.
+        for row in data["rows"]:
+            row["actions"] = []
+    user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
+    data["passStatus"] = user_pass.status if user_pass is not None else None
+    data["policyVersion"] = int(policy.version)
+    return {"data": data}
+
+
+@router.get(
+    "/basket",
+    dependencies=[Depends(memory_limiter("basket_read", 180, 60))],
+)
+async def get_basket(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    quote = await pricing_service.open_basket(db, ctx.user.id, edition.id)
+    return {"data": pricing_service.basket_payload(quote)}
+
+
+@router.post(
+    "/basket/events",
+    dependencies=[Depends(limiter("basket_add", 60, 60))],
+)
+async def add_to_basket(
+    edition_id: uuid.UUID,
+    payload: QuoteRequest,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
+    policy = await edition_service.current_policy(db, edition.id)
+    quote = await pricing_service.basket_add(
+        db,
+        user_id=ctx.user.id,
+        edition=edition,
+        policy=policy,
+        event_ids=payload.event_ids,
+    )
+    await db.commit()
+    return {"data": pricing_service.basket_payload(quote)}
+
+
+@router.delete(
+    "/basket/events/{event_id}",
+    dependencies=[Depends(limiter("basket_remove", 60, 60))],
+)
+async def remove_from_basket(
+    edition_id: uuid.UUID,
+    event_id: uuid.UUID,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    policy = await edition_service.current_policy(db, edition.id)
+    quote = await pricing_service.basket_remove(
+        db,
+        user_id=ctx.user.id,
+        edition=edition,
+        policy=policy,
+        event_id=event_id,
+    )
+    await db.commit()
+    return {"data": pricing_service.basket_payload(quote)}
+
+
+@router.post("/quote", dependencies=[Depends(limiter("event_quote", 30, 60))])
+async def create_quote(
+    edition_id: uuid.UUID,
+    payload: QuoteRequest,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    await college_service.maybe_enforce_lapsed_compliance(
+        db, edition_id=edition.id, request=request
+    )
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
+    policy = await edition_service.current_policy(db, edition.id)
+    quote = await pricing_service.build_quote(
+        db,
+        user_id=ctx.user.id,
+        edition=edition,
+        policy=policy,
+        event_ids=payload.event_ids,
+    )
+    await db.commit()
+    return {
+        "data": {
+            "quoteId": str(quote.id),
+            "lines": quote.lines,
+            "coveredPaise": int(quote.covered_paise),
+            "duePaise": int(quote.due_paise),
+            "expiresAt": edition_service.aware(quote.expires_at).isoformat()
+            if quote.expires_at
+            else None,
+        }
+    }
+
+
+@router.post(
+    "/checkout",
+    dependencies=[Depends(limiter("event_checkout", 20, 60))],
+)
+async def checkout_quote(
+    edition_id: uuid.UUID,
+    payload: CheckoutRequest,
+    request: Request,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.models.commerce import EventQuote
+
+    edition = await _edition(db, edition_id)
+    settings = get_settings()
+    replay_payload = {"editionId": str(edition_id), "quoteId": str(payload.quote_id)}
+    cached = await idempotency_service.replay(
+        db, ctx.user.id, "participant.checkout", idempotency_key, replay_payload
+    )
+    if cached is not None:
+        return cached[1]
+
+    quote = await db.get(EventQuote, payload.quote_id)
+    if quote is None or quote.user_id != ctx.user.id or quote.edition_id != edition.id:
+        raise NotFound("Quote not found.")
+    regs, order = await pricing_service.consume_quote(
+        db, user_id=ctx.user.id, quote=quote
+    )
+    if order is not None and not settings.payments_enabled and not settings.is_development:
+        raise AppError(
+            "Online payments are not configured. Contact the organisers.",
+            code="PAYMENTS_NOT_CONFIGURED",
+            status_code=503,
+        )
+    views = await reg_service.serialize_registrations(db, regs)
+    body = {
+        "data": {
+            "quoteId": str(quote.id),
+            "registrations": [v.model_dump(by_alias=True) for v in views],
+            "order": (
+                {
+                    "orderId": str(order.id),
+                    "amountPaise": order.amount_paise,
+                    "gatewayOrderId": order.gateway_order_id,
+                    "razorpayKeyId": settings.razorpay_key_id,
+                    "mock": settings.mock_payments_available,
+                }
+                if order is not None
+                else None
+            ),
+        }
+    }
+    from fastapi.encoders import jsonable_encoder
+
+    # The replay snapshot is stored as JSON; model dumps carry UUID objects.
+    await idempotency_service.store(
+        db,
+        ctx.user.id,
+        "participant.checkout",
+        idempotency_key,
+        replay_payload,
+        jsonable_encoder(body),
+    )
+    await db.commit()
+    return body
+
+
+@router.delete(
+    "/events/{event_id}",
+    dependencies=[Depends(limiter("event_remove", 30, 60))],
+)
+async def remove_event(
+    edition_id: uuid.UUID,
+    event_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    from app.services import pricing as pricing_service_local
+
+    result = await pricing_service_local.remove_seat(
+        db,
+        request=request,
+        user_id=ctx.user.id,
+        edition=edition,
+        event_id=event_id,
+    )
+    await db.commit()
+    return {"data": result}
+
+
+def _team_payment_payload(order) -> dict:
+    """The same payment shape every other checkout uses.
+
+    A team seat used to answer ``razorpayOrderId`` where the registration order
+    answers ``gatewayOrderId``, so the browser had no gateway order id to open
+    the checkout with.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    return {
+        "orderId": str(order.id),
+        "amountPaise": int(order.amount_paise),
+        "gatewayOrderId": order.gateway_order_id,
+        "razorpayKeyId": settings.razorpay_key_id,
+        "mock": settings.mock_payments_available,
+    }
+
+
 @router.get(
     "/teams",
     dependencies=[Depends(memory_limiter("teams_read", 120, 60))],
@@ -216,9 +469,19 @@ async def my_teams(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    # A teammate opening the team page must see a lapsed member removed and
+    # leadership handed over before the roster is rendered.
+    await college_service.lazy_enforce_for_read(db, edition_id=edition_id)
     teams = await team_service.list_for_user(db, ctx.user.id, edition_id)
     views = await team_service.serialize_teams(db, teams, ctx.user.id)
-    return {"data": [v.model_dump(by_alias=True) for v in views]}
+    data = []
+    for view, team in zip(views, teams):
+        payload = view.model_dump(by_alias=True)
+        payment = await team_service.pending_team_payment(db, team, ctx.user.id)
+        if payment is not None:
+            payload["payment"] = _team_payment_payload(payment)
+        data.append(payload)
+    return {"data": data}
 
 
 @router.post("/teams", dependencies=[Depends(limiter("team_create", 10, 60))])
@@ -230,12 +493,22 @@ async def create_team(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    # A lapsed attendee's team still occupies an entry until it is released.
+    await college_service.maybe_enforce_lapsed_compliance(
+        db, edition_id=edition.id, request=request
+    )
     team = await team_service.create_team(
         db, request, ctx.user.id, edition, payload.event_id, payload.name
     )
     views = await team_service.serialize_teams(db, [team], ctx.user.id)
+    # A priced team seat is reserved until it is paid, so the portal needs the
+    # order to start checkout for it.
+    payment = await team_service.pending_team_payment(db, team, ctx.user.id)
     await db.commit()
-    return {"data": views[0].model_dump(by_alias=True)}
+    data = views[0].model_dump(by_alias=True)
+    if payment is not None:
+        data["payment"] = _team_payment_payload(payment)
+    return {"data": data}
 
 
 @router.post("/teams/join", dependencies=[Depends(limiter("team_join", 10, 60))])
@@ -247,22 +520,31 @@ async def join_team(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     edition = await _edition(db, edition_id)
+    # Free rosters held by lapsed attendees before capacity is counted.
+    await college_service.maybe_enforce_lapsed_compliance(
+        db, edition_id=edition.id, request=request
+    )
     team = await team_service.join_team(
         db, request, ctx.user.id, edition, payload.invite_code
     )
     views = await team_service.serialize_teams(db, [team], ctx.user.id)
+    payment = await team_service.pending_team_payment(db, team, ctx.user.id)
     await db.commit()
-    return {"data": views[0].model_dump(by_alias=True)}
+    data = views[0].model_dump(by_alias=True)
+    if payment is not None:
+        data["payment"] = _team_payment_payload(payment)
+    return {"data": data}
 
 
 @router.delete("/teams/{team_id}")
 async def leave_team(
     edition_id: uuid.UUID,
     team_id: uuid.UUID,
+    disband: bool = False,
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    await team_service.leave_team(db, ctx.user.id, team_id)
+    await team_service.leave_team(db, ctx.user.id, team_id, disband=disband)
     await db.commit()
     return {"data": {"left": True}}
 
@@ -302,69 +584,6 @@ async def toggle_lock(
 
 
 @router.get(
-    "/verification",
-    dependencies=[Depends(memory_limiter("verification_read", 120, 60))],
-)
-async def verification_status(
-    edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    status = await verif_service.status_for(db, ctx.user, edition_id)
-    return {"data": status}
-
-
-@router.post("/verification", dependencies=[Depends(limiter("verification_submit", 5, 300))])
-async def submit_verification(
-    edition_id: uuid.UUID,
-    request: Request,
-    method: Annotated[str, Form()],
-    institution_email: Annotated[str | None, Form()] = None,
-    file: UploadFile | None = File(None),
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    edition = await _edition(db, edition_id)
-    file_bytes = (
-        await read_upload_limited(
-            file,
-            get_settings().max_upload_bytes_document,
-            label="Verification document",
-        )
-        if file
-        else None
-    )
-    res = await verif_service.submit(
-        db,
-        request,
-        ctx.user,
-        edition,
-        method=method,
-        institution_email=institution_email,
-        file_bytes=file_bytes,
-        filename=file.filename if file else None,
-    )
-    await db.commit()
-    return {"data": res}
-
-
-@router.post(
-    "/verification/confirm",
-    dependencies=[Depends(limiter("verification_confirm", 10, 300))],
-)
-async def confirm_verification_email(
-    edition_id: uuid.UUID,
-    payload: EmailConfirm,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    edition = await _edition(db, edition_id)
-    ok = await verif_service.confirm_email(db, ctx.user, edition.id, payload.code)
-    await db.commit()
-    return {"data": {"verified": ok}}
-
-
-@router.get(
     "/tickets",
     dependencies=[Depends(memory_limiter("tickets_read", 180, 60))],
 )
@@ -373,6 +592,7 @@ async def my_tickets(
     ctx: AuthContext = Depends(current_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await college_service.lazy_enforce_for_read(db, edition_id=edition_id)
     rows = list(
         (
             await db.execute(
@@ -424,6 +644,9 @@ async def mock_pay(
     settings = get_settings()
     if not settings.mock_payments_available:
         raise NotFound("Mock payment is not available in this environment.")
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition_id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
     order = await payment_service.order_for(db, order_id)
     if order.user_id != ctx.user.id:
         raise NotFound("Order not found.")
@@ -444,6 +667,9 @@ async def verify_payment(
     order = await payment_service.order_for(db, payload.order_id)
     if order.user_id != ctx.user.id or order.edition_id != edition_id:
         raise NotFound("Order not found.")
+    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition_id)
+    if blocked:
+        raise Conflict(blocked, code="PASS_BLOCKED")
 
     if order.status == "paid":
         return {"data": {"paid": True, "orderId": str(order.id)}}

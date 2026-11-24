@@ -1,9 +1,10 @@
-from app.db.base import Base
+from app.db.base import Base  # noqa: F401 - re-exported for metadata registration
 from app.models.commerce import (
     AttendanceRecord,
     AuditLog,
     ConventionPass,
     EmailOutbox,
+    EventQuote,
     IdempotencyKey,
     IncludedEventSelection,
     PaymentOrder,
@@ -16,17 +17,15 @@ from app.models.commerce import (
     TeamMember,
     Ticket,
 )
+from app.models.credential import CustomCredential
 from app.models.edition import (
     Announcement,
     ConventionEdition,
     EditionPolicy,
-    EligibilityVerification,
     Event,
     EventCategory,
     EventPriceHistory,
     Icon,
-    RosterEntry,
-    VerificationEmailCode,
 )
 from app.models.registration import (
     CollegeRegistration,
@@ -38,7 +37,6 @@ from app.models.registration import (
 )
 from app.models.user import (
     EditionMembership,
-    EventCoordinatorAssignment,
     MfaCredential,
     MfaRecoveryCode,
     ParticipantProfile,
@@ -55,22 +53,19 @@ __all__ = [
     "MfaRecoveryCode",
     "StaffInvite",
     "EditionMembership",
-    "EventCoordinatorAssignment",
     "ConventionEdition",
     "EditionPolicy",
     "Icon",
     "EventCategory",
     "Event",
     "EventPriceHistory",
-    "RosterEntry",
-    "EligibilityVerification",
-    "VerificationEmailCode",
     "Announcement",
     "ConventionPass",
     "IncludedEventSelection",
     "Team",
     "TeamMember",
     "Registration",
+    "EventQuote",
     "PaymentOrder",
     "PaymentTransaction",
     "PaymentWebhookEvent",
@@ -87,4 +82,5 @@ __all__ = [
     "RegistrationDocument",
     "RegistrationCategoryChange",
     "RegistrationNotification",
+    "CustomCredential",
 ]

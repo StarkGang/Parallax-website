@@ -39,14 +39,20 @@ async def _queue(db: AsyncSession, *, status: str = "queued", attempts: int = 0)
 
 
 @pytest.mark.asyncio
-async def test_enqueue_is_skipped_when_email_is_unavailable(db_session: AsyncSession):
+async def test_enqueue_records_a_skip_when_email_is_unavailable(db_session: AsyncSession):
+    """No provider means no delivery, but the intent is still recorded (F-20)."""
     with patch.object(email_outbox, "get_settings", return_value=_settings(email_available=False)):
         result = await email_outbox.enqueue(
             db_session, recipient="a@example.com", template="registration_approved"
         )
-    assert result is None
-    count = await db_session.scalar(select(func.count()).select_from(EmailOutbox))
-    assert count == 0
+    assert result is not None
+    assert result.status == "skipped"
+    count = await db_session.scalar(
+        select(func.count())
+        .select_from(EmailOutbox)
+        .where(EmailOutbox.recipient == "a@example.com")
+    )
+    assert count == 1
 
 
 @pytest.mark.asyncio
@@ -124,7 +130,6 @@ async def test_future_scheduled_rows_are_not_sent(db_session: AsyncSession):
 
 def test_subject_and_body_cover_every_template():
     templates = [
-        "verification_code",
         "registration_submitted",
         "registration_payment_success",
         "registration_approved",
@@ -137,7 +142,6 @@ def test_subject_and_body_cover_every_template():
     ]
     for template in templates:
         assert email_outbox._subject(template) != "Parallax update"
-        body = email_outbox._body(template, {"registrationId": "PX-1", "code": "123456"})
+        body = email_outbox._body(template, {"registrationId": "PX-1"})
         assert "[object Object]" not in body
-        if template != "verification_code":
-            assert "PX-1" in body
+        assert "PX-1" in body

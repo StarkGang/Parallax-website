@@ -1,6 +1,7 @@
 """Database-backed fixed-window limiter: safe across worker processes."""
 
 import hashlib
+import math
 import os
 import secrets
 import time
@@ -112,7 +113,7 @@ async def consume(
     await db.commit()
     current = int(count or 1)
     allowed = current <= limit
-    retry_after = max(0, int(window_start_ts + window_seconds - now))
+    retry_after = max(0 if allowed else 1, int(math.ceil(window_start_ts + window_seconds - now)))
     return allowed, retry_after
 
 
@@ -176,26 +177,6 @@ async def login_limiter(
     )
     if not allowed:
         exc = RateLimited("Too many sign-in attempts. Try again shortly.")
-        exc.details = {"retryAfter": retry_after}
-        raise exc
-
-
-async def limit_user(
-    db: AsyncSession,
-    request: Request,
-    bucket: str,
-    limit: int,
-    window_seconds: int = 60,
-) -> None:
-    allowed, retry_after = await consume(
-        db,
-        bucket=bucket,
-        subject=await _subject(db, request, None),
-        limit=limit,
-        window_seconds=window_seconds,
-    )
-    if not allowed:
-        exc = RateLimited("Too many requests. Slow down for a moment.")
         exc.details = {"retryAfter": retry_after}
         raise exc
 

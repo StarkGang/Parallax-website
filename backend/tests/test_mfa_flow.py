@@ -141,7 +141,7 @@ async def test_me_reports_mfa_required_until_enrolled(db_session: AsyncSession):
     assert payload.mfa_required is False
 
 
-def test_only_admin_roles_are_challenged():
+def test_only_staff_and_admin_roles_are_challenged():
     from app.api.deps import AuthContext
     from app.core.permissions import Role
     from app.models.user import EditionMembership
@@ -151,7 +151,93 @@ def test_only_admin_roles_are_challenged():
             user=None, session=None, memberships=[EditionMembership(role=role)]
         )
 
-    assert ctx_for(Role.CHECKIN_STAFF).staff_mfa_required is False
-    assert ctx_for(Role.EVENT_COORDINATOR).staff_mfa_required is False
+    assert ctx_for(Role.CHECKIN_STAFF).staff_mfa_required is True
+    assert ctx_for(Role.EVENT_COORDINATOR).staff_mfa_required is True
     assert ctx_for(Role.EDITION_ADMIN).staff_mfa_required is True
     assert ctx_for(Role.SUPER_ADMIN).staff_mfa_required is True
+    assert ctx_for(Role.PARTICIPANT).staff_mfa_required is False
+
+
+@pytest.mark.asyncio
+async def test_step_up_only_prompts_on_destructive_mutations_when_expired(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Verifies:
+    1. Read-only GET requests never require step-up.
+    2. Non-destructive actions do not require step-up.
+    3. Mutating settings requires step-up only when expired (>15m).
+    4. Within the 15m window, mutating settings succeeds without prompt.
+    """
+    await _clear_credentials(db_session)
+    await _reset_login_limits(db_session)
+    await _login_as_owner(admin_client)
+
+    edition_id = (
+        await admin_client.get("/api/v1/public/editions/current")
+    ).json()["data"]["id"]
+
+    # Enroll MFA
+    setup = await admin_client.post("/api/v1/auth/mfa/setup")
+    secret = _secret_from_uri(setup.json()["otpauthUri"])
+    verified = await admin_client.post(
+        "/api/v1/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()}
+    )
+    assert verified.status_code == 200
+
+    # 1. Fresh session (within 15 min): GET settings succeeds
+    with patch("app.api.deps.get_settings", return_value=SimpleNamespace(mfa_enforced=True)):
+        get_res = await admin_client.get(f"/api/v1/editions/{edition_id}/admin/settings")
+        assert get_res.status_code == 200
+
+    # 2. Simulate 20 minutes passed (session mfa_verified_at is expired)
+    user = (await db_session.execute(select(User).where(User.email == OWNER))).scalar_one()
+    sessions = (
+        await db_session.execute(
+            select(Session).where(Session.user_id == user.id, Session.revoked_at.is_(None))
+        )
+    ).scalars().all()
+    for s in sessions:
+        s.mfa_verified_at = datetime.now(UTC) - timedelta(minutes=20)
+    await db_session.commit()
+
+    with patch("app.api.deps.get_settings", return_value=SimpleNamespace(mfa_enforced=True)):
+        # GET settings must STILL succeed without step-up!
+        get_res_expired = await admin_client.get(f"/api/v1/editions/{edition_id}/admin/settings")
+        assert get_res_expired.status_code == 200
+
+        # GET registration config must STILL succeed without step-up!
+        get_config_expired = await admin_client.get(f"/api/v1/editions/{edition_id}/admin/registration/config")
+        assert get_config_expired.status_code == 200
+
+        # PATCH settings must challenge for step-up!
+        patch_res = await admin_client.patch(
+            f"/api/v1/editions/{edition_id}/admin/settings",
+            json={"tagline": "Updated tagline test"},
+        )
+        assert patch_res.status_code == 403
+        assert patch_res.json()["error"]["code"] == "STEP_UP_REQUIRED"
+
+        # PATCH registration config must challenge for step-up!
+        patch_config_res = await admin_client.patch(
+            f"/api/v1/editions/{edition_id}/admin/registration/config",
+            json={"settings": {}},
+        )
+        assert patch_config_res.status_code == 403
+        assert patch_config_res.json()["error"]["code"] == "STEP_UP_REQUIRED"
+
+    # 3. Perform step-up
+    step_up_res = await admin_client.post(
+        "/api/v1/auth/mfa/step-up", json={"code": pyotp.TOTP(secret).now()}
+    )
+    assert step_up_res.status_code == 200
+    assert step_up_res.json()["data"]["stepUp"] is True
+    assert step_up_res.json()["data"]["expiresInSeconds"] == 900
+
+    # 4. Now PATCH settings and registration config succeed without prompt!
+    with patch("app.api.deps.get_settings", return_value=SimpleNamespace(mfa_enforced=True)):
+        patch_res_fresh = await admin_client.patch(
+            f"/api/v1/editions/{edition_id}/admin/settings",
+            json={"tagline": "Updated fresh tagline"},
+        )
+        assert patch_res_fresh.status_code == 200
+

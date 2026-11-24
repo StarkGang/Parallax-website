@@ -86,6 +86,8 @@ class EventDetail(EventListItem):
     description_html: str | None = None
     rules_html: str | None = None
     prizes_html: str | None = None
+    solo_guide_html: str | None = None
+    team_guide_html: str | None = None
     registration_opens_at: datetime | None = None
     registration_closes_at: datetime | None = None
     team_fee_basis: str | None = None

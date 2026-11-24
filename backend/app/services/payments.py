@@ -19,6 +19,7 @@ from app.core.cache import cache_delete_pattern
 from app.core.config import get_settings
 from app.core.errors import AppError, NotFound, ValidationFailed
 from app.core.logging import get_logger
+from app.models.edition import Event
 from app.models.commerce import (
     ConventionPass,
     PaymentOrder,
@@ -27,12 +28,7 @@ from app.models.commerce import (
     Refund,
     Registration,
 )
-from app.services.passes import (
-    selections_for,
-    sync_included_registrations,
-)
 from app.services.tickets import (
-    issue_for_pass,
     issue_for_registration,
     revoke_for_pass,
     revoke_for_registration,
@@ -290,15 +286,21 @@ async def mark_order_paid(
         )
     ).scalar_one()
 
-    if order.purpose == "pass" and order.linked_record_id:
-        user_pass = await db.get(ConventionPass, order.linked_record_id)
-        if user_pass:
-            user_pass.status = "active"
-            user_pass.paid_at = datetime.now(UTC)
-            await issue_for_pass(db, user_pass)
-            await sync_included_registrations(
-                db, user_pass, await selections_for(db, user_pass.id)
+    if order.purpose == "pass":
+        # Legacy rows only: the pass is sold as a college_registration order and
+        # nothing writes purpose="pass" any more. Paying one used to activate a
+        # pass with no refund path, so any money on such a row is parked for
+        # finance instead of buying an entitlement nobody approved.
+        logger.warning("legacy_pass_order_paid order=%s user=%s", order.id, order.user_id)
+        db.add(
+            Refund(
+                order_id=order.id,
+                amount_paise=int(order.amount_paise),
+                reason_code="legacy_order",
+                reason_note="Payment on a retired pass order; no entitlement issued.",
+                status="pending",
             )
+        )
 
     elif order.purpose == "registration":
         regs = list(
@@ -308,9 +310,88 @@ async def mark_order_paid(
                 )
             ).scalars()
         )
+        # A pending add-on order paid after the pass was rejected/refunded
+        # must not re-confirm registrations that were cancelled with the pass.
+        from app.services.passes import pass_gate_blocked
+
+        blocked = await pass_gate_blocked(db, order.user_id, order.edition_id)
+        stranded_paise = 0
         for r in regs:
+            # One team order can carry several seats. A blocked payer must not
+            # drag the whole roster down, and a blocked rider must not be
+            # confirmed on somebody else's payment, so the gate is per seat.
+            row_blocked = (
+                blocked
+                if r.user_id == order.user_id
+                else await pass_gate_blocked(db, r.user_id, order.edition_id)
+            )
+            if row_blocked:
+                logger.warning(
+                    "addon_payment_on_blocked_pass order=%s reg=%s reason=%s",
+                    order.id,
+                    r.id,
+                    row_blocked,
+                )
+                if r.status != "cancelled":
+                    r.status = "cancelled"
+                    r.cancelled_at = datetime.now(UTC)
+                    r.cancelled_by = "admin"
+                    r.cancellation_reason = row_blocked
+                if r.fee_paise > 0:
+                    stranded_paise += int(r.fee_paise)
+                continue
+            # Only a live hold may be confirmed. Cancelled rows belong to a
+            # booking that the attendee, the hold sweep or a newer booking
+            # replaced; reviving them produced duplicate seats and duplicate
+            # tickets while a second order was paid too. The money for those
+            # rows is queued for a refund instead of vanishing.
+            # Capacity can be consumed between the hold and the payment (a
+            # second path, or another booking for the last place). Confirming
+            # blindly produced an over-capacity seat the door then had to
+            # referee; the seat is refused and the money is queued instead.
+            if r.status == "reserved":
+                seat_event = await db.get(Event, r.event_id)
+                if seat_event is not None and seat_event.capacity:
+                    from app.services.events import capacity_usage
+
+                    used = (await capacity_usage(db, [seat_event])).get(seat_event.id, 0)
+                    if used > int(seat_event.capacity):
+                        r.status = "cancelled"
+                        r.cancelled_at = datetime.now(UTC)
+                        r.cancelled_by = "capacity"
+                        r.cancellation_reason = "The event filled up before this payment arrived."
+                        if r.fee_paise > 0:
+                            stranded_paise += int(r.fee_paise)
+                        logger.warning(
+                            "addon_payment_over_capacity order=%s reg=%s used=%s capacity=%s",
+                            order.id,
+                            r.id,
+                            used,
+                            seat_event.capacity,
+                        )
+                        continue
+            if r.status != "reserved" or r.cancelled_at is not None:
+                logger.warning(
+                    "addon_payment_not_revived order=%s reg=%s status=%s",
+                    order.id,
+                    r.id,
+                    r.status,
+                )
+                if r.status == "cancelled" and r.fee_paise > 0:
+                    stranded_paise += int(r.fee_paise)
+                continue
             r.status = "confirmed"
             await issue_for_registration(db, r)
+        if stranded_paise > 0:
+            db.add(
+                Refund(
+                    order_id=order.id,
+                    amount_paise=stranded_paise,
+                    reason_code="booking_cancelled",
+                    reason_note="Paid for a booking that was already cancelled or replaced",
+                    status="pending",
+                )
+            )
 
     elif order.purpose == "college_registration":
         from app.services.college_registrations import finalize_paid
@@ -321,6 +402,11 @@ async def mark_order_paid(
         from app.services.college_registrations import apply_paid_category_change
 
         await apply_paid_category_change(db, order)
+
+    elif order.purpose == "included_selection_delta":
+        from app.services.passes import apply_paid_selection_delta
+
+        await apply_paid_selection_delta(db, order)
 
     await db.flush()
     try:
@@ -465,6 +551,9 @@ async def process_webhook(
                 paid_amount = int(pay_entity.get("amount") or 0)
                 if paid_amount and paid_amount != order.amount_paise:
                     # Never fulfil an order for an amount the server did not set.
+                    # The money is still captured, so it has to appear in the
+                    # ledger and alert finance; logging alone left the attendee
+                    # paid-and-unregistered with nothing to follow up.
                     entry.processing_status = "failed"
                     entry.error = (
                         f"Amount mismatch: gateway {paid_amount} vs order {order.amount_paise}"
@@ -475,6 +564,41 @@ async def process_webhook(
                         expected=order.amount_paise,
                         received=paid_amount,
                     )
+                    existing = (
+                        await db.execute(
+                            select(Refund).where(
+                                Refund.order_id == order.id,
+                                Refund.status.in_(["pending", "processing", "processed"]),
+                            )
+                        )
+                    ).scalars().first()
+                    if existing is None and paid_amount > 0:
+                        db.add(
+                            Refund(
+                                order_id=order.id,
+                                amount_paise=paid_amount,
+                                reason_code="amount_mismatch",
+                                reason_note=(
+                                    "Captured amount did not match the order "
+                                    f"(gateway {paid_amount} vs order {order.amount_paise})"
+                                )[:500],
+                                status="pending",
+                            )
+                        )
+                        try:
+                            from app.services.telegram import dispatch_payment_telegram_alert
+
+                            dispatch_payment_telegram_alert(
+                                "failed",
+                                order_id=str(order.id),
+                                amount_paise=paid_amount,
+                                purpose=order.purpose,
+                                payment_id=pay_entity.get("id"),
+                                gateway_order_id=order_id,
+                                error_message="Amount mismatch — refund queued for finance",
+                            )
+                        except Exception:
+                            pass
                 else:
                     payment_id = pay_entity.get("id") or (
                         order_entity.get("payment_id") if "order_entity" in locals() else None
@@ -538,12 +662,15 @@ async def refund_order(
     if amount_paise <= 0:
         raise ValidationFailed("The refund amount must be greater than zero.")
 
+    # The cap counts money that is committed (accepted by the gateway or
+    # already settled). Counting only "processed" let a second refund of the
+    # same money start while the first was still in flight.
     already = (
         (
             await db.execute(
                 select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                     Refund.order_id == order.id,
-                    Refund.status == "processed",
+                    Refund.status.in_(("processing", "processed")),
                 )
             )
         )
@@ -551,10 +678,62 @@ async def refund_order(
         .one()
     )
     remaining = order.amount_paise - int(already or 0)
-    if amount_paise > remaining:
+
+    # A college registration can own several orders (the base pass plus every
+    # category-change delta). The registration desk refunds against that whole
+    # pot, so this screen must use the same total - otherwise it offers to
+    # refund base money that the delta has already consumed, or refuses a
+    # refund the desk can legitimately make.
+    reg_row = None
+    registration_remaining = None
+    if order.purpose in ("college_registration", "college_registration_delta"):
+        from app.models.registration import CollegeRegistration
+
+        if order.linked_record_id is not None:
+            reg_row = await db.get(CollegeRegistration, order.linked_record_id)
+        if reg_row is None:
+            reg_row = (
+                await db.execute(
+                    select(CollegeRegistration).where(
+                        CollegeRegistration.order_id == order.id
+                    )
+                )
+            ).scalars().first()
+    if reg_row is not None:
+        from app.services.college_registrations import (
+            _collected_paise,
+            _refund_order_ids,
+        )
+
+        order_ids = await _refund_order_ids(db, reg_row)
+        committed = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id.in_(order_ids),
+                        Refund.status.in_(("processing", "processed")),
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        ) or 0
+        registration_remaining = await _collected_paise(db, reg_row) - int(committed)
+        if amount_paise > max(registration_remaining, 0):
+            raise ValidationFailed(
+                f"Only INR {max(registration_remaining, 0) / 100:.2f} of this "
+                "registration is still refundable."
+            )
+
+    if amount_paise > remaining and registration_remaining is None:
         raise ValidationFailed(
             f"Only INR {remaining / 100:.2f} of this order is still refundable."
         )
+    if amount_paise > remaining and registration_remaining is not None:
+        # A delta slice can exceed its own order only when the caller asked for
+        # the whole registration; that is handled by the registration-level cap
+        # above, so allow the remainder to be refunded out of the same order.
+        amount_paise = min(amount_paise, remaining)
 
     transaction = (
         (
@@ -598,28 +777,141 @@ async def refund_order(
             status_code=502,
         )
 
-    refund = Refund(
-        order_id=order.id,
-        transaction_id=transaction.id if transaction else None,
-        amount_paise=amount_paise,
-        reason_code=reason_code,
-        reason_note=reason_note,
-        status="processed",
-        requested_by=requested_by_id,
-        approved_by=requested_by_id,
-        gateway_refund_id=gateway_id,
-        processed_at=datetime.now(UTC),
-    )
-    db.add(refund)
+    # A pending request created by the cancellation cascades is the same refund:
+    # settle that row instead of adding a second one for the same money.
+    refund = (
+        await db.execute(
+            select(Refund).where(
+                Refund.order_id == order.id,
+                Refund.status == "pending",
+                Refund.amount_paise == amount_paise,
+            )
+        )
+    ).scalars().first()
+    # "Accepted by the gateway" is not "settled". A real gateway refund stays
+    # ``processing`` until refund.processed arrives (and can still turn into
+    # ``failed``, which the old immediate "processed" write made impossible).
+    # Without a live gateway the mock moves the money immediately.
+    settings = get_settings()
+    settled_now = not settings.payments_enabled
+    refund_status = "processed" if settled_now else "processing"
+    processed_at = datetime.now(UTC) if settled_now else None
+    if refund is not None:
+        refund.transaction_id = transaction.id if transaction else None
+        refund.reason_code = reason_code
+        refund.reason_note = reason_note or refund.reason_note
+        refund.status = refund_status
+        refund.approved_by = requested_by_id
+        refund.gateway_refund_id = gateway_id
+        refund.processed_at = processed_at
+    else:
+        refund = Refund(
+            order_id=order.id,
+            transaction_id=transaction.id if transaction else None,
+            amount_paise=amount_paise,
+            reason_code=reason_code,
+            reason_note=reason_note,
+            status=refund_status,
+            requested_by=requested_by_id,
+            approved_by=requested_by_id,
+            gateway_refund_id=gateway_id,
+            processed_at=processed_at,
+        )
+        db.add(refund)
+    await db.flush()
+    refunded_total = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order.id, Refund.status == "processed"
+                )
+            )
+        )
+        .scalars()
+        .one()
+    ) or 0
 
-    if amount_paise >= remaining:
+    full_refund = amount_paise >= remaining
+    if registration_remaining is not None:
+        full_refund = amount_paise >= registration_remaining
+    if full_refund:
         # A full refund must also take back the entitlement it paid for.
         order.status = "refunded"
         if order.purpose == "pass" and order.linked_record_id:
+            # Legacy rows only. Refunding the money must take the pass back:
+            # this direction only ever removes an entitlement, so it is safe on
+            # a historic order (activating one is not - see mark_order_paid).
             user_pass = await db.get(ConventionPass, order.linked_record_id)
-            if user_pass is not None:
+            if user_pass is not None and user_pass.status != "refunded":
                 user_pass.status = "refunded"
                 await revoke_for_pass(db, user_pass.id)
+                # The pass either came with a seat allowance or the attendee
+                # bought seats on top. Refunding its money without releasing
+                # them left a live seat and ticket behind a dead pass.
+                from app.services.passes import release_event_entitlements
+
+                await release_event_entitlements(
+                    db,
+                    user_id=user_pass.user_id,
+                    edition_id=user_pass.edition_id,
+                    reason="Legacy pass order refunded",
+                    refund_paid_events=True,
+                    try_gateway=settled_now,
+                    actor_id=requested_by_id,
+                )
+        if order.purpose == "college_registration" or (
+            reg_row is not None and full_refund
+        ):
+            # The convention pass is sold through a college_registration order.
+            # Refunding it has to mirror the registration-desk rejection: the
+            # bill stays, but the pass, its ticket and the free included-event
+            # selections die with it. Skipping this left attendees with a live
+            # QR in the portal even after their money was returned.
+            from app.models.registration import CollegeRegistration
+
+            col_reg = (
+                await db.execute(
+                    select(CollegeRegistration).where(
+                        CollegeRegistration.order_id == order.id
+                    )
+                )
+            ).scalars().first()
+            if col_reg is None and reg_row is not None:
+                col_reg = reg_row
+            if col_reg is not None and col_reg.payment_status == "paid":
+                col_reg.payment_status = "refunded"
+                # "Completed" only once the money settled; a live gateway refund
+                # is still processing, so a refund.failed webhook can correct it.
+                col_reg.refund_status = "completed" if settled_now else "processing"
+                col_reg.refund_amount_paise = int(refunded_total)
+                col_reg.refund_id = refund.id
+                user_pass = (
+                    await db.execute(
+                        select(ConventionPass)
+                        .where(
+                            ConventionPass.user_id == col_reg.user_id,
+                            ConventionPass.edition_id == col_reg.edition_id,
+                        )
+                        .order_by(ConventionPass.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalars().first()
+                if user_pass is not None and user_pass.status != "refunded":
+                    user_pass.status = "refunded"
+                    await revoke_for_pass(db, user_pass.id)
+                # Free the attendee's seats, drop them from team rosters and
+                # return the money for any paid add-on events. This is the same
+                # cascade the registration desk uses on rejection, so a refunded
+                # pass never leaves a live seat or an unreturned add-on payment.
+                from app.services.passes import release_event_entitlements
+
+                await release_event_entitlements(
+                    db,
+                    user_id=col_reg.user_id,
+                    edition_id=col_reg.edition_id,
+                    reason="Convention pass refunded",
+                    actor_id=requested_by_id,
+                )
         registrations = list(
             (
                 await db.execute(
@@ -632,6 +924,23 @@ async def refund_order(
                 reg.status = "cancelled"
                 reg.cancelled_at = datetime.now(UTC)
                 await revoke_for_registration(db, reg.id)
+    elif order.purpose in ("college_registration", "college_registration_delta"):
+        # Partial refund: record it on the pass so the desk can see how much has
+        # gone back and finish the rest later. The pass itself stays valid (the
+        # attendee kept the entitlement they were not refunded for).
+        from app.models.registration import CollegeRegistration
+
+        col_reg = reg_row or (
+            await db.execute(
+                select(CollegeRegistration).where(
+                    CollegeRegistration.order_id == order.id
+                )
+            )
+        ).scalars().first()
+        if col_reg is not None:
+            col_reg.refund_status = "completed"
+            col_reg.refund_amount_paise = int(refunded_total)
+            col_reg.refund_id = refund.id
 
     await db.flush()
     try:
@@ -639,15 +948,18 @@ async def refund_order(
         from app.models.user import User
 
         user = await db.get(User, order.user_id) if order.user_id else None
+        # This is money leaving, not a payment: report the refund itself (amount
+        # and refund id) instead of a "Payment Successful" alert.
         dispatch_payment_telegram_alert(
-            "success",
+            "refund",
             order_id=str(order.id),
-            amount_paise=order.amount_paise,
+            amount_paise=amount_paise,
             purpose=order.purpose,
-            payment_id=transaction.gateway_payment_id if transaction else None,
             gateway_order_id=order.gateway_order_id,
             attendee_name=user.full_name if user else None,
             attendee_email=user.email if user else None,
+            refund_id=refund.gateway_refund_id or str(refund.id),
+            refund_status=refund.status,
         )
     except Exception:
         pass

@@ -9,18 +9,21 @@ a rejected registration can never look "approved" because money moved.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -98,8 +101,19 @@ class CollegeRegistration(Base, UUIDPrimaryKey, Timestamps):
     course: Mapped[str | None] = mapped_column(String(120))
     branch: Mapped[str | None] = mapped_column(String(120))
     year_of_study: Mapped[str | None] = mapped_column(String(40))
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
     city: Mapped[str | None] = mapped_column(String(120))
     state: Mapped[str | None] = mapped_column(String(120))
+
+    # Asked at pass purchase. The desk reads them at the door and the kitchen and
+    # hostel teams count from them, so they are real columns, not form metadata.
+    # Stored as small integers (0/1) to keep the row narrow; the API and UI speak
+    # "male"/"female" and "veg"/"non_veg" through core/attendee.py.
+    gender: Mapped[int | None] = mapped_column(SmallInteger)
+    food_preference: Mapped[int | None] = mapped_column(SmallInteger)
+    needs_accommodation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     fee_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     additional_paid_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -152,9 +166,31 @@ class CollegeRegistration(Base, UUIDPrimaryKey, Timestamps):
         ForeignKey("registration_categories.id", ondelete="SET NULL")
     )
 
+    # 24-hour compliance window for an admin request that needs the attendee's
+    # action (re-upload corrected documents / pay a category-change difference).
+    # The deadline is written when the desk flags the registration and a lazy
+    # sweep enforces it: seats are released, paid event money is refunded and
+    # team rosters are repaired. ``compliance_kind`` stays set after enforcement
+    # so both portals can still explain what happened.
+    compliance_kind: Mapped[str | None] = mapped_column(String(40))
+    compliance_flagged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    compliance_deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    compliance_enforced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     __table_args__ = (
         UniqueConstraint("edition_id", "user_id", name="uq_college_registration_user"),
         Index("ix_college_registration_edition_status", "edition_id", "verification_status"),
+        Index(
+            "ix_college_registration_compliance_due",
+            "compliance_kind",
+            "compliance_deadline_at",
+        ),
     )
 
 
@@ -213,6 +249,18 @@ class RegistrationCategoryChange(Base, UUIDPrimaryKey, Timestamps):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        # Two concurrent requests used to create two pending changes for one
+        # registration, so the desk saw two different target categories.
+        Index(
+            "uq_category_change_pending",
+            "registration_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
 
 class RegistrationNotification(Base, UUIDPrimaryKey):

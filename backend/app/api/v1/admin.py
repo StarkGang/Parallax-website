@@ -3,15 +3,17 @@
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, require_permission, require_any_permission, require_min_role
 from app.integrations.storage import get_storage
+from app.core.attendee import decode_food, decode_gender
 from app.core.cache import cache_delete_pattern
 from app.core.errors import AppError
 from app.core.errors import Conflict, NotFound, StepUpRequired, ValidationFailed
@@ -33,7 +35,6 @@ from app.models.commerce import (
 from app.models.edition import (
     ConventionEdition,
     EditionPolicy,
-    EligibilityVerification,
     Event,
     EventCategory,
     Icon,
@@ -42,6 +43,8 @@ from app.models.registration import CollegeRegistration
 from app.models.user import User
 from app.schemas.admin import (
     AdminForceCancelPayload,
+    CustomCredentialRevoke,
+    CustomCredentialUpsert,
     AdminManualAttendancePayload,
     AdminProcessRefundPayload,
     DbPlaygroundSeedPayload,
@@ -54,23 +57,53 @@ from app.schemas.admin import (
     PolicyUpdate,
     RefundCreate,
     UserStatusUpdate,
-    VerificationDecision,
 )
 from app.services.audit import record
 from app.services.tickets import revoke_for_registration
 from app.services import (
     announcements as announcement_service,
+    credentials as credential_service,
+    college_registrations as registration_service,
     editions as edition_service,
     events as event_service,
     icons as icon_service,
     payments as payment_service,
+    tickets as ticket_service,
     users as user_service,
-    verification as verif_service,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/editions/{edition_id}/admin", tags=["admin"])
+
+
+async def _attendance_for(
+    db: AsyncSession,
+    edition_id: uuid.UUID,
+    user_id: uuid.UUID,
+    event_id: uuid.UUID | None,
+    day: str,
+) -> AttendanceRecord | None:
+    """The attendance row a scan of this user/day/scope would duplicate.
+
+    A pass-level scan has ``event_id = NULL``, and SQL treats NULLs as distinct
+    inside a unique constraint, so the row has to be found explicitly instead of
+    relying on the constraint for that case.
+    """
+    stmt = select(AttendanceRecord).where(
+        AttendanceRecord.edition_id == edition_id,
+        AttendanceRecord.user_id == user_id,
+        AttendanceRecord.day == day,
+    )
+    if event_id is None:
+        stmt = stmt.where(AttendanceRecord.event_id.is_(None))
+    else:
+        stmt = stmt.where(AttendanceRecord.event_id == event_id)
+    return (
+        await db.execute(
+            stmt.order_by(AttendanceRecord.checked_in_at.desc()).limit(1)
+        )
+    ).scalars().first()
 
 
 def _role(ctx: AuthContext, edition_id: uuid.UUID) -> str:
@@ -83,6 +116,8 @@ async def overview(
     ctx: AuthContext = Depends(require_permission("stats.read")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    # Dashboard counts must not include expired 24-hour holds.
+    await registration_service.lazy_enforce_for_read(db, edition_id=edition_id)
     stats = await edition_service.dashboard(db, edition_id)
     return {"data": stats.model_dump(by_alias=True)}
 
@@ -164,13 +199,34 @@ async def dispatch_email_outbox(
 )
 async def expire_orders(
     edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_permission("settings.manage")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Cron-friendly sweep: expire abandoned checkouts and release holds."""
     expired = await payment_service.expire_unpaid(db)
     await db.commit()
     return {"data": {"expired": expired}}
+
+
+@router.post(
+    "/maintenance/enforce-compliance",
+    dependencies=[Depends(limiter("admin_enforce_compliance", 10, 60))],
+)
+async def enforce_compliance_deadlines(
+    edition_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("settings.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Cron-friendly sweep for expired 24-hour desk requests.
+
+    Releases event seats, refunds paid event seats and repairs team rosters for
+    attendees who did not answer a document re-upload or category top-up
+    request. Each registration is enforced once.
+    """
+    result = await registration_service.enforce_lapsed_compliance(
+        db, edition_id=edition_id, limit=200
+    )
+    await db.commit()
+    return {"data": result}
 
 
 @router.get("/my-permissions")
@@ -204,7 +260,6 @@ async def get_settings_route(
             "registrationClosesAt": edition_service.aware(edition.registration_closes_at).isoformat() if edition.registration_closes_at else None,
             "status": edition.status,
             "contactEmail": edition.contact_email,
-            "allowedEmailDomains": edition.allowed_email_domains or [],
             "branding": {"theme": edition.theme} if getattr(edition, "theme", None) else {},
         }
     }
@@ -226,6 +281,36 @@ async def update_settings(
 
     from app.core.errors import ValidationFailed
 
+    # These columns are NOT NULL. A cleared input in the console must come back
+    # as a readable 422 instead of a database integrity error (500) that leaves
+    # the operator with no idea which field broke the save.
+    required_fields = {
+        "name": "Edition name",
+        "venue": "Venue",
+        "city": "City",
+        "starts_at": "Starts at",
+        "ends_at": "Ends at",
+    }
+    for field, label in required_fields.items():
+        if field not in data:
+            continue
+        value = data[field]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValidationFailed(f"{label} is required and cannot be empty.")
+        if isinstance(value, str):
+            data[field] = value.strip()
+
+    starts = data.get("starts_at", edition.starts_at)
+    ends = data.get("ends_at", edition.ends_at)
+    if starts and ends:
+        left, right = starts, ends
+        if left.tzinfo is None and right.tzinfo is not None:
+            right = right.replace(tzinfo=None)
+        elif right.tzinfo is None and left.tzinfo is not None:
+            left = left.replace(tzinfo=None)
+        if right <= left:
+            raise ValidationFailed("The convention must end after it starts.")
+
     # A window that closes before it opens silently disables registration for
     # the entire convention, so reject it before anything is written.
     opens = data.get("registration_opens_at", edition.registration_opens_at)
@@ -239,12 +324,33 @@ async def update_settings(
         if right <= left:
             raise ValidationFailed("Registration must close after it opens.")
 
+    new_status = data.get("status")
+    cancelling = new_status == "cancelled" and edition.status != "cancelled"
+
     for k, v in data.items():
         if hasattr(edition, k):
             setattr(edition, k, v)
     await db.flush()
+
+    cascade = None
+    if cancelling:
+        # Cancelling a convention used to change a label and nothing else: seats,
+        # tickets, passes and money all stayed live. The cascade closes every
+        # event, cancels the passes and queues one refund per paid order.
+        cascade = await edition_service.cancel_edition(
+            db,
+            request,
+            edition,
+            reason=(payload.model_dump(exclude_unset=True).get("tagline") or "Edition cancelled"),
+            actor_id=ctx.user.id,
+            actor_role=_role(ctx, edition_id),
+        )
     await db.commit()
-    return {"data": {"updated": True}}
+    # The public edition page is cached; a settings patch changed the name, the
+    # dates and the status it renders.
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
+    return {"data": {"updated": True, "cascade": cascade}}
 
 
 @router.get("/policies")
@@ -400,6 +506,7 @@ async def admin_events(
     status: str | None = None,
     q: str | None = None,
 ) -> dict:
+    await registration_service.lazy_enforce_for_read(db, edition_id=edition_id)
     events = await event_service.admin_list_events(db, edition_id, status=status, q=q)
     return {"data": events}
 
@@ -414,6 +521,7 @@ async def admin_event(
     event = await event_service.event_by_id(db, event_id)
     if event.edition_id != edition_id:
         raise NotFound("Event not found.")
+    await registration_service.lazy_enforce_for_read(db, edition_id=edition_id)
     payload = await event_service.event_admin_payload(db, event)
     return {"data": payload}
 
@@ -463,7 +571,9 @@ async def update_event(
 @router.get("/icons")
 async def icons(
     edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_permission("events.write")),
+    # Icon curation is its own permission ("icon.write"); borrowing events.write
+    # meant the catalogue entry was dead and event editors could not manage art.
+    ctx: AuthContext = Depends(require_permission("icon.write")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     icons_list = await icon_service.listed(db, edition_id)
@@ -478,11 +588,10 @@ async def upload_banner(
 ) -> dict:
     data = await read_upload_limited(file, 10 * 1024 * 1024, label="Banner image")
 
-    # Trust the bytes, not the filename or the client-declared Content-Type: this
-    # lands in a public bucket and must never hold arbitrary content.
-    if data.startswith(b"\xff\xd8\xff"):
+    # Trust the bytes, not the filename or the declared content type.
+    if data.startswith(bytes.fromhex("ffd8ff")):
         ext, content_type = "jpg", "image/jpeg"
-    elif data.startswith(b"\x89PNG\r\n\x1a\n"):
+    elif data.startswith(bytes.fromhex("89504e470d0a1a0a")):
         ext, content_type = "png", "image/png"
     elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         ext, content_type = "webp", "image/webp"
@@ -509,7 +618,7 @@ async def upload_icon(
     file: UploadFile = File(...),
     name: Annotated[str, Form()] = "",
     recolorable: Annotated[bool, Form()] = False,
-    ctx: AuthContext = Depends(require_permission("events.write")),
+    ctx: AuthContext = Depends(require_permission("icon.write")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     data = await read_upload_limited(file, 300 * 1024, label="Icon")
@@ -532,7 +641,7 @@ async def archive_icon(
     edition_id: uuid.UUID,
     icon_id: uuid.UUID,
     request: Request,
-    ctx: AuthContext = Depends(require_permission("events.write")),
+    ctx: AuthContext = Depends(require_permission("icon.write")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     icon = await db.get(Icon, icon_id)
@@ -609,7 +718,7 @@ async def grant_membership(
     ctx: AuthContext = Depends(require_permission("staff.manage")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    m = await user_service.grant_membership(
+    m, replaced = await user_service.grant_membership(
         db,
         request,
         email=payload.email,
@@ -619,7 +728,7 @@ async def grant_membership(
         actor_role=_role(ctx, edition_id),
     )
     await db.commit()
-    return {"data": {"granted": True, "role": m.role}}
+    return {"data": {"granted": True, "role": m.role, "replacedRoles": replaced}}
 
 
 @router.post("/staff-invites", dependencies=[Depends(limiter("admin_staff_invite", 30, 60))])
@@ -752,107 +861,6 @@ async def refunds(
     }
 
 
-@router.get("/verifications")
-async def verifications(
-    edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_permission("verification.review")),
-    db: AsyncSession = Depends(get_db),
-    status: str | None = None,
-) -> dict:
-    stmt = (
-        select(EligibilityVerification, User)
-        .join(User, EligibilityVerification.user_id == User.id)
-        .where(EligibilityVerification.edition_id == edition_id)
-    )
-    if status:
-        stmt = stmt.where(EligibilityVerification.status == status)
-    rows = list((await db.execute(stmt.order_by(EligibilityVerification.created_at.desc()))).all())
-    return {
-        "data": [
-            {
-                "id": str(v.id),
-                "userId": str(u.id),
-                "fullName": u.full_name,
-                "email": u.email,
-                "method": v.method,
-                "status": v.status,
-                "documentName": v.document_name,
-                "submittedAt": edition_service.aware(v.created_at).isoformat() if v.created_at else None,
-                "reviewedAt": edition_service.aware(v.reviewed_at).isoformat() if v.reviewed_at else None,
-                "rejectionReason": v.rejection_reason,
-            }
-            for v, u in rows
-        ]
-    }
-
-
-@router.get("/verifications/{verification_id}/document")
-async def verification_document(
-    edition_id: uuid.UUID,
-    verification_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_permission("verification.review")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    v = await db.get(EligibilityVerification, verification_id)
-    if v is None or v.edition_id != edition_id:
-        raise NotFound("Verification not found.")
-    url = await verif_service.signed_document_url(v)
-    return {"data": {"url": url}}
-
-
-@router.post(
-    "/verifications/{verification_id}/decide",
-    dependencies=[Depends(limiter("admin_verification_decision", 120, 60))],
-)
-async def decide_verification(
-    edition_id: uuid.UUID,
-    verification_id: uuid.UUID,
-    payload: VerificationDecision,
-    request: Request,
-    ctx: AuthContext = Depends(require_permission("verification.review")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    v = await db.get(EligibilityVerification, verification_id)
-    if v is None or v.edition_id != edition_id:
-        raise NotFound("Verification not found.")
-    await verif_service.review(
-        db,
-        request,
-        v,
-        decision=payload.decision,
-        reason=payload.reason,
-        actor_id=ctx.user.id,
-        actor_role=_role(ctx, edition_id),
-    )
-    await db.commit()
-    return {"data": {"status": v.status}}
-
-
-@router.post(
-    "/verifications/{verification_id}/email-code",
-    dependencies=[Depends(limiter("admin_verification_code", 30, 60))],
-)
-async def regenerate_verification_code(
-    edition_id: uuid.UUID,
-    verification_id: uuid.UUID,
-    request: Request,
-    ctx: AuthContext = Depends(require_permission("verification.review")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    v = await db.get(EligibilityVerification, verification_id)
-    if v is None or v.edition_id != edition_id:
-        raise NotFound("Verification not found.")
-    await verif_service.regenerate_email_code(
-        db,
-        request,
-        v,
-        actor_id=ctx.user.id,
-        actor_role=_role(ctx, edition_id),
-    )
-    await db.commit()
-    return {"data": {"sent": True}}
-
-
 @router.get("/registrations")
 async def registrations(
     edition_id: uuid.UUID,
@@ -864,6 +872,7 @@ async def registrations(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
 ) -> dict:
+    await registration_service.lazy_enforce_for_read(db, edition_id=edition_id)
     stmt = (
         select(Registration, User, Event, PaymentOrder, CollegeRegistration)
         .join(User, Registration.user_id == User.id)
@@ -981,11 +990,29 @@ async def force_cancel_registration(
         raise Conflict("Registration is already cancelled.")
 
     event = await db.get(Event, reg.event_id)
+    # The attendee-facing path refuses cancellations inside the cutoff window so
+    # a paid seat is not pulled minutes before the event. An admin cancel is not
+    # exempt unless the operator says so.
+    if event is not None and event.starts_at is not None and not payload.force:
+        from app.services.registrations import CANCELLATION_CUTOFF_HOURS
+
+        starts = edition_service.aware(event.starts_at)
+        if starts is not None and starts <= datetime.now(UTC) + timedelta(
+            hours=CANCELLATION_CUTOFF_HOURS
+        ):
+            raise Conflict(
+                f"This event starts within {CANCELLATION_CUTOFF_HOURS} hours. "
+                "Send force=true to cancel it anyway.",
+                code="CANCELLATION_CLOSED",
+            )
     reg.status = "cancelled"
     reg.cancelled_at = datetime.now(UTC)
     reg.cancelled_by = "admin"
     reg.cancellation_reason = payload.reason or "Removed from event by administration"
     await revoke_for_registration(db, reg.id)
+    if reg.team_id is not None:
+        from app.services.teams import on_team_registration_cancelled
+        await on_team_registration_cancelled(db, reg)
 
     # Free up included event selection so attendee's quota is restored
     if reg.kind == "included":
@@ -1062,6 +1089,37 @@ async def force_cancel_registration(
             requested_by_id=ctx.user.id,
         )
         refund_data = {"refundId": str(rf.id), "amountPaise": rf.amount_paise}
+    elif reg.kind != "included" and reg.fee_paise > 0 and reg.order_id is not None:
+        # The seat was taken away without a refund instruction. The money is
+        # still the attendee's, so it is parked in the finance ledger instead of
+        # disappearing from every screen.
+        order = await db.get(PaymentOrder, reg.order_id)
+        if order is not None and order.status == "paid":
+            already = (
+                (
+                    await db.execute(
+                        select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                            Refund.order_id == order.id,
+                            Refund.status.in_(["pending", "processing", "processed"]),
+                        )
+                    )
+                )
+                .scalars()
+                .one()
+            ) or 0
+            outstanding = max(0, int(order.amount_paise) - int(already))
+            if outstanding > 0:
+                db.add(
+                    Refund(
+                        order_id=order.id,
+                        amount_paise=min(int(reg.fee_paise), outstanding),
+                        reason_code="admin_force_cancel",
+                        reason_note=(payload.reason or "Removed from event by administration")[:300],
+                        status="pending",
+                        requested_by=ctx.user.id,
+                    )
+                )
+                await db.flush()
 
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
@@ -1208,6 +1266,157 @@ async def create_announcement(
     )
     await db.commit()
     return {"data": {"id": str(a.id)}}
+
+
+@router.get("/custom-credentials")
+async def list_custom_credentials(
+    edition_id: uuid.UUID,
+    request: Request,
+    include_revoked: bool = Query(default=True),
+    ctx: AuthContext = Depends(require_permission("credential.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    rows = await credential_service.list_for_edition(
+        db, edition_id, include_revoked=include_revoked
+    )
+    base_url = ticket_service.entry_base_url(str(request.base_url).rstrip("/"))
+    return {
+        "data": [
+            await credential_service.payload_with_entry(db, row, base_url=base_url)
+            for row in rows
+        ]
+    }
+
+
+@router.post("/custom-credentials/photo")
+async def upload_credential_photo(
+    edition_id: uuid.UUID,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(require_permission("credential.write")),
+) -> dict:
+    """Store a card photo and return its durable URL.
+
+    The studio used to embed a browser blob URL in the saved card, which dies
+    with the tab: a card reprinted the next day came back with no face. Upload
+    the bytes here and store the returned URL instead.
+    """
+    data = await read_upload_limited(file, 5 * 1024 * 1024, label="Card photo")
+    # Trust the bytes, not the filename or the declared content type.
+    if data.startswith(bytes.fromhex("ffd8ff")):
+        ext, content_type = "jpg", "image/jpeg"
+    elif data.startswith(bytes.fromhex("89504e470d0a1a0a")):
+        ext, content_type = "png", "image/png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        ext, content_type = "webp", "image/webp"
+    else:
+        raise AppError(
+            "Upload a JPG, PNG or WebP photo.",
+            code="FILE_TYPE_NOT_ALLOWED",
+            status_code=415,
+        )
+    key = f"credentials/{edition_id}/{uuid.uuid4().hex}.{ext}"
+    storage = get_storage()
+    clean_key = await storage.put(key, data, content_type)
+    return {"data": {"url": storage.public_url(clean_key), "key": clean_key}}
+
+
+@router.post("/custom-credentials")
+async def create_custom_credential(
+    edition_id: uuid.UUID,
+    payload: CustomCredentialUpsert,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("credential.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    # A registered attendee already owns exactly one studio card. Saving their
+    # card again reopens that row (with its signed QR) instead of failing on a
+    # duplicate ID, which is what the operator expects when they "load" them.
+    reused = None
+    if payload.registration_id:
+        reused = await credential_service.for_registration(
+            db, edition_id, payload.registration_id
+        )
+    credential = await credential_service.create(
+        db, edition_id, payload.model_dump(), actor_id=ctx.user.id
+    )
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="custom_credential.create",
+        resource_type="custom_credential",
+        resource_id=str(credential.id),
+        after=credential_service.payload(credential),
+    )
+    view = await credential_service.payload_with_entry(
+        db, credential, base_url=ticket_service.entry_base_url(str(request.base_url).rstrip("/"))
+    )
+    await db.commit()
+    return {"data": view, "reused": reused is not None}
+
+
+@router.patch("/custom-credentials/{credential_id}")
+async def update_custom_credential(
+    edition_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    payload: CustomCredentialUpsert,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("credential.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    credential = await credential_service.get_for_edition(db, edition_id, credential_id)
+    if credential.status != "active":
+        raise Conflict("A revoked credential cannot be edited. Create a new card instead.")
+    before = credential_service.payload(credential)
+    await credential_service.update(
+        db, credential, payload.model_dump(exclude_unset=True), actor_id=ctx.user.id
+    )
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="custom_credential.update",
+        resource_type="custom_credential",
+        resource_id=str(credential.id),
+        before=before,
+        after=credential_service.payload(credential),
+    )
+    view = await credential_service.payload_with_entry(
+        db, credential, base_url=ticket_service.entry_base_url(str(request.base_url).rstrip("/"))
+    )
+    await db.commit()
+    return {"data": view}
+
+
+@router.post("/custom-credentials/{credential_id}/revoke")
+async def revoke_custom_credential(
+    edition_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    payload: CustomCredentialRevoke,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("credential.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    credential = await credential_service.get_for_edition(db, edition_id, credential_id)
+    before = credential_service.payload(credential)
+    await credential_service.revoke(
+        db, credential, actor_id=ctx.user.id, reason=payload.reason
+    )
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="custom_credential.revoke",
+        resource_type="custom_credential",
+        resource_id=str(credential.id),
+        before=before,
+        after=credential_service.payload(credential),
+    )
+    await db.commit()
+    return {"data": credential_service.payload(credential)}
 
 
 @router.patch("/announcements/{announcement_id}")
@@ -1358,6 +1567,7 @@ async def event_roster(
     event = await db.get(Event, event_id)
     if event is None or event.edition_id != edition_id:
         raise NotFound("Event not found.")
+    await registration_service.lazy_enforce_for_read(db, edition_id=edition_id)
 
     check_day = day or datetime.now(UTC).strftime("%Y-%m-%d")
 
@@ -1520,8 +1730,13 @@ async def mark_manual_attendance(
         await db.execute(
             select(AttendanceRecord).where(
                 AttendanceRecord.user_id == payload.user_id,
-                AttendanceRecord.event_id == payload.event_id,
+                AttendanceRecord.edition_id == edition_id,
                 AttendanceRecord.day == day,
+                (
+                    AttendanceRecord.event_id == payload.event_id
+                    if payload.event_id is not None
+                    else AttendanceRecord.event_id.is_(None)
+                ),
             )
         )
     ).scalar_one_or_none()
@@ -1546,8 +1761,29 @@ async def mark_manual_attendance(
         checked_in_by=ctx.user.id,
         device_label=payload.note or "admin_manual_roster",
     )
-    db.add(rec)
-    await db.flush()
+    # Two staff marking the same person at the same moment both miss the check
+    # above; the unique constraint then raised a 500 instead of "duplicate".
+    # The savepoint keeps the surrounding transaction usable.
+    try:
+        async with db.begin_nested():
+            db.add(rec)
+            await db.flush()
+    except IntegrityError:
+        db.expunge(rec)
+        existing = await _attendance_for(
+            db, edition_id, payload.user_id, payload.event_id, day
+        )
+        if existing is None:
+            raise
+        return {
+            "data": {
+                "id": str(existing.id),
+                "result": "duplicate",
+                "participantName": user.full_name,
+                "checkedInAt": edition_service.aware(existing.checked_in_at).isoformat(),
+                "message": "Already marked present for this day.",
+            }
+        }
     await record(
         db,
         request,
@@ -1594,11 +1830,84 @@ async def delete_attendance_record(
         resource_id=rec.id,
         actor_id=ctx.user.id,
         actor_role=_role(ctx, edition_id),
-        before={"user_id": str(rec.user_id), "event_id": str(rec.event_id) if rec.event_id else None},
+        before={
+            "user_id": str(rec.user_id),
+            "event_id": str(rec.event_id) if rec.event_id else None,
+            # Hard-deleting the row loses who admitted the attendee; the audit
+            # entry is the only remaining record of it.
+            "checked_in_by": str(rec.checked_in_by) if rec.checked_in_by else None,
+            "checked_in_at": rec.checked_in_at.isoformat() if rec.checked_in_at else None,
+            "day": rec.day,
+        },
     )
     await db.delete(rec)
     await db.commit()
     return {"data": {"revoked": True, "id": str(attendance_id)}}
+
+
+def _attendee_logistics(registration) -> dict:
+    """Gender / meal / bed, the three things the door and kitchen ask for."""
+    if registration is None:
+        return {"gender": None, "foodPreference": None, "needsAccommodation": False}
+    return {
+        "gender": decode_gender(registration.gender),
+        "foodPreference": decode_food(registration.food_preference),
+        "needsAccommodation": bool(registration.needs_accommodation),
+    }
+
+
+async def _admit_custom_credential(
+    db: AsyncSession,
+    request: Request,
+    ctx: AuthContext,
+    edition_id: uuid.UUID,
+    credential,
+    day: str | None,
+) -> dict:
+    """Admit a studio-issued card and hand the desk the holder's logistics."""
+    if credential.registration_id is not None:
+        from app.models.registration import CollegeRegistration
+
+        reg = await db.get(CollegeRegistration, credential.registration_id)
+        if reg is None or reg.edition_id != edition_id:
+            raise NotFound("Linked registration was not found in this edition.")
+        if reg.payment_status not in ("paid", "completed") or reg.verification_status == "cancelled":
+            raise Conflict(
+                "This registration has not been paid or has been cancelled. Entry denied.",
+                code="PASS_NOT_ACTIVE",
+            )
+        user = await db.get(User, reg.user_id)
+        if user is not None and user.status == "suspended":
+            raise Conflict(
+                "This participant's account is suspended by the organisers. "
+                "Entry denied - please escalate to the convention lead.",
+                code="USER_SUSPENDED",
+            )
+
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="custom_credential.checkin",
+        resource_type="custom_credential",
+        resource_id=str(credential.id),
+        after={"code": credential.code, "day": day},
+    )
+    await db.commit()
+    return {
+        "data": {
+            "result": "admitted",
+            "participantName": credential.name,
+            "credential": credential_service.public_payload(credential),
+            "gender": decode_gender(credential.gender),
+            "foodPreference": decode_food(credential.food_preference),
+            "needsAccommodation": credential.needs_accommodation,
+            "checkedInAt": datetime.now(UTC).isoformat(),
+            "message": f"{credential.role} · {credential.code} admitted",
+            "team": None,
+        }
+    }
 
 
 @router.post("/checkin", dependencies=[Depends(limiter("admin_checkin", 300, 60))])
@@ -1611,8 +1920,56 @@ async def checkin(
 ) -> dict:
     from app.services import tickets as ticket_service
 
-    ticket = await ticket_service.resolve(db, payload.token, edition_id)
+    # Studio cards carry a distinguishable token shape, so a scan of one skips
+    # the ticket lookup entirely. Anything else is tried as a ticket first: a
+    # hand-typed credential ID has no required prefix, so the fallback stays.
+    if credential_service.looks_like_token(payload.token):
+        credential = await credential_service.resolve(db, payload.token, edition_id)
+        return await _admit_custom_credential(
+            db, request, ctx, edition_id, credential, payload.day
+        )
+    try:
+        ticket = await ticket_service.resolve(db, payload.token, edition_id)
+    except NotFound:
+        # A studio-issued card is not a registration and has no user account.
+        # Resolve it separately so scanning one admits the holder instead of
+        # failing with "invalid ticket token".
+        credential = await credential_service.resolve(db, payload.token, edition_id)
+        return await _admit_custom_credential(
+            db, request, ctx, edition_id, credential, payload.day
+        )
     user = await db.get(User, ticket.user_id)
+    # A suspended account must not scan green anywhere: the desk needs to know
+    # the suspension (not a ticket problem) is why entry is denied.
+    if user is not None and user.status == "suspended":
+        raise Conflict(
+            "This participant's account is suspended by the organisers. "
+            "Entry denied - please escalate to the convention lead.",
+            code="USER_SUSPENDED",
+        )
+    if ticket.pass_id:
+        from app.models.commerce import ConventionPass
+        pass_obj = await db.get(ConventionPass, ticket.pass_id)
+        if pass_obj is not None and pass_obj.status == "suspended":
+            raise Conflict(
+                "This participant's convention pass has been suspended by the organisers. Entry denied.",
+                code="PASS_BLOCKED",
+            )
+    from app.models.registration import CollegeRegistration
+    col_reg = (
+        await db.execute(
+            select(CollegeRegistration).where(
+                CollegeRegistration.user_id == ticket.user_id,
+                CollegeRegistration.edition_id == edition_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if col_reg is not None and col_reg.category_change_status == "awaiting_payment":
+        raise Conflict(
+            "This participant has an unpaid category upgrade balance. "
+            "Please clear the differential payment at the registration desk before entry.",
+            code="PAYMENT_DUE",
+        )
     day = payload.day or datetime.now(UTC).strftime("%Y-%m-%d")
 
     event_id = payload.event_id
@@ -1676,22 +2033,18 @@ async def checkin(
                     "isLeader": t_obj.leader_id == ticket.user_id,
                 }
 
-    existing = (
-        await db.execute(
-            select(AttendanceRecord).where(
-                AttendanceRecord.user_id == ticket.user_id,
-                AttendanceRecord.event_id == event_id,
-                AttendanceRecord.day == day,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
+    existing_row = await _attendance_for(db, edition_id, ticket.user_id, event_id, day)
+    if existing_row is not None:
+        repeat_logistics = _attendee_logistics(col_reg)
         return {
             "data": {
                 "result": "duplicate",
                 "participantName": user.full_name if user else "Participant",
-                "checkedInAt": edition_service.aware(existing.checked_in_at).isoformat(),
+                "checkedInAt": edition_service.aware(existing_row.checked_in_at).isoformat(),
                 "message": "Already checked in for this day.",
+                "gender": repeat_logistics["gender"],
+                "foodPreference": repeat_logistics["foodPreference"],
+                "needsAccommodation": repeat_logistics["needsAccommodation"],
                 "team": team_info,
             }
         }
@@ -1705,8 +2058,27 @@ async def checkin(
         checked_in_by=ctx.user.id,
         device_label=payload.device_label,
     )
-    db.add(rec)
-    await db.flush()
+    # Two scanners on the same ticket used to race between the SELECT above and
+    # this INSERT: the loser raised a unique violation and the desk saw a 500.
+    # The savepoint turns that race into the "already checked in" answer.
+    try:
+        async with db.begin_nested():
+            db.add(rec)
+            await db.flush()
+    except IntegrityError:
+        db.expunge(rec)
+        existing_row = await _attendance_for(db, edition_id, ticket.user_id, event_id, day)
+        if existing_row is None:
+            raise
+        return {
+            "data": {
+                "result": "duplicate",
+                "participantName": user.full_name if user else "Participant",
+                "checkedInAt": edition_service.aware(existing_row.checked_in_at).isoformat(),
+                "message": "Already checked in for this day.",
+                "team": team_info,
+            }
+        }
     await db.commit()
 
     college_reg = (
@@ -1718,6 +2090,7 @@ async def checkin(
         )
     ).scalars().first()
     is_verified = college_reg.verification_status == "approved" if college_reg else True
+    logistics = _attendee_logistics(college_reg)
     warning = (
         "UNVERIFIED ATTENDEE: Check physical college ID on the spot."
         if (college_reg and college_reg.verification_status != "approved")
@@ -1732,6 +2105,9 @@ async def checkin(
             "isVerified": is_verified,
             "verificationStatus": college_reg.verification_status if college_reg else "approved",
             "warning": warning,
+            "gender": logistics["gender"],
+            "foodPreference": logistics["foodPreference"],
+            "needsAccommodation": logistics["needsAccommodation"],
             "team": team_info,
             "eventId": str(event_id) if event_id else None,
         }
@@ -1787,7 +2163,10 @@ async def db_playground_seed(
     from app.core.config import get_settings
 
     settings = get_settings()
-    if not (settings.is_debug or settings.is_development or settings.is_test):
+    # The gate is about "no real money can be taken here", not about the name of
+    # the environment: a staging deploy that runs with live gateway keys must
+    # not let an edition_admin hand out paid passes for free.
+    if not settings.is_development or settings.payments_enabled:
         raise NotFound("Not found.")
     if settings.mfa_enforced and ctx.is_staff and not ctx.step_up_fresh:
         raise StepUpRequired("Confirm your authenticator code to continue.")
@@ -1795,7 +2174,7 @@ async def db_playground_seed(
     from app.services.telegram import send_telegram_alert
     from app.services.passes import activate_pass_for_registration
     from app.services.tickets import issue_for_registration, issue_for_pass
-    from app.services.registrations import _number
+    from app.services.college_registrations import _unique_registration_number
 
     # 1. Resolve user by ID or email
     user_query = payload.user_email_or_id.strip()
@@ -1855,6 +2234,18 @@ async def db_playground_seed(
 
     if college_reg:
         if payload.mark_college_reg_approved:
+            # An approval through this override left a pending category change
+            # claiming a different category, so the desk saw two answers for the
+            # same registration.
+            from app.services.college_registrations import (
+                _cancel_outstanding_category_change,
+            )
+
+            await _cancel_outstanding_category_change(
+                db,
+                college_reg,
+                reason="Cancelled by the DB playground approval override.",
+            )
             college_reg.payment_status = "paid"
             college_reg.verification_status = "approved"
             college_reg.paid_at = college_reg.paid_at or datetime.now(UTC)
@@ -1876,13 +2267,13 @@ async def db_playground_seed(
             user_id=target_user.id,
             edition_id=edition_id,
             policy=policy,
-            price_paise=payload.price_paise,
+            price_paise=policy.pass_price_paise,
         )
         pass_ticket = await issue_for_pass(db, pass_obj)
         results["pass"] = {
             "id": str(pass_obj.id),
             "status": pass_obj.status,
-            "ticketNumber": pass_ticket.ticket_number if pass_ticket else None,
+            "ticketId": str(pass_ticket.id) if pass_ticket else None,
         }
         results["actions"].append("Seeded & Activated Convention Pass + Entry Ticket")
 
@@ -1904,20 +2295,50 @@ async def db_playground_seed(
             ).scalars().first()
 
             if existing_reg is None:
+                # This path used to write a seat with no capacity check and a
+                # synthetic number, so an override could overbook an event and
+                # leave a registration the desk could not look up.
+                from app.services.registrations import _assert_capacity
+
+                if event.status in ("cancelled", "closed", "draft"):
+                    seeded_events.append(
+                        {"eventId": str(eid), "title": event.title, "action": "skipped_closed_event"}
+                    )
+                    continue
+                try:
+                    await _assert_capacity(db, event)
+                except Exception as exc:  # noqa: BLE001 - reported per event
+                    seeded_events.append(
+                        {
+                            "eventId": str(eid),
+                            "title": event.title,
+                            "action": "skipped_capacity",
+                            "detail": getattr(exc, "message", str(exc))[:120],
+                        }
+                    )
+                    continue
                 new_reg = Registration(
                     edition_id=edition_id,
                     event_id=eid,
                     user_id=target_user.id,
                     fee_paise=0,
                     status="confirmed",
-                    registration_number=_number("REG"),
+                    registration_number=await _unique_registration_number(db),
                 )
                 db.add(new_reg)
                 await db.flush()
                 await issue_for_registration(db, new_reg)
                 seeded_events.append({"eventId": str(eid), "title": event.title, "action": "created"})
             else:
+                if event.status in ("cancelled", "closed", "draft"):
+                    seeded_events.append(
+                        {"eventId": str(eid), "title": event.title, "action": "skipped_closed_event"}
+                    )
+                    continue
                 existing_reg.status = "confirmed"
+                existing_reg.cancelled_at = None
+                existing_reg.cancelled_by = None
+                existing_reg.cancellation_reason = None
                 await issue_for_registration(db, existing_reg)
                 seeded_events.append({"eventId": str(eid), "title": event.title, "action": "confirmed"})
 
@@ -1940,8 +2361,9 @@ async def db_playground_seed(
 
     # 5. Broadcast to Telegram immediately with error handling
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(
+        from app.services.telegram import track_telegram_task
+
+        track_telegram_task(
             send_telegram_alert(
                 title="🛠️ DB Playground Manual Recovery",
                 fields={
@@ -1960,6 +2382,198 @@ async def db_playground_seed(
         logger.error("db_playground_telegram_alert_failed", error=str(exc), exc_info=True)
 
     return {"data": results}
+
+
+@router.get("/teams")
+async def list_teams(
+    edition_id: uuid.UUID,
+    status: str | None = None,
+    ctx: AuthContext = Depends(require_permission("team.read")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.models.user import ParticipantProfile
+    stmt = (
+        select(Team, Event, User)
+        .join(Event, Team.event_id == Event.id)
+        .join(User, Team.leader_id == User.id)
+        .where(Team.edition_id == edition_id)
+        .order_by(Team.created_at.desc())
+    )
+    if status:
+        stmt = stmt.where(Team.status == status)
+    rows = list((await db.execute(stmt)).all())
+    team_ids = [t.id for t, _, _ in rows]
+    members_by_team: dict[uuid.UUID, list[dict]] = {}
+    seats_by_team: dict[uuid.UUID, list[dict]] = {}
+    order_status: dict[uuid.UUID, str] = {}
+    if team_ids:
+        mem_rows = list(
+            (
+                await db.execute(
+                    select(TeamMember, User, ParticipantProfile)
+                    .join(User, TeamMember.user_id == User.id)
+                    .outerjoin(ParticipantProfile, ParticipantProfile.user_id == User.id)
+                    .where(TeamMember.team_id.in_(team_ids))
+                    .order_by(TeamMember.is_leader.desc(), TeamMember.joined_at.asc())
+                )
+            ).all()
+        )
+        for mem, u, prof in mem_rows:
+            members_by_team.setdefault(mem.team_id, []).append(
+                {
+                    "userId": str(u.id),
+                    "fullName": u.full_name,
+                    "email": u.email,
+                    "collegeName": prof.college_name if prof else None,
+                    "isLeader": mem.is_leader,
+                }
+            )
+        seat_rows = list(
+            (
+                await db.execute(
+                    select(
+                        Registration.team_id,
+                        Registration.user_id,
+                        Registration.status,
+                        Registration.fee_paise,
+                        Registration.order_id,
+                    ).where(Registration.team_id.in_(team_ids))
+                )
+            ).all()
+        )
+        order_ids = [row.order_id for row in seat_rows if row.order_id is not None]
+        team_order_ids = [t.order_id for t, _, _ in rows if t.order_id is not None]
+        if order_ids or team_order_ids:
+            for order in (
+                await db.execute(
+                    select(PaymentOrder).where(
+                        PaymentOrder.id.in_(order_ids + team_order_ids)
+                    )
+                )
+            ).scalars():
+                order_status[order.id] = order.status
+        for seat in seat_rows:
+            seats_by_team.setdefault(seat.team_id, []).append(
+                {
+                    "userId": str(seat.user_id),
+                    "status": seat.status,
+                    "feePaise": int(seat.fee_paise or 0),
+                    "orderStatus": order_status.get(seat.order_id)
+                    if seat.order_id
+                    else None,
+                }
+            )
+        seat_status = {
+            (team_id, seat["userId"]): seat["status"]
+            for team_id, seats in seats_by_team.items()
+            for seat in seats
+        }
+        for team_id, members in members_by_team.items():
+            for member in members:
+                member["seatStatus"] = seat_status.get((team_id, member["userId"]))
+
+    from app.services.teams import team_fee_basis, team_seat_price
+
+    policy = await edition_service.current_policy(db, edition_id)
+
+    def _payment_status(team: Team) -> str:
+        if team.order_id is not None:
+            return "paid" if order_status.get(team.order_id) == "paid" else "pending"
+        seats = seats_by_team.get(team.id, [])
+        if not seats:
+            return "none"
+        if any(s["status"] == "reserved" for s in seats):
+            return "pending"
+        if any((s["feePaise"] or 0) > 0 or s["orderStatus"] == "paid" for s in seats):
+            return "paid"
+        return "free"
+
+    return {
+        "data": [
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "eventId": str(e.id),
+                "eventTitle": e.title,
+                "status": t.status,
+                "formationState": t.formation_state,
+                "inviteCode": t.invite_code,
+                "maxSize": e.team_max_size,
+                "minSize": e.team_min_size,
+                "feeBasis": team_fee_basis(e, policy),
+                "feePaise": team_seat_price(e, policy),
+                "paymentStatus": _payment_status(t),
+                "seats": seats_by_team.get(t.id, []),
+                "leaderId": str(leader.id),
+                "leaderName": leader.full_name,
+                "leaderEmail": leader.email,
+                "members": members_by_team.get(t.id, []),
+                "createdAt": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t, e, leader in rows
+        ]
+    }
+
+
+@router.post("/teams/{team_id}/lock")
+async def admin_toggle_team_lock(
+    edition_id: uuid.UUID,
+    team_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("team.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    team = await db.get(Team, team_id)
+    if team is None or team.edition_id != edition_id:
+        raise NotFound("Team not found.")
+    if team.status == "disbanded":
+        raise Conflict("A disbanded team cannot be locked or unlocked.")
+    prev = team.status
+    team.status = "active" if team.status == "locked" else "locked"
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=ctx.role_for(edition_id),
+        action="team.admin_lock_toggle",
+        resource_type="team",
+        resource_id=str(team.id),
+        before={"status": prev},
+        after={"status": team.status},
+    )
+    await db.commit()
+    return {"data": {"id": str(team.id), "status": team.status}}
+
+
+@router.delete("/teams/{team_id}")
+async def admin_disband_team(
+    edition_id: uuid.UUID,
+    team_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("team.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.services.teams import disband_team
+
+    team = await db.get(Team, team_id)
+    if team is None or team.edition_id != edition_id:
+        raise NotFound("Team not found.")
+    if team.status == "disbanded":
+        return {"data": {"id": str(team.id), "status": "disbanded", "cancelledSeats": 0}}
+    cancelled = await disband_team(db, team, reason="Team disbanded by administration")
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=ctx.role_for(edition_id),
+        action="team.admin_disband",
+        resource_type="team",
+        resource_id=str(team.id),
+        before={"status": "active"},
+        after={"status": "disbanded", "cancelledSeats": cancelled},
+    )
+    await db.commit()
+    return {"data": {"id": str(team.id), "status": "disbanded", "cancelledSeats": cancelled}}
 
 
 __all__ = ["router"]

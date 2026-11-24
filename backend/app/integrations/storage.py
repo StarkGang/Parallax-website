@@ -306,10 +306,3 @@ def registration_document_key(
     if filename and "." in filename:
         suffix = "." + filename.rsplit(".", 1)[-1].lower()[:5]
     return f"registrations/{edition_id}/{registration_id}/{doc_type}-{uuid.uuid4().hex}{suffix}"
-
-
-def document_key(filename: str | None = None) -> str:
-    suffix = ".bin"
-    if filename and "." in filename:
-        suffix = "." + filename.rsplit(".", 1)[-1].lower()[:5]
-    return f"verification/{uuid.uuid4().hex}{suffix}"

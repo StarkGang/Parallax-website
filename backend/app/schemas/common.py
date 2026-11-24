@@ -15,6 +15,23 @@ class CamelModel(BaseModel):
     )
 
 
+class StrictCamelModel(CamelModel):
+    """Request body contract: a field the API does not have is an error.
+
+    ``CamelModel`` keeps Pydantic's default ``extra="ignore"``, which makes a
+    stale or invented field look like it was accepted. Nothing here serves an
+    old cached client, so request models reject unknown keys instead of
+    silently dropping them.
+    """
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+        extra="forbid",
+    )
+
+
 class DataEnvelope(CamelModel, Generic[T]):
     data: T
 

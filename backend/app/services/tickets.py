@@ -131,6 +131,69 @@ def public_registration_code(registration_number: str) -> str:
     return f"{number}.{signature}"
 
 
+def entry_base_url(fallback: str | None = None) -> str:
+    """Origin the QR links point at.
+
+    Behind a proxy the request host can be internal; the configured public
+    origin wins, and only the caller's fallback (the request base URL) is used
+    when nothing is configured.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    base = (settings.app_base_url or settings.frontend_origin or "").strip()
+    return (base or (fallback or "")).rstrip("/")
+
+
+def entry_payload(
+    registration, *, ticket: Ticket | None, base_url: str
+) -> str | None:
+    """The text a registration's QR carries - the same string the portal prints.
+
+    Paid registrations get their pass ticket; everything else that has a number
+    gets the signed public code. No number means nothing has been issued yet, so
+    there is no payload at all: a card must never print a code no server issued.
+    """
+    if not base_url or registration is None:
+        return None
+    number = (registration.registration_number or "").strip()
+    if not number:
+        return None
+    if ticket is not None and registration.payment_status in {"paid", "completed"}:
+        return f"{base_url}/c/{ticket_token_for(ticket.id)}"
+    return f"{base_url}/c/{public_registration_code(number)}"
+
+
+async def registration_entry_payload(
+    db: AsyncSession, registration, *, base_url: str | None = None
+) -> str | None:
+    """``entry_payload`` for one registration, looking up its pass ticket.
+
+    The ID card studio uses this so a linked badge scans exactly like the
+    attendee's own pass: attendance, suspension, payment and event rules come
+    from the ticket path, and the badge itself grants nothing.
+    """
+    base = entry_base_url(base_url)
+    if not base or registration is None:
+        return None
+    ticket = None
+    if registration.payment_status in {"paid", "completed"}:
+        user_pass = (
+            await db.execute(
+                select(ConventionPass)
+                .where(
+                    ConventionPass.user_id == registration.user_id,
+                    ConventionPass.edition_id == registration.edition_id,
+                )
+                .order_by(ConventionPass.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if user_pass is not None:
+            ticket = await _existing_for_pass(db, registration.user_id, user_pass.id)
+    return entry_payload(registration, ticket=ticket, base_url=base)
+
+
 def public_registration_number(raw: str) -> str | None:
     value = (raw or "").strip().upper()
     if "." not in value:
@@ -309,110 +372,6 @@ def qr_svg(token: str, accent: str = "cyan") -> str:
     )
 
 
-def plain_qr_svg(token: str) -> str:
-    """Standard square QR code: black modules on white with a quiet zone.
-
-    Used for the printed pass, where any gradient, rounded module or centre logo
-    only hurts scan reliability.
-    """
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(token)
-    qr.make(fit=True)
-    image = qr.make_image(
-        image_factory=qrcode.image.svg.SvgPathFillImage,
-        attrib={"class": "parallax-pass-qr"},
-    )
-    return image.to_string().decode("utf-8")
-
-
-def id_card_qr_svg(token: str) -> str:
-    """A custom, scannable QR code matching the PARALLAX ID Card Design specifications:
-    - Error correction: Level H
-    - Shape: rounded dot modules (near black #0a0a0c) on off-white #f4f2ee panel
-    - Eyes (corner markers): rounded squares with violet #7c5cff outer ring and coral #ff6b57 inner dot
-    - Parallax effect: faint violet ghost copy of QR offset behind it at 20% opacity
-    - Center: small PARALLAX 'P' shield badge in a circle (<= 15% area)
-    - High contrast, ultra-crisp scannability
-    """
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=10,
-        border=2,
-    )
-    qr.add_data(token)
-    qr.make(fit=True)
-    matrix = qr.get_matrix()
-    n = len(matrix)
-    b = 2
-
-    eyes = [
-        (b + 3.5, b + 3.5),
-        (n - b - 3.5, b + 3.5),
-        (b + 3.5, n - b - 3.5),
-    ]
-
-    def in_eye(r: int, c: int) -> bool:
-        for cx, cy in eyes:
-            if abs(c + 0.5 - cx) <= 3.5 and abs(r + 0.5 - cy) <= 3.5:
-                return True
-        return False
-
-    center = n / 2.0
-    r_center = n * 0.12
-
-    def in_center(r: int, c: int) -> bool:
-        return ((c + 0.5 - center) ** 2 + (r + 0.5 - center) ** 2) <= (r_center ** 2)
-
-    parts = [
-        f'<svg class="parallax-idcard-qr" viewBox="0 0 {n} {n}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">',
-        f'  <rect width="{n}" height="{n}" rx="2" fill="#f4f2ee" />',
-    ]
-
-    ghost_dots = []
-    real_dots = []
-    for r in range(n):
-        for c in range(n):
-            if matrix[r][c] and not in_eye(r, c) and not in_center(r, c):
-                ghost_dots.append(
-                    f'  <circle cx="{c + 0.65:.2f}" cy="{r + 0.65:.2f}" r="0.38" fill="#7c5cff" fill-opacity="0.22" />'
-                )
-                real_dots.append(
-                    f'  <circle cx="{c + 0.5:.2f}" cy="{r + 0.5:.2f}" r="0.38" fill="#0a0a0c" />'
-                )
-    parts.extend(ghost_dots)
-    parts.extend(real_dots)
-
-    for cx, cy in eyes:
-        parts.append(
-            f'  <rect x="{cx - 3.2:.2f}" y="{cy - 3.2:.2f}" width="6.4" height="6.4" rx="1.6" fill="none" stroke="#7c5cff" stroke-width="0.85" />'
-        )
-        parts.append(
-            f'  <rect x="{cx - 1.5:.2f}" y="{cy - 1.5:.2f}" width="3.0" height="3.0" rx="0.75" fill="#ff6b57" />'
-        )
-
-    badge_radius = r_center
-    parts.append(
-        f'  <circle cx="{center:.2f}" cy="{center:.2f}" r="{badge_radius:.2f}" fill="#f4f2ee" stroke="#7c5cff" stroke-width="0.5" />'
-    )
-    p_w = badge_radius * 1.15
-    p_h = p_w * (836.0 / 516.0)
-    p_x = center - (p_w / 2.0)
-    p_y = center - (p_h / 2.0)
-    parts.append(
-        f'  <svg x="{p_x:.2f}" y="{p_y:.2f}" width="{p_w:.2f}" height="{p_h:.2f}" viewBox="0 0 520 840">\n'
-        f'    <path fill="#7c5cff" d="M779,712H630V904l-166,98,2-300,86-44c7.792-7.755,76-67,76-67H789c87.292-22.755,73-109,73-109,11.292-82.255-385-239-385-239V166L833,301c143.125,46.453,147,191,147,191C976.125,697.453,779,712,779,712Z" transform="translate(-464 -166)"/>\n'
-        f'  </svg>'
-    )
-    parts.append('</svg>')
-    return "\n".join(parts)
-
-
 async def ticket_payload(db: AsyncSession, ticket: Ticket) -> dict[str, Any]:
     kind = "pass" if ticket.pass_id else "registration"
     title = "Convention Entry Pass"
@@ -512,11 +471,19 @@ async def resolve(db: AsyncSession, raw: str, edition_id: uuid.UUID) -> Ticket:
         )
     ).scalars().first()
     if col_reg and col_reg.edition_id == edition_id:
+        # A registration number must only ever resolve to that attendee's
+        # *entry* pass ticket. Picking "any active ticket" used to hand the door
+        # an event ticket for a person whose pass had been revoked.
+        if col_reg.payment_status != "paid" or col_reg.verification_status == "rejected":
+            raise NotFound("This registration is not active.")
+        if col_reg.refund_status in ("initiated", "processing") or col_reg.payment_status == "refunded":
+            raise NotFound("This registration is under refund and is not valid for entry.")
         pass_ticket = (
             await db.execute(
                 select(Ticket).where(
                     Ticket.user_id == col_reg.user_id,
                     Ticket.edition_id == edition_id,
+                    Ticket.pass_id.is_not(None),
                     Ticket.status.in_(["active", "valid"]),
                 )
             )
@@ -554,6 +521,9 @@ __all__ = [
     "token_is_valid",
     "public_registration_code",
     "public_registration_number",
+    "entry_base_url",
+    "entry_payload",
+    "registration_entry_payload",
     "issue_for_pass",
     "issue_for_registration",
     "revoke_for_registration",

@@ -6,20 +6,26 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import Request
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_delete_pattern
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.text import render_markdown
-from app.models.commerce import Registration
+from app.models.commerce import (
+    IncludedEventSelection,
+    PaymentOrder,
+    Refund,
+    Registration,
+    Team,
+    TeamMember,
+)
 from app.models.edition import (
     ConventionEdition,
     Event,
     EventCategory,
     EventPriceHistory,
 )
-from app.models.user import EventCoordinatorAssignment, User
 from app.schemas.public import EventDetail, EventListItem, ScheduleDay, ScheduleItem
 from app.services.audit import record
 
@@ -51,6 +57,70 @@ async def seats_taken(db: AsyncSession, event_ids: list[uuid.UUID]) -> dict[uuid
     return counts
 
 
+#: Statuses that make a team occupy a place in an event.
+LIVE_TEAM_STATUSES = ("active", "forming", "locked")
+
+
+async def capacity_usage(
+    db: AsyncSession, events: list[Event]
+) -> dict[uuid.UUID, int]:
+    """How much of each event's capacity is used, in that event's own unit.
+
+    ``capacity_unit`` is configurable as ``participants`` or ``entries`` (teams),
+    but every capacity check counted registration rows, so a team event with a
+    capacity of ten entries sold out after two or three teams and the "seats
+    left" shown to attendees was wrong. This is the one place that knows the
+    unit; callers compare its result with ``event.capacity``.
+    """
+    if not events:
+        return {}
+    people_ids = [e.id for e in events if (e.capacity_unit or "participants") != "entries"]
+    entry_ids = [e.id for e in events if (e.capacity_unit or "participants") == "entries"]
+    usage: dict[uuid.UUID, int] = {e.id: 0 for e in events}
+    if people_ids:
+        usage.update(await seats_taken(db, people_ids))
+    if entry_ids:
+        rows = list(
+            (
+                await db.execute(
+                    select(Team.event_id, func.count(Team.id))
+                    .where(
+                        Team.event_id.in_(entry_ids),
+                        Team.status.in_(LIVE_TEAM_STATUSES),
+                    )
+                    .group_by(Team.event_id)
+                )
+            ).all()
+        )
+        for eid, count in rows:
+            usage[eid] = count
+        # A solo entry has no Team row, so counting teams alone made solo
+        # entrants invisible to an "entries" capacity and let a team event
+        # oversell. Both live teams and live unteamed seats are one entry each.
+        solo_rows = list(
+            (
+                await db.execute(
+                    select(Registration.event_id, func.count(Registration.id))
+                    .where(
+                        Registration.event_id.in_(entry_ids),
+                        Registration.status.in_(("confirmed", "reserved", "pending")),
+                        Registration.team_id.is_(None),
+                    )
+                    .group_by(Registration.event_id)
+                )
+            ).all()
+        )
+        for eid, count in solo_rows:
+            usage[eid] = usage.get(eid, 0) + count
+    return usage
+
+
+def seats_left_for(event: Event, used: int) -> int | None:
+    if not event.capacity:
+        return None
+    return max(0, event.capacity - used)
+
+
 def event_open(event: Event, now: datetime | None = None) -> bool:
     if event.status not in ("published", "open"):
         return False
@@ -69,13 +139,13 @@ async def serialize_events(
 ) -> list[EventListItem]:
     if not events:
         return []
-    taken = await seats_taken(db, [e.id for e in events])
+    taken = await capacity_usage(db, events)
     now = datetime.now(UTC)
     items = []
     for e in events:
         cat = categories_by_id.get(e.category_id)
         seats = taken.get(e.id, 0)
-        seats_left = max(0, e.capacity - seats) if e.capacity else None
+        seats_left = seats_left_for(e, seats)
         items.append(
             EventListItem(
                 id=e.id,
@@ -208,6 +278,12 @@ async def public_event(
         description_html=render_markdown(row.description_md) if row.description_md else None,
         rules_html=render_markdown(row.rules_md) if row.rules_md else None,
         prizes_html=render_markdown(row.prizes_md) if row.prizes_md else None,
+        solo_guide_html=(
+            render_markdown(row.solo_guide_md) if getattr(row, "solo_guide_md", "") else None
+        ),
+        team_guide_html=(
+            render_markdown(row.team_guide_md) if getattr(row, "team_guide_md", "") else None
+        ),
         registration_opens_at=_aware(row.registration_opens_at),
         registration_closes_at=_aware(row.registration_closes_at),
         team_fee_basis=row.team_fee_basis,
@@ -374,7 +450,8 @@ async def _validate_event(
         raise ValidationFailed("Event prices cannot be negative.")
 
     if event.id is not None and event.capacity:
-        taken = (await seats_taken(db, [event.id])).get(event.id, 0)
+        stored = await db.get(Event, event.id)
+        taken = (await capacity_usage(db, [stored or event])).get(event.id, 0)
         if event.capacity < taken:
             raise Conflict(
                 f"Capacity cannot be lower than the {taken} seats already booked for this event."
@@ -384,6 +461,178 @@ async def _validate_event(
         problems = publish_problems(event)
         if problems:
             raise ValidationFailed(" ".join(problems))
+
+    # Closing an event must not silently strand attendees who already hold
+    # confirmed registrations and tickets for it: seats, tickets and money are
+    # released by the close_event cascade that upsert_event runs once the new
+    # status has been stored.
+
+
+async def close_event(
+    db: AsyncSession,
+    request: Request | None,
+    event: Event,
+    *,
+    reason: str,
+    actor_id: uuid.UUID | None = None,
+    actor_role: str | None = None,
+) -> dict[str, Any]:
+    """Cancel every live booking on an event that is no longer running.
+
+    Closing/cancelling an event used to change only ``Event.status``: attendees
+    kept confirmed seats, working QR codes and their money. This is the single
+    cascade for that transition - it cancels the seats, revokes the tickets and
+    queues one refund request per paid order, which the finance desk settles from
+    the payments screen. Attendees are kept informed in the portal, and the
+    cancelled event stays visible to them with a cancelled badge.
+    """
+    from app.services.tickets import revoke_for_registration
+
+    with_reason = f"Event closed: {(reason or event.title)[:200]}"
+    regs = list(
+        (
+            await db.execute(
+                select(Registration).where(
+                    Registration.event_id == event.id,
+                    Registration.status.in_(["confirmed", "reserved"]),
+                )
+            )
+        ).scalars()
+    )
+
+    order_ids: list[uuid.UUID] = []
+    for reg in regs:
+        reg.status = "cancelled"
+        reg.cancelled_at = datetime.now(UTC)
+        reg.cancelled_by = "admin"
+        reg.cancellation_reason = with_reason
+        # A shared ``per_team`` order can ride on a seat whose own fee is 0 (a
+        # member covered by the leader's payment), so the order is collected by
+        # id and the paid/unpaid check happens below.
+        if reg.order_id is not None:
+            order_ids.append(reg.order_id)
+        await revoke_for_registration(db, reg.id)
+
+    # A team whose event is gone must not stay open for invitations and roster
+    # edits (including locked teams). Its shared ``per_team`` order is collected
+    # here because the seat that originally carried it may already be gone
+    # (the payer's pass lapsed and the team carried on under a new leader).
+    event_teams = list(
+        (
+            await db.execute(
+                select(Team).where(
+                    Team.event_id == event.id,
+                    Team.status != "disbanded",
+                )
+            )
+        ).scalars()
+    )
+    for team in event_teams:
+        if team.order_id is not None:
+            order_ids.append(team.order_id)
+        team.status = "disbanded"
+        team.formation_state = "disbanded"
+        await db.execute(delete(TeamMember).where(TeamMember.team_id == team.id))
+
+    refunds_queued = 0
+    for order_id in dict.fromkeys(order_ids):
+        order = await db.get(PaymentOrder, order_id)
+        if order is None or order.status != "paid":
+            continue
+        already = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status == "processed",
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        ) or 0
+        remaining = int(order.amount_paise) - int(already)
+        if remaining <= 0:
+            continue
+        existing = (
+            await db.execute(
+                select(Refund).where(
+                    Refund.order_id == order.id, Refund.status == "pending"
+                )
+            )
+        ).scalars().first()
+        if existing is None:
+            db.add(
+                Refund(
+                    order_id=order.id,
+                    amount_paise=remaining,
+                    reason_code="event_cancelled",
+                    reason_note=with_reason,
+                    status="pending",
+                    requested_by=actor_id,
+                )
+            )
+            refunds_queued += 1
+
+    await _notify_closed_event(db, event, regs, reason=with_reason)
+
+    # Give the included-seat slot back. A cancelled event that stayed selected
+    # kept consuming the attendee's free-selection quota.
+    await db.execute(
+        delete(IncludedEventSelection).where(IncludedEventSelection.event_id == event.id)
+    )
+
+    if request is not None:
+        await record(
+            db,
+            request,
+            actor_id=actor_id,
+            actor_role=actor_role,
+            action="event.closed_cascade",
+            resource_type="event",
+            resource_id=str(event.id),
+            after={
+                "status": event.status,
+                "cancelledRegistrations": len(regs),
+                "refundRequestsQueued": refunds_queued,
+                "reason": reason,
+            },
+        )
+    return {
+        "cancelledRegistrations": len(regs),
+        "refundRequestsQueued": refunds_queued,
+    }
+
+
+async def _notify_closed_event(
+    db: AsyncSession, event: Event, regs: list[Registration], *, reason: str
+) -> None:
+    """Tell each affected attendee in the portal that their seat was cancelled."""
+    from app.models.registration import CollegeRegistration
+    from app.services.college_registrations import notify
+
+    for user_id in dict.fromkeys(r.user_id for r in regs):
+        row = (
+            await db.execute(
+                select(CollegeRegistration).where(
+                    CollegeRegistration.user_id == user_id,
+                    CollegeRegistration.edition_id == event.edition_id,
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            continue
+        await notify(
+            db,
+            row,
+            "event_cancelled",
+            title=f"{event.title} was cancelled",
+            values={
+                "event": event.title,
+                "reason": reason,
+                "refund": "Any amount you paid is refunded to the payment method used.",
+            },
+        )
 
 
 async def upsert_event(
@@ -439,6 +688,8 @@ async def upsert_event(
         "description_md",
         "rules_md",
         "prizes_md",
+        "solo_guide_md",
+        "team_guide_md",
         "format",
         "team_min_size",
         "team_max_size",
@@ -486,6 +737,16 @@ async def upsert_event(
 
     await _validate_event(db, edition_id, event, payload)
 
+    if event_id and event.status not in ("published", "open"):
+        await close_event(
+            db,
+            request,
+            event,
+            reason=payload.get("change_reason") or f"Event {event.status} by the organisers",
+            actor_id=actor_id,
+            actor_role=actor_role,
+        )
+
     if event_id and (
         old_base_value != event.base_value_paise
         or old_addon_price != event.addon_price_paise
@@ -520,7 +781,6 @@ async def upsert_event(
 
 async def event_admin_payload(db: AsyncSession, event: Event) -> dict[str, Any]:
     cat = await db.get(EventCategory, event.category_id)
-    coordinators = await event_coordinators(db, event.id)
     history = await price_history(db, event.id)
     return {
         "id": str(event.id),
@@ -530,6 +790,8 @@ async def event_admin_payload(db: AsyncSession, event: Event) -> dict[str, Any]:
         "descriptionMd": event.description_md,
         "rulesMd": event.rules_md,
         "prizesMd": event.prizes_md,
+        "soloGuideMd": event.solo_guide_md,
+        "teamGuideMd": event.team_guide_md,
         "categoryId": str(event.category_id),
         "categoryName": cat.name if cat else "General",
         "format": event.format,
@@ -554,23 +816,9 @@ async def event_admin_payload(db: AsyncSession, event: Event) -> dict[str, Any]:
         "iconId": str(event.icon_id) if event.icon_id else None,
         "bannerUrl": event.banner_url,
         "accent": event.accent,
-        "coordinatorNames": coordinators,
         "priceHistory": history,
         "createdAt": _aware(event.created_at).isoformat() if event.created_at else None,
     }
-
-
-async def event_coordinators(db: AsyncSession, event_id: uuid.UUID) -> list[str]:
-    rows = list(
-        (
-            await db.execute(
-                select(User.full_name)
-                .join(EventCoordinatorAssignment, EventCoordinatorAssignment.user_id == User.id)
-                .where(EventCoordinatorAssignment.event_id == event_id)
-            )
-        ).scalars()
-    )
-    return rows
 
 
 async def price_history(db: AsyncSession, event_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -596,19 +844,6 @@ async def price_history(db: AsyncSession, event_id: uuid.UUID) -> list[dict[str,
     ]
 
 
-async def coordinator_events(db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    rows = list(
-        (
-            await db.execute(
-                select(EventCoordinatorAssignment.event_id).where(
-                    EventCoordinatorAssignment.user_id == user_id
-                )
-            )
-        ).scalars()
-    )
-    return rows
-
-
 async def event_by_id(db: AsyncSession, event_id: uuid.UUID) -> Event:
     row = await db.get(Event, event_id)
     if row is None:
@@ -628,9 +863,7 @@ __all__ = [
     "publish_problems",
     "upsert_event",
     "event_admin_payload",
-    "event_coordinators",
     "price_history",
-    "coordinator_events",
     "event_by_id",
 ]
 

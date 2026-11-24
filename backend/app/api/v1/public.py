@@ -8,18 +8,20 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_get, cache_set
 from app.core.config import get_settings
 from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.core.rate_limit import limiter
-from app.integrations.storage import LocalStorage, verify_local_signature
+from app.integrations.storage import LocalStorage, get_storage, verify_local_signature
 from app.schemas.common import paged
 from app.schemas.public import PublicConfig
 from app.services import announcements as announcement_service
 from app.services import college_registrations as registration_service
 from app.services import events as event_service
+from app.services import teams as team_service
 from app.services.telegram import send_telegram_inquiry
 from pydantic import BaseModel, Field
 from app.services.editions import (
@@ -33,6 +35,7 @@ from app.services.editions import (
 )
 from app.db.session import get_db
 from app.models.edition import EventCategory, Icon
+from app.models.user import User
 from sqlalchemy import select
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -188,6 +191,23 @@ async def registration_categories(
     return data
 
 
+@router.get(
+    "/teams/{code}",
+    dependencies=[Depends(limiter("team_invite_preview", 20, 60))],
+)
+async def team_invite_preview(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Public invite preview. Deliberately non-PII: no emails, no roster.
+
+    The shareable link is derived by the client (``<origin>/team/<code>``);
+    the code is the only thing stored on the team row.
+    """
+    data = await team_service.invite_preview(db, code)
+    return {"data": data, **CACHE_60}
+
+
 @router.get("/editions/{slug}/events")
 async def events(
     slug: str,
@@ -202,6 +222,14 @@ async def events(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     response.headers.update(CACHE_EDGE)
+    # Seat counts are about to be read from the database. Before serving them,
+    # release seats held by attendees whose 24-hour desk request lapsed - a
+    # fresh visitor must see the freed seat, not a stale hold.
+    if registration_service.lazy_sweep_due(f"public:events:{slug}"):
+        edition = await edition_by_slug(db, slug)
+        await registration_service.lazy_enforce_for_read(
+            db, edition_id=edition.id, request=None
+        )
     cache_key = (
         f"public:events:{slug}:{category}:{format}:{q}:{featured}:{sort}:{page}:{page_size}"
     )
@@ -230,6 +258,11 @@ async def event_detail(
     slug: str, event_slug: str, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict:
     response.headers.update(CACHE_EDGE)
+    if registration_service.lazy_sweep_due(f"public:events:{slug}"):
+        edition = await edition_by_slug(db, slug)
+        await registration_service.lazy_enforce_for_read(
+            db, edition_id=edition.id, request=None
+        )
     cache_key = f"public:event:{slug}:{event_slug}"
     cached_val = cache_get(cache_key)
     if cached_val is not None:
@@ -293,17 +326,34 @@ async def announcements(
 )
 async def icon(icon_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Response:
     row = await db.get(Icon, icon_id)
-    if row is None or row.status != "active" or not row.data:
+    if row is None or row.status != "active":
         raise NotFound("Icon not found.")
-    return Response(
-        content=row.data,
-        media_type=row.mime,
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-        },
-    )
+
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    }
+
+    if row.storage_key:
+        # Icons live in the object bucket now. Hand the browser the bucket/CDN
+        # URL when there is one, and only proxy the bytes for backends whose
+        # "public" URL is still a signed API path (local dev).
+        public = get_storage().public_url(row.storage_key)
+        if public.startswith("http"):
+            return RedirectResponse(public, status_code=307, headers=headers)
+        try:
+            payload = await get_storage().get(row.storage_key)
+        except Exception:  # noqa: BLE001 - a missing object falls through to the column
+            payload = None
+        if payload:
+            return Response(content=payload, media_type=row.mime, headers=headers)
+
+    # Rows written before the move (or uploads made while the bucket was down)
+    # still carry their bytes.
+    if not row.data:
+        raise NotFound("Icon not found.")
+    return Response(content=row.data, media_type=row.mime, headers=headers)
 
 
 @router.get(
@@ -484,6 +534,48 @@ async def check_credential(
     normalized = (code or "").strip().upper()
     reg = None
 
+    # Studio-issued cards (staff, faculty, sponsors, guests) are stored in their
+    # own table and resolved before the registration lookup.
+    if normalized.startswith("PXC"):
+        from app.services import credentials as credential_service
+        from fastapi.responses import HTMLResponse as _Html
+
+        credential = await credential_service.resolve_public(db, normalized)
+        if credential is not None:
+            body = credential_service.public_payload(credential)
+            if "text/html" in request.headers.get("accept", ""):
+                badge = (
+                    '<span style="background:#059669;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">✓ VALID CREDENTIAL</span>'
+                    if body["valid"]
+                    else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">⛔ REVOKED</span>'
+                )
+                page = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Credential Verification · Parallax</title></head>
+<body style="margin:0;padding:24px;background:#09090b;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;">
+<div style="max-width:440px;width:100%;background:#0f0f12;border:1px solid #27272a;border-radius:16px;padding:24px;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #27272a;padding-bottom:12px;">
+<div><h3 style="margin:0;font-size:16px;color:#fff;letter-spacing:0.05em;">PARALLAX</h3>
+<small style="color:#71717a;">Official Credential Verification</small></div>{badge}</div>
+<h2 style="margin:0 0 4px 0;font-size:22px;color:#fff;">{html.escape(body["name"] or "")}</h2>
+<div style="font-size:13px;color:#7c5cff;font-weight:600;margin-bottom:14px;">{html.escape(body["role"] or "")} · {html.escape(body["code"] or "")}</div>
+<div style="background:#18181b;border-radius:10px;padding:12px;font-size:13px;color:#d4d4d8;">
+<div><strong>Organisation:</strong> {html.escape(body["college"] or "—")}</div>
+</div>
+<div style="text-align:center;font-size:11px;color:#52525b;border-top:1px solid #18181b;padding-top:14px;margin-top:18px;">
+Issued by the organising committee · not a participant registration</div>
+</div></body></html>"""
+                return _Html(
+                    content=page,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Robots-Tag": "noindex, nofollow",
+                        "X-Content-Type-Options": "nosniff",
+                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                    },
+                )
+            return {"data": body}
+
     # A pass card carries a signed ticket token; a registration card carries a
     # signed registration code. An unsigned registration number is rejected so
     # the page cannot be used to look up attendees by guessing.
@@ -514,12 +606,32 @@ async def check_credential(
             ).scalars().first()
 
     if reg:
-        is_valid = reg.payment_status in {"paid", "completed"} and reg.verification_status != "rejected"
+        # A suspended account invalidates the credential even though the ticket
+        # row itself was never revoked.
+        owner_status = (
+            await db.scalar(select(User.status).where(User.id == reg.user_id))
+        )
+        account_suspended = owner_status == "suspended"
+        diff_due = reg.category_change_status == "awaiting_payment"
+        # A refund in flight, or a completed *full* refund, invalidates the
+        # credential. A completed partial refund does not: the attendee kept the
+        # entitlement they were not refunded for.
+        refund_open = reg.refund_status in {"initiated", "processing"}
+        fully_refunded = reg.payment_status == "refunded"
+        is_valid = (
+            not account_suspended
+            and not refund_open
+            and not fully_refunded
+            and not diff_due
+            and reg.payment_status in {"paid", "completed"}
+            and reg.verification_status != "rejected"
+        )
         event_rows = list(
             (
                 await db.execute(
-                    select(Registration, Event)
+                    select(Registration, Event, EventCategory)
                     .join(Event, Registration.event_id == Event.id)
+                    .join(EventCategory, EventCategory.id == Event.category_id)
                     .where(
                         Registration.user_id == reg.user_id,
                         Registration.edition_id == reg.edition_id,
@@ -532,14 +644,15 @@ async def check_credential(
             {
                 "id": str(event.id),
                 "title": event.title,
-                "category": event.category,
+                "category": category.name if category is not None else "",
                 "startsAt": aware(event.starts_at).isoformat() if event.starts_at else None,
                 "endsAt": aware(event.ends_at).isoformat() if event.ends_at else None,
                 "venueRoom": event.venue_room,
                 "status": r.status,
+                "label": "Payment pending" if r.status == "reserved" else "Confirmed",
                 "teamId": str(r.team_id) if r.team_id else None,
             }
-            for r, event in event_rows
+            for r, event, category in event_rows
         ]
 
         if "text/html" in request.headers.get("accept", ""):
@@ -554,12 +667,18 @@ async def check_credential(
                 if is_valid and reg.verification_status == "approved"
                 else '<span style="background:#d97706;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">⚠️ PENDING VERIFICATION</span>'
                 if is_valid
-                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">INVALID / CANCELLED</span>'
+                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">⛔ ACCOUNT SUSPENDED</span>'
+                if account_suspended
+                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">⚠️ UPGRADE PAYMENT DUE</span>'
+                if diff_due
+                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">REFUND IN PROGRESS</span>'
+                if refund_open or fully_refunded
+                else '<span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:9999px;font-size:12px;font-weight:700;">REJECTED / NOT VALID</span>'
             )
             events_html = "".join(
                 f'<li style="margin-bottom:8px;padding:8px 12px;background:#18181b;border-radius:8px;border:1px solid #27272a;">'
                 f'<strong style="color:#c4b5fd;display:block;">{html.escape(e["title"] or "")}</strong>'
-                f'<span style="font-size:12px;color:#a1a1aa;">Venue: {html.escape(e["venueRoom"] or "Main Campus")} · Confirmed</span>'
+                f'<span style="font-size:12px;color:#a1a1aa;">Venue: {html.escape(e["venueRoom"] or "Main Campus")} · {html.escape(e["label"])}</span>'
                 f'</li>'
                 for e in events_data
             ) or '<p style="color:#71717a;font-size:13px;">No individual add-on events registered. Delegate has General All-Access pass privileges.</p>'

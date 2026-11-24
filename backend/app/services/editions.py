@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_delete_pattern, cache_get, cache_set
@@ -20,10 +20,10 @@ from app.models.commerce import (
 from app.models.edition import (
     ConventionEdition,
     EditionPolicy,
-    EligibilityVerification,
     Event,
     EventCategory,
 )
+from app.models.registration import CollegeRegistration
 from app.models.user import User
 from app.schemas.admin import DashboardStats, PolicyCheck
 from app.schemas.public import EditionPublic, PolicyPublic
@@ -145,6 +145,187 @@ def registration_open(edition: ConventionEdition) -> bool:
     if closes and now > closes:
         return False
     return True
+
+
+#: Edition states that mean "no new bookings", in order of severity.
+CLOSED_EDITION_STATUSES = ("closed", "archived", "cancelled")
+
+
+def accepting_bookings(edition: ConventionEdition) -> bool:
+    """Whether new seats, teams or selections may be created on this edition.
+
+    Only the registration window used to look at the edition, so archiving or
+    closing a convention left add-on bookings and team invitations open.
+    """
+    return edition.status not in CLOSED_EDITION_STATUSES and registration_open(edition)
+
+
+async def cancel_edition(
+    db: AsyncSession,
+    request: Request | None,
+    edition: ConventionEdition,
+    *,
+    reason: str,
+    actor_id: uuid.UUID | None = None,
+    actor_role: str | None = None,
+) -> dict[str, Any]:
+    """Cancel a whole convention: no live seat, ticket or payment is left behind.
+
+    The event-level cascade already existed; the edition had none, so setting an
+    edition to "cancelled" changed a label and nothing else. Every event is
+    closed through the same cascade (seats cancelled, tickets revoked, one
+    pending refund per paid event order), passes are cancelled, their seats and
+    team memberships released, and one pending refund is queued per paid
+    registration order. Refunds stay pending on purpose: cancelling an edition
+    can affect hundreds of orders and the finance desk settles them.
+    """
+    from app.services.events import close_event
+    from app.services.passes import release_event_entitlements
+    from app.services.tickets import revoke_for_pass
+
+    events = list(
+        (
+            await db.execute(
+                select(Event).where(
+                    Event.edition_id == edition.id,
+                    Event.status.not_in(["cancelled", "closed"]),
+                )
+            )
+        ).scalars()
+    )
+    for event in events:
+        event.status = "cancelled"
+        await close_event(
+            db,
+            request,
+            event,
+            reason=f"Edition cancelled: {reason}",
+            actor_id=actor_id,
+            actor_role=actor_role,
+        )
+    await db.flush()
+
+    passes = list(
+        (
+            await db.execute(
+                select(ConventionPass).where(
+                    ConventionPass.edition_id == edition.id,
+                    ConventionPass.status != "refunded",
+                )
+            )
+        ).scalars()
+    )
+    for user_pass in passes:
+        user_pass.status = "cancelled"
+        await revoke_for_pass(db, user_pass.id)
+        # Seats and add-on money were already handled per event above.
+        await release_event_entitlements(
+            db,
+            user_id=user_pass.user_id,
+            edition_id=edition.id,
+            reason=f"Edition cancelled: {reason}",
+            refund_paid_events=False,
+            actor_id=actor_id,
+        )
+
+    # One refund request per paid registration order, capped by what is left.
+    from app.models.registration import CollegeRegistration
+
+    registrations = list(
+        (
+            await db.execute(
+                select(CollegeRegistration).where(
+                    CollegeRegistration.edition_id == edition.id,
+                    CollegeRegistration.payment_status == "paid",
+                )
+            )
+        ).scalars()
+    )
+    queued = 0
+    for row in registrations:
+        if row.order_id is None:
+            continue
+        order = await db.get(PaymentOrder, row.order_id)
+        if order is None or order.status != "paid":
+            continue
+        already = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status == "processed",
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        ) or 0
+        remaining = int(order.amount_paise) - int(already)
+        if remaining <= 0:
+            continue
+        existing = (
+            await db.execute(
+                select(Refund).where(
+                    Refund.order_id == order.id,
+                    Refund.status.in_(["pending", "processing"]),
+                )
+            )
+        ).scalars().first()
+        if existing is not None:
+            continue
+        db.add(
+            Refund(
+                order_id=order.id,
+                amount_paise=remaining,
+                reason_code="edition_cancelled",
+                reason_note=f"Edition cancelled: {reason}"[:500],
+                status="pending",
+                requested_by=actor_id,
+            )
+        )
+        row.refund_status = "initiated"
+        queued += 1
+
+    # Nothing unpaid may stay payable into a cancelled convention.
+    open_orders = list(
+        (
+            await db.execute(
+                select(PaymentOrder).where(
+                    PaymentOrder.edition_id == edition.id,
+                    PaymentOrder.status == "created",
+                )
+            )
+        ).scalars()
+    )
+    for order in open_orders:
+        order.status = "expired"
+
+    await db.flush()
+    if request is not None:
+        await record(
+            db,
+            request,
+            actor_id=actor_id,
+            actor_role=actor_role,
+            action="edition.cancelled_cascade",
+            resource_type="convention_edition",
+            resource_id=str(edition.id),
+            after={
+                "reason": reason,
+                "eventsClosed": len(events),
+                "passesCancelled": len(passes),
+                "refundRequestsQueued": queued,
+                "ordersExpired": len(open_orders),
+            },
+        )
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
+    return {
+        "eventsClosed": len(events),
+        "passesCancelled": len(passes),
+        "refundRequestsQueued": queued,
+        "ordersExpired": len(open_orders),
+    }
 
 
 def serialize_edition(
@@ -325,15 +506,6 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         )
     ).scalar() or 0
 
-    passes_pending = (
-        await db.execute(
-            select(func.count(ConventionPass.id)).where(
-                ConventionPass.edition_id == edition_id,
-                ConventionPass.status == "pending",
-            )
-        )
-    ).scalar() or 0
-
     revenue = (
         await db.execute(
             select(func.sum(PaymentOrder.amount_paise)).where(
@@ -379,18 +551,11 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         )
     ).scalar() or 0
 
-    verif_pending = (
-        await db.execute(
-            select(func.count(EligibilityVerification.id)).where(
-                EligibilityVerification.edition_id == edition_id,
-                EligibilityVerification.status == "pending",
-            )
-        )
-    ).scalar() or 0
-
+    # One person who attends three events was counted three times, so the
+    # attendance card reported more people than the convention holds.
     checked_in = (
         await db.execute(
-            select(func.count(AttendanceRecord.id)).where(
+            select(func.count(func.distinct(AttendanceRecord.user_id))).where(
                 AttendanceRecord.edition_id == edition_id,
                 AttendanceRecord.result == "admitted",
             )
@@ -412,11 +577,23 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         )
     ).scalar() or 0
 
-    capacity = (
+    # Capacity is stored per event in the event's own unit ("participants" or
+    # "entries"), so a plain SUM added people and teams into one meaningless
+    # number. Report each unit separately; ``seats_taken`` uses the same units.
+    capacity_rows = (
         await db.execute(
-            select(func.sum(Event.capacity)).where(Event.edition_id == edition_id)
+            select(
+                Event.capacity_unit,
+                func.coalesce(func.sum(Event.capacity), 0),
+            )
+            .where(Event.edition_id == edition_id)
+            .group_by(Event.capacity_unit)
         )
-    ).scalar() or 0
+    ).all()
+    capacity_by_unit = {
+        str(unit or "participants"): int(total or 0) for unit, total in capacity_rows
+    }
+    capacity = sum(capacity_by_unit.values())
 
     recent_rows = (
         await db.execute(
@@ -445,6 +622,110 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
             "createdAt": aware(row.created_at).isoformat() if row.created_at else None,
         }
         for row, full_name, email, title in recent_rows
+    ]
+
+    # ── Attendee logistics ────────────────────────────────────────────────
+    # Gender, meal preference and hostel stay are captured on the college
+    # registration row. A rejected row never becomes an attendee, so every
+    # tally below leaves those out.
+    attendee_scope = (
+        CollegeRegistration.edition_id == edition_id,
+        CollegeRegistration.verification_status.notin_(("rejected", "payment_pending")),
+    )
+    gender_rows = (
+        await db.execute(
+            select(CollegeRegistration.gender, func.count(CollegeRegistration.id))
+            .where(*attendee_scope)
+            .group_by(CollegeRegistration.gender)
+        )
+    ).all()
+    gender_counts = {code: int(count or 0) for code, count in gender_rows}
+    gender_split = [
+        {"key": "male", "label": "Male", "count": gender_counts.get(0, 0)},
+        {"key": "female", "label": "Female", "count": gender_counts.get(1, 0)},
+        {"key": "unspecified", "label": "Unspecified", "count": gender_counts.get(None, 0)},
+    ]
+
+    food_rows = (
+        await db.execute(
+            select(CollegeRegistration.food_preference, func.count(CollegeRegistration.id))
+            .where(*attendee_scope)
+            .group_by(CollegeRegistration.food_preference)
+        )
+    ).all()
+    food_counts = {code: int(count or 0) for code, count in food_rows}
+    food_split = [
+        {"key": "veg", "label": "Vegetarian", "count": food_counts.get(0, 0)},
+        {"key": "non_veg", "label": "Non-vegetarian", "count": food_counts.get(1, 0)},
+        {"key": "unspecified", "label": "Not answered", "count": food_counts.get(None, 0)},
+    ]
+
+    stay_rows = (
+        await db.execute(
+            select(
+                CollegeRegistration.needs_accommodation,
+                func.count(CollegeRegistration.id),
+            )
+            .where(*attendee_scope)
+            .group_by(CollegeRegistration.needs_accommodation)
+        )
+    ).all()
+    stay_counts = {bool(flag): int(count or 0) for flag, count in stay_rows}
+    accommodation = {
+        "needed": stay_counts.get(True, 0),
+        "notNeeded": stay_counts.get(False, 0),
+        "total": sum(stay_counts.values()),
+    }
+
+    pass_category_rows = (
+        await db.execute(
+            select(
+                CollegeRegistration.category_code,
+                CollegeRegistration.category_name,
+                func.count(CollegeRegistration.id),
+            )
+            .where(*attendee_scope)
+            .group_by(CollegeRegistration.category_code, CollegeRegistration.category_name)
+            .order_by(func.count(CollegeRegistration.id).desc())
+        )
+    ).all()
+    pass_categories = [
+        {"code": code, "name": name or code, "count": int(count or 0)}
+        for code, name, count in pass_category_rows
+    ]
+
+    event_registration_rows = (
+        await db.execute(
+            select(
+                Event.id,
+                Event.title,
+                Event.status,
+                Event.capacity,
+                Event.capacity_unit,
+                func.count(Registration.id),
+            )
+            .outerjoin(
+                Registration,
+                and_(
+                    Registration.event_id == Event.id,
+                    Registration.status.in_(["confirmed", "pending"]),
+                ),
+            )
+            .where(Event.edition_id == edition_id)
+            .group_by(Event.id, Event.title, Event.status, Event.capacity, Event.capacity_unit)
+            .order_by(func.count(Registration.id).desc(), Event.title)
+        )
+    ).all()
+    event_registrations = [
+        {
+            "id": str(event_id),
+            "title": title,
+            "status": status,
+            "count": int(count or 0),
+            "capacity": int(capacity or 0),
+            "capacityUnit": unit or "participants",
+        }
+        for event_id, title, status, capacity, unit, count in event_registration_rows
     ]
 
     sales_rows = (
@@ -484,32 +765,66 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         {"category": name, "count": int(count or 0)} for name, count in category_rows
     ]
 
+    seats_taken_by_unit = await capacity_usage_by_unit(db, edition_id)
     stats = DashboardStats(
         edition_id=edition.id,
         edition_name=edition.name,
         passes_sold=passes_sold,
-        passes_pending=passes_pending,
         revenue_paise=revenue,
         refunded_paise=refunded,
+        net_revenue_paise=max(0, int(revenue or 0) - int(refunded or 0)),
         registrations_confirmed=reg_confirmed,
         registrations_pending=reg_pending,
         registrations_cancelled=reg_cancelled,
-        verifications_pending=verif_pending,
         checked_in=checked_in,
         events_published=events_pub,
         events_total=events_total,
         seats_capacity=capacity,
         seats_taken=reg_confirmed,
+        capacity_by_unit=capacity_by_unit,
+        seats_taken_by_unit=seats_taken_by_unit,
         recent_registrations=recent_registrations,
         sales_by_day=sales_by_day,
         category_split=category_split,
+        gender_split=gender_split,
+        food_split=food_split,
+        accommodation=accommodation,
+        pass_categories=pass_categories,
+        event_registrations=event_registrations,
     )
     cache_set(cache_key, stats, ttl_seconds=15.0)
     return stats
 
 
+async def capacity_usage_by_unit(
+    db: AsyncSession, edition_id: uuid.UUID
+) -> dict[str, int]:
+    """Live seats per capacity unit, computed the same way the event list does.
+
+    The dashboard used to report ``registrations_confirmed`` as "seats taken"
+    while the event page counted teams for entries-unit events; the two never
+    matched. This reuses ``events.capacity_usage`` so there is one definition.
+    """
+    from app.services.events import capacity_usage
+
+    events = list(
+        (
+            await db.execute(select(Event).where(Event.edition_id == edition_id))
+        ).scalars()
+    )
+    usage = await capacity_usage(db, events)
+    totals: dict[str, int] = {}
+    for event in events:
+        unit = str(event.capacity_unit or "participants")
+        totals[unit] = totals.get(unit, 0) + int(usage.get(event.id, 0))
+    return totals
+
+
 __all__ = [
     "aware",
+    "capacity_usage_by_unit",
+    "accepting_bookings",
+    "cancel_edition",
     "current_edition",
     "edition_by_slug",
     "edition_by_id",
