@@ -286,6 +286,26 @@
   height: auto;
   display: block;
 }
+.px-card-root .qr-pending {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px dashed #94a3b8;
+  border-radius: 2.4cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6cqw;
+  color: #475569;
+  font-size: 3.2cqw;
+  line-height: 1.25;
+  text-align: center;
+}
+.px-card-root .qr-pending small {
+  font-size: 4.6cqw;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
 /* Inclusions strip: real pass benefits, and it keeps the panel from reading
    as empty space between the identity block and the footer. */
 .px-card-root .perks {
@@ -484,11 +504,14 @@
   margin-top: 0.8cqw;
 }
 .px-card-root .rows {
-  margin-top: 2.8cqw;
+  margin-top: 2.3cqw;
 }
+/* Five rows now: institution, department, helpdesk, chapter and the optional
+   gender/meal/stay line. Slightly tighter padding keeps the return address off
+   the bottom edge while staying readable at print size. */
 .px-card-root .rows div {
   border-top: 1px solid var(--line);
-  padding: 1.05cqw 0 1.15cqw;
+  padding: 0.8cqw 0 0.9cqw;
 }
 .px-card-root .rows small {
   display: block;
@@ -638,21 +661,76 @@
   }
 }
 
-/* Print Stylesheet */
+/* Print Stylesheet
+   One page must always carry both faces, fully. Two things used to break that:
+   1. The printable block stayed in normal flow, so it inherited the admin
+      shell's sidebar offset and page padding. The 194mm block then started
+      part-way across the sheet and the right-hand (back) face fell outside the
+      printable width - the PDF came out with half the card set.
+   2. The faces were sized 86mm x 136.5mm, which is not CR80 (54mm x 85.6mm).
+   The block is now absolutely positioned at the page origin and the faces use
+   true CR80 portrait, so the pair always fits the sheet. */
 @media print {
-  /* Physical stock is ID-1 / CR80: 85.60 x 53.98 mm. The credential is
-     portrait, so the card prints 53.98 mm wide by 85.60 mm tall — exactly the
-     blank and the badge holder. */
   @page {
     size: A4 portrait;
-    margin: 10mm;
+    margin: 8mm;
   }
 
   .no-print,
   .px-card-root .controls-panel,
-  .top-header {
+  .px-card-root .photo-hint,
+  .top-header,
+  .admin-header,
+  .admin-sidebar,
+  .admin-nav,
+  .admin-topbar,
+  .app-header {
     display: none !important;
   }
+
+  html,
+  body,
+  #root,
+  main,
+  #main,
+  .admin-shell,
+  .admin-body,
+  .admin-content-area,
+  .admin-page-container,
+  .admin-id-studio-grid,
+  .admin-id-preview-col {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    transform: none !important;
+    filter: none !important;
+    contain: none !important;
+    isolation: auto !important;
+    z-index: auto !important;
+    background: transparent !important;
+    background-image: none !important;
+  }
+
+  html,
+  body {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #000000 !important;
+  }
+
+  body::before,
+  body::after {
+    display: none !important;
+  }
+
   body,
   .stage,
   .px-card-root {
@@ -660,36 +738,97 @@
     padding: 0 !important;
     gap: 0 !important;
   }
-  .px-card-root .card {
-    box-shadow: none !important;
-    page-break-inside: avoid;
+
+  /* Nothing between the sheet and the card may clip the credential. */
+  .px-printable-target,
+  .px-card-root {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Outside the studio (e.g. inside a portal modal), lift to the page origin. */
+  .px-printable-target,
+  .px-idcard-modal-content.px-printable-target {
+    position: absolute !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 0 4mm !important;
     transform: none !important;
-    width: 53.98mm !important;
-    height: 85.6mm !important;
-    aspect-ratio: 53.98 / 85.6;
-    margin: 0 !important;
-    /* Hairline cut guide outside the artwork: trims on the ID-1 edge. */
-    outline: 0.2mm dashed #94a3b8;
-    outline-offset: 0;
-    print-color-adjust: exact !important;
-    -webkit-print-color-adjust: exact !important;
   }
 
-  /* The sheet is the printable target: keep both faces side by side at true
-     CR80 scale and keep the colour art instead of printing a white ghost. */
+  /* In the studio, all other chrome is display:none, so keep the printable
+     target in normal flow (with room for the outer cut outline) so no
+     grid/flex/viewport container can clip the bottom of the card. */
+  .admin-id-preview-col .px-printable-target,
+  .admin-id-preview-col .px-idcard-modal-content.px-printable-target {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 auto !important;
+    padding: 2mm 0 4mm !important;
+    transform: none !important;
+  }
+
+  .px-card-root {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  /* The pointer tilt writes inline transforms on the artwork layers; flatten
+     them so the printed card is the design itself, not a tilted frame. */
+  .px-card-root .pl svg {
+    transform: scale(1.14) !important;
+  }
+
+  /* 2 x 54mm faces + a 10mm gutter = 118mm: fits A4 and Letter printable
+     widths, so no @page size has to be trusted for the pair to fit. */
+  .px-card-root .stage,
+  .px-printable-target .px-card-root .stage,
   .px-idcard-modal-content.px-printable-target .px-card-root .stage {
-    flex-wrap: nowrap !important;
+    display: flex !important;
+    flex-flow: row nowrap !important;
     justify-content: center !important;
-    gap: 6mm !important;
+    align-items: flex-start !important;
+    gap: 10mm !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
     perspective: none !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
 
+  .px-card-root .card,
+  .px-printable-target .px-card-root .card,
   .px-idcard-modal-content.px-printable-target .px-card-root .card {
-    width: 53.98mm !important;
-    height: 85.6mm !important;
+    flex: 0 0 54mm !important;
+    width: 54mm !important;
+    height: 85.7mm !important;
+    max-width: 54mm !important;
+    /* An explicit height plus aspect-ratio made some print engines resolve the
+       box twice and clip the artwork; the height is authoritative here. */
+    aspect-ratio: auto !important;
+    box-shadow: none !important;
+    transform: none !important;
+    transform-style: flat !important;
+    will-change: auto !important;
     margin: 0 !important;
+    border-radius: 4.5mm !important;
+    overflow: hidden !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    /* Clean trim / cut guide */
+    outline: 0.3mm dashed #64748b !important;
+    outline-offset: 1.2mm !important;
     print-color-adjust: exact !important;
     -webkit-print-color-adjust: exact !important;
   }
 }
-

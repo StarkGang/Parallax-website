@@ -7,10 +7,6 @@ gsap.registerPlugin(ScrollTrigger);
 
 let globalLenis = null;
 
-export function getLenis() {
-  return globalLenis;
-}
-
 /**
  * Initializes Lenis smooth scrolling and synchronizes it with GSAP's ScrollTrigger.
  */

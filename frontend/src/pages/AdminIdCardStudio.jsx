@@ -1,17 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   CreditCard,
   Download,
   FileCheck2,
-  Image as ImageIcon,
   Palette,
   Printer,
   RefreshCw,
-  RotateCcw,
   ShieldAlert,
-  Sparkles,
   Upload,
-  UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
@@ -23,23 +19,51 @@ import ParallaxIdCard, {
   ROLE_CONFIGS,
   generateToneTriad,
 } from '../components/ParallaxIdCard.jsx';
-import { Button, Eyebrow, Field, SectionHead, useAsync } from '../components/ui.jsx';
+import { Button, Eyebrow, Feedback, Field, useAsync } from '../components/admin-ui.jsx';
+
+const PRESET_GROUPS = [...new Set(ADMIN_PRESETS.map((preset) => preset.group))];
+
+function newCredentialId() {
+  const block = Math.random().toString(16).slice(2, 8).toUpperCase().padEnd(6, '0');
+  return `PX-27-${block}`;
+}
+
 
 export default function AdminIdCardStudio() {
-  const { user } = useAuth();
+  const { user, roles = [], isStaff } = useAuth();
   const site = useSite();
   const { edition } = site;
 
-  const isSuperAdmin = user?.role === 'super_admin';
-  const isEditionAdmin = user?.role === 'edition_admin';
-  const hasAccess = isSuperAdmin || isEditionAdmin;
+  // /auth/me returns a `roles` array (one grant per edition); there is no
+  // top-level `user.role`, so the old check was always false and every field
+  // stayed disabled even for super and edition admins. The route itself is
+  // already wrapped in RequireStaff, so any staff session may edit here.
+  const isSuperAdmin = roles.includes('super_admin') || roles.includes('owner');
+  const isEditionAdmin = roles.includes('edition_admin');
+  const hasAccess = Boolean(isStaff || isSuperAdmin || isEditionAdmin || user);
 
   // Selected Preset
   const [activePresetKey, setActivePresetKey] = useState('midhun');
 
+  // Studio-issued cards live in the database; nothing is printed until the
+  // server has issued the row (and therefore the QR token).
+  const [savedCredential, setSavedCredential] = useState(null);
+  const [savingCard, setSavingCard] = useState(false);
+  const [cardMessage, setCardMessage] = useState(null);
+  const [listVersion, setListVersion] = useState(0);
+  const savedQuery = useAsync(
+    () =>
+      edition?.id && hasAccess
+        ? adminApi.customCredentials(edition.id)
+        : Promise.resolve({ data: [] }),
+    [edition?.id, hasAccess, listVersion],
+    { enabled: Boolean(edition?.id && hasAccess) }
+  );
+  const savedCards = savedQuery.data?.data || [];
+
   // Registered attendees query to load real attendee data for card generation
   const registeredQuery = useAsync(
-    () => (edition?.id ? adminApi.collegeRegistrations(edition.id, { limit: 100 }) : Promise.resolve({ data: { items: [] } })),
+    () => (edition?.id ? adminApi.collegeRegistrations(edition.id, { pageSize: 200 }) : Promise.resolve({ data: [] })),
     [edition?.id],
     { enabled: Boolean(edition?.id && hasAccess) }
   );
@@ -73,42 +97,125 @@ export default function AdminIdCardStudio() {
     return generateToneTriad(customHex);
   }, [useCustomColor, customHex]);
 
-  // Apply a Preset
+  const controlStyle = {
+    width: '100%',
+    padding: '9px 12px',
+    borderRadius: '8px',
+    border: '1px solid var(--border, rgba(255, 255, 255, 0.15))',
+    background: 'var(--surface-input, rgba(255, 255, 255, 0.06))',
+    color: 'inherit',
+    fontFamily: 'inherit',
+    fontSize: '13px',
+  };
+
+  const nameInputRef = useRef(null);
+
+  const focusNameInput = () => {
+    requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    });
+  };
+
+  // Apply a Preset. Role presets intentionally carry no name: the operator
+  // types the holder's name and the card picks it up live.
   const handleSelectPreset = (preset) => {
     setActivePresetKey(preset.key);
+    setSavedCredential(null);
+    setCardMessage(null);
     const college = preset.college || (preset.sub?.includes('·') ? preset.sub.split('·')[1].trim() : 'NSS College of Engineering, Palakkad');
-    const branch = preset.branch || (preset.sub?.includes('·') ? preset.sub.split('·')[0].trim() : preset.sub);
+    const branch = preset.branch || (preset.sub?.includes('·') ? preset.sub.split('·')[0].trim() : preset.sub || '');
+    const name = preset.name || '';
+    const id = preset.id || newCredentialId();
     setFormData({
-      name: preset.name,
+      name,
       role: preset.role,
       college,
       branch,
       sub: `${branch} · ${college}`,
       tier: preset.tier,
-      id: preset.id,
-      photo: preset.photo,
-      qrPayload: `PX27:${preset.id}|NAME:${preset.name}|COLLEGE:${college}|ROLE:${preset.role}|FEST:PARALLAX_2027_NSSCE`,
+      id,
+      photo: preset.photo || '',
+      gender: preset.gender || '',
+      foodPreference: preset.foodPreference || '',
+      needsAccommodation: Boolean(preset.needsAccommodation),
+      qrPayload: '',
+      registrationId: null,
       isVerified: true,
     });
     setRoleKey(preset.roleKey);
     setPaletteIdx(preset.paletteIdx);
     setKind(preset.kind || 'waves');
     setUseCustomColor(false);
+    if (!name) focusNameInput();
   };
 
-  // Populate from a real registered attendee
+  // Fully custom card: nothing pre-filled except the design system.
+  const handleSelectBlankCustom = () => {
+    setActivePresetKey('custom');
+    setSavedCredential(null);
+    setCardMessage(null);
+    const id = newCredentialId();
+    const name = '';
+    const college = 'NSS College of Engineering, Palakkad';
+    const role = 'Convention Delegate';
+    setFormData({
+      name,
+      role,
+      college,
+      branch: '',
+      sub: college,
+      tier: 'Convention Delegate',
+      id,
+      photo: '',
+      gender: '',
+      foodPreference: '',
+      needsAccommodation: false,
+      qrPayload: '',
+      registrationId: null,
+      isVerified: true,
+    });
+    setRoleKey('delegate');
+    setPaletteIdx(0);
+    setKind('waves');
+    setUseCustomColor(false);
+    focusNameInput();
+  };
+
+  // Populate from a real registered attendee. Their card is linked to the
+  // registration, so an already-saved card is reopened with its QR instead of
+  // trying to mint a second ID under the registration number.
   const handleSelectAttendee = (e) => {
     const regId = e.target.value;
     if (!regId) return;
     const att = registeredAttendees.find((r) => r.id === regId || r.registrationNumber === regId);
     if (!att) return;
+    const existing = savedCards.find(
+      (card) =>
+        card.status === 'active' &&
+        (card.registrationId === att.id ||
+          (att.registrationNumber && card.code === att.registrationNumber)),
+    );
+    if (existing) {
+      applySavedCard(existing);
+      setCardMessage({
+        tone: 'success',
+        text: `Opened ${existing.code}, the saved card for ${att.fullName}.`,
+      });
+      return;
+    }
     const college = att.collegeName || 'NSS College of Engineering, Palakkad';
     const branch = [att.branch || att.course || 'Engineering', att.yearOfStudy ? `Yr ${att.yearOfStudy}` : null]
       .filter(Boolean)
       .join(' · ');
-    const photoDoc = att.documents?.find((d) => d.docType === 'photo' || d.type === 'photo');
-    const photoUrl = photoDoc ? `/api/v1/editions/${edition.id}/registration/documents/${photoDoc.id}/content` : (att.photoUrl || '');
+    // The list only ships the passport-photo document id; the bytes are served
+    // by the admin document route.
+    const photoUrl = att.photoDocumentId
+      ? adminApi.registrationDocumentUrl(edition.id, att.id, att.photoDocumentId)
+      : '';
     setActivePresetKey('custom');
+    setSavedCredential(null);
+    setCardMessage(null);
     setFormData({
       name: (att.fullName || 'ATTENDEE').toUpperCase(),
       role: att.categoryName || 'College Student',
@@ -116,9 +223,17 @@ export default function AdminIdCardStudio() {
       branch,
       sub: `${branch} · ${college}`,
       tier: `${att.categoryName || 'Convention Delegate'} Pass`,
-      id: att.registrationNumber || 'PX-27-DL0001',
+      // The printed ID is the attendee's registration number; the server allows
+      // it because this card is linked to that same registration.
+      id: att.registrationNumber || '',
+      registrationId: att.id,
       photo: photoUrl,
-      qrPayload: `PX27:${att.registrationNumber || 'PX27'}|NAME:${att.fullName}|COLLEGE:${college}|ROLE:${att.categoryName || 'DELEGATE'}`,
+      gender: att.gender || '',
+      foodPreference: att.foodPreference || '',
+      needsAccommodation: Boolean(att.needsAccommodation),
+      // A linked card prints the attendee's own pass payload, never a token of
+      // its own; empty means nothing has been issued yet.
+      qrPayload: att.entryQr || '',
       isVerified: att.verificationStatus === 'approved',
     });
     setRoleKey('delegate');
@@ -131,15 +246,169 @@ export default function AdminIdCardStudio() {
     setUseCustomColor(true);
   };
 
+  // Both photo buttons (the sidebar and the card itself) must store the bytes.
+  // A blob URL dies with the tab, so a card saved with one came back faceless.
+  const uploadPhotoFile = async (file) => {
+    if (!file || !edition?.id) return;
+    const form = new FormData();
+    form.append('file', file);
+    setCardMessage(null);
+    setSavingCard(true);
+    try {
+      const body = await adminApi.uploadCredentialPhoto(edition.id, form);
+      setFormData((prev) => ({ ...prev, photo: body.data.url }));
+    } catch (err) {
+      setCardMessage({ tone: 'error', text: err.message || 'Photo upload failed.' });
+    } finally {
+      setSavingCard(false);
+    }
+  };
+
   const handlePhotoUpload = (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    setFormData((prev) => ({ ...prev, photo: url }));
+    if (file) uploadPhotoFile(file);
+  };
+
+  const designFromState = () => ({
+    roleKey,
+    paletteIdx,
+    kind,
+    isVerified: formData.isVerified,
+    photo: formData.photo || null,
+    useCustomColor,
+    customHex: useCustomColor ? customHex : null,
+  });
+
+  const applySavedCard = (card) => {
+    const design = card.design || {};
+    setSavedCredential(card);
+    setActivePresetKey('saved');
+    setCardMessage(null);
+    setFormData({
+      name: card.name || '',
+      role: card.role || 'Convention Delegate',
+      college: card.college || '',
+      branch: card.branch || '',
+      sub: [card.branch, card.college].filter(Boolean).join(' · '),
+      tier: card.tier || '',
+      id: card.code,
+      registrationId: card.registrationId || null,
+      photo: design.photo || card.photo || '',
+      gender: card.gender || '',
+      foodPreference: card.foodPreference || '',
+      needsAccommodation: Boolean(card.needsAccommodation),
+      qrPayload: card.registrationId ? card.entryQr || '' : card.token || '',
+      isVerified: design.isVerified !== false,
+    });
+    if (design.roleKey && ROLE_CONFIGS[design.roleKey]) setRoleKey(design.roleKey);
+    if (Number.isFinite(design.paletteIdx)) setPaletteIdx(design.paletteIdx);
+    if (design.kind) setKind(design.kind);
+    setUseCustomColor(Boolean(design.useCustomColor && design.customHex));
+    if (design.useCustomColor && design.customHex) setCustomHex(design.customHex);
+  };
+
+  const handleSaveCard = async () => {
+    if (!edition?.id) return;
+    if (!formData.name.trim()) {
+      setCardMessage({ tone: 'error', text: "Type the holder's name before saving the card." });
+      return;
+    }
+    setSavingCard(true);
+    setCardMessage(null);
+    const payload = {
+      code: formData.id?.trim() || null,
+      registrationId: formData.registrationId || null,
+      name: formData.name.trim(),
+      role: formData.role.trim() || 'Convention Delegate',
+      college: formData.college?.trim() || null,
+      branch: formData.branch?.trim() || null,
+      tier: formData.tier?.trim() || null,
+      gender: formData.gender || null,
+      foodPreference: formData.foodPreference || null,
+      needsAccommodation: Boolean(formData.needsAccommodation),
+      design: designFromState(),
+    };
+    try {
+      const body = savedCredential
+        ? await adminApi.updateCustomCredential(edition.id, savedCredential.id, payload)
+        : await adminApi.createCustomCredential(edition.id, payload);
+      const card = body.data;
+      applySavedCard(card);
+      setCardMessage({
+        tone: card.registrationId && !card.entryQr ? 'warn' : 'success',
+        text: body.reused
+          ? `${card.code} was already saved. Opened that card with its QR.`
+          : card.registrationId
+            ? card.entryQr
+              ? `Saved ${card.code}. The QR is ${card.name}'s own pass, so a scan checks them in through the normal door flow.`
+              : `Saved ${card.code}. No entry QR yet: the pass has not been issued, so this card prints without a working QR.`
+            : `Saved ${card.code}. The QR carries this credential's own token.`,
+      });
+      setListVersion((value) => value + 1);
+    } catch (error) {
+      if (error?.code === 'CREDENTIAL_CODE_TAKEN') {
+        // The ID may already be a saved card (an earlier save, or a colleague's).
+        // Reopen that card with its QR instead of leaving the operator stuck.
+        try {
+          const refreshed = await adminApi.customCredentials(edition.id);
+          const cards = Array.isArray(refreshed?.data) ? refreshed.data : [];
+          const match = cards.find(
+            (card) =>
+              card.status === 'active' &&
+              card.code === (formData.id || '').trim().toUpperCase(),
+          );
+          setListVersion((value) => value + 1);
+          if (match) {
+            applySavedCard(match);
+            setCardMessage({
+              tone: 'success',
+              text: `${match.code} was already saved. Opened that card with its QR.`,
+            });
+            return;
+          }
+        } catch {
+          // Fall through to the server's message below.
+        }
+      }
+      setCardMessage({ tone: 'error', text: error.message });
+    } finally {
+      setSavingCard(false);
+    }
+  };
+
+  const handleRevokeCard = async (card) => {
+    if (!edition?.id) return;
+    if (!window.confirm(`Revoke ${card.code}? Scanning it will be denied at the desk.`)) return;
+    try {
+      await adminApi.revokeCustomCredential(edition.id, card.id, {
+        reason: 'Revoked from the ID card studio',
+      });
+      setListVersion((value) => value + 1);
+      if (savedCredential?.id === card.id) applySavedCard({ ...card, status: 'revoked' });
+      setCardMessage({ tone: 'success', text: `${card.code} revoked.` });
+    } catch (error) {
+      setCardMessage({ tone: 'error', text: error.message });
+    }
   };
 
   const handlePrint = () => {
+    if (!savedCredential || savedCredential.status !== 'active') {
+      setCardMessage({
+        tone: 'error',
+        text: 'Save the card first. Printing is enabled once the server has issued its QR token.',
+      });
+      return;
+    }
     window.print();
+  };
+
+  const handlePrintSaved = (card) => {
+    if (card.status !== 'active') {
+      setCardMessage({ tone: 'error', text: 'A revoked card cannot be printed.' });
+      return;
+    }
+    applySavedCard(card);
+    window.setTimeout(() => window.print(), 400);
   };
 
   return (
@@ -157,12 +426,24 @@ export default function AdminIdCardStudio() {
               Standard Waves design with matching tone-on-tone color systems for Parallax 2027 credentials.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <Button onClick={handlePrint} icon={Printer} variant="primary">
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <Button variant="accent" onClick={handleSaveCard} disabled={savingCard || !hasAccess} icon={FileCheck2}>
+              {savingCard ? 'Saving…' : savedCredential ? 'Save changes' : 'Save card'}
+            </Button>
+            <Button onClick={handlePrint} icon={Printer} variant="info">
               Print / Export CR80
             </Button>
           </div>
         </div>
+
+        <Feedback message={cardMessage} />
+        <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.65 }}>
+          {formData.registrationId
+            ? 'This card is linked to a registration. Its QR is that attendee\'s own pass: it admits exactly what their registration already allows, and prints only once the pass is issued.'
+            : savedCredential
+              ? `Editing ${savedCredential.code}. Field changes apply to the saved card and its QR reuses the same signed token.`
+              : 'Nothing prints until the card is saved: the QR must carry a token this server issued, or the registration desk cannot verify it.'}
+        </p>
 
         {!hasAccess && (
           <div
@@ -201,63 +482,82 @@ export default function AdminIdCardStudio() {
           Official Presets &amp; Roles
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-          {ADMIN_PRESETS.map((p) => {
-            const isActive = activePresetKey === p.key;
+          {PRESET_GROUPS.map((group) => {
+            const items = ADMIN_PRESETS.filter((preset) => preset.group === group);
+            if (!items.length) return null;
             return (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => handleSelectPreset(p)}
-                style={{
-                  padding: '7px 14px',
-                  borderRadius: '99px',
-                  border: isActive ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
-                  background: isActive ? '#6366f1' : 'var(--surface-hover, rgba(255, 255, 255, 0.06))',
-                  color: isActive ? '#fff' : 'inherit',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <span>{p.name.split(' ')[0]}</span>
-                <span style={{ opacity: 0.7, fontSize: '11px' }}>({p.tier.split(' ')[0]})</span>
-              </button>
+              <div key={group} style={{ marginBottom: '12px' }}>
+                <div
+                  style={{
+                    fontSize: '10px',
+                    fontWeight: '700',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                    opacity: 0.5,
+                    marginBottom: '6px',
+                  }}
+                >
+                  {group}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {items.map((p) => {
+                    const isActive = activePresetKey === p.key;
+                    return (
+                      <button
+                        key={p.key}
+                        type="button"
+                        onClick={() => handleSelectPreset(p)}
+                        title={p.name ? `Load the demo card for ${p.name}` : `Start a ${p.label} card, then type the name`}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '99px',
+                          border: isActive ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
+                          background: isActive ? '#6366f1' : 'var(--surface-hover, rgba(255, 255, 255, 0.06))',
+                          color: isActive ? '#fff' : 'inherit',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
-          <button
-            type="button"
-            onClick={() => {
-              setActivePresetKey('custom');
-              setFormData({
-                name: 'NEW ATTENDEE',
-                role: 'Convention Delegate',
-                college: 'NSS College of Engineering, Palakkad',
-                branch: 'Computer Science & Engineering · Yr 2',
-                sub: 'Computer Science · NSS College of Engineering',
-                tier: 'Delegate Pass',
-                id: 'PX-27-DL0001',
-                photo: '',
-                qrPayload: 'PX27:NEW_ATTENDEE|ROLE:DELEGATE',
-                isVerified: true,
-              });
-            }}
-            style={{
-              padding: '7px 14px',
-              borderRadius: '99px',
-              border: activePresetKey === 'custom' ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
-              background: activePresetKey === 'custom' ? '#6366f1' : 'transparent',
-              color: 'inherit',
-              fontSize: '12px',
-              fontWeight: '600',
-              cursor: 'pointer',
-            }}
-          >
-            + Blank Custom
-          </button>
+
+          <div>
+            <div
+              style={{
+                fontSize: '10px',
+                fontWeight: '700',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                opacity: 0.5,
+                marginBottom: '6px',
+              }}
+            >
+              Custom
+            </div>
+            <button
+              type="button"
+              onClick={handleSelectBlankCustom}
+              style={{
+                padding: '7px 14px',
+                borderRadius: '99px',
+                border: activePresetKey === 'custom' ? '1px solid #6366f1' : '1px dashed var(--border, rgba(255, 255, 255, 0.2))',
+                background: activePresetKey === 'custom' ? '#6366f1' : 'transparent',
+                color: 'inherit',
+                fontSize: '12px',
+                fontWeight: '600',
+                cursor: 'pointer',
+              }}
+            >
+              + Blank / Fully Custom
+            </button>
+          </div>
         </div>
 
         {/* Load From Live Registered Attendees */}
@@ -290,11 +590,92 @@ export default function AdminIdCardStudio() {
         )}
       </div>
 
+      {/* Saved custom credentials */}
+      <div
+        className="no-print"
+        style={{
+          background: 'var(--surface, rgba(255, 255, 255, 0.05))',
+          border: '1px solid var(--border, rgba(255, 255, 255, 0.1))',
+          borderRadius: '16px',
+          padding: '16px 20px',
+          marginBottom: '28px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65 }}>
+            Saved cards ({savedCards.length})
+          </div>
+          <Button size="small" variant="ghost" onClick={() => setListVersion((value) => value + 1)} icon={RefreshCw}>
+            Refresh
+          </Button>
+        </div>
+        {savedQuery.loading ? (
+          <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.6 }}>Loading saved cards…</p>
+        ) : savedQuery.error ? (
+          <p style={{ margin: '10px 0 0', fontSize: '12.5px', color: '#ef4444' }}>
+            Could not load saved cards: {savedQuery.error.message}
+          </p>
+        ) : savedCards.length === 0 ? (
+          <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.6 }}>
+            No custom cards yet. Fill the form and press Save card to register one.
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+            {savedCards.map((card) => (
+              <div
+                key={card.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  flexWrap: 'wrap',
+                  padding: '9px 12px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border, rgba(255, 255, 255, 0.1))',
+                  background: savedCredential?.id === card.id ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
+                  opacity: card.status === 'active' ? 1 : 0.55,
+                }}
+              >
+                <code style={{ fontSize: '12px', fontWeight: '700', minWidth: '96px' }}>{card.code}</code>
+                <span style={{ fontSize: '13px', fontWeight: '600' }}>{card.name}</span>
+                <span style={{ fontSize: '12px', opacity: 0.7 }}>{card.role}</span>
+                {card.status !== 'active' ? (
+                  <span style={{ fontSize: '11px', fontWeight: '700', color: '#ef4444' }}>REVOKED</span>
+                ) : null}
+                <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
+                  <Button size="small" variant="ghost" onClick={() => applySavedCard(card)}>
+                    Open
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="info"
+                    icon={Download}
+                    disabled={card.status !== 'active'}
+                    onClick={() => handlePrintSaved(card)}
+                  >
+                    PDF
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="danger"
+                    disabled={card.status !== 'active'}
+                    onClick={() => handleRevokeCard(card)}
+                  >
+                    Revoke
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Main Grid: Controls on Left, Live 3D Card on Right */}
       <div
+        className="admin-id-studio-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))',
           gap: '32px',
           alignItems: 'start',
         }}
@@ -318,15 +699,17 @@ export default function AdminIdCardStudio() {
           </div>
 
           {/* Text Fields */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div className="idc-field-grid">
             <div style={{ gridColumn: 'span 2' }}>
               <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
                 FULL NAME
               </label>
               <input
+                ref={nameInputRef}
                 type="text"
                 value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value.toUpperCase() })}
+                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value.toUpperCase() }))}
+                placeholder="Type the holder's full name"
                 disabled={!hasAccess}
                 style={{
                   width: '100%',
@@ -348,7 +731,7 @@ export default function AdminIdCardStudio() {
               <input
                 type="text"
                 value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                onChange={(e) => setFormData((prev) => ({ ...prev, role: e.target.value }))}
                 disabled={!hasAccess}
                 style={{
                   width: '100%',
@@ -398,7 +781,6 @@ export default function AdminIdCardStudio() {
                     ...prev,
                     college,
                     sub: `${prev.branch || ''} · ${college}`,
-                    qrPayload: `PX27:${prev.id}|NAME:${prev.name}|COLLEGE:${college}|ROLE:${prev.role}`,
                   }));
                 }}
                 placeholder="e.g. NSS College of Engineering, Palakkad"
@@ -453,7 +835,8 @@ export default function AdminIdCardStudio() {
               <input
                 type="text"
                 value={formData.id}
-                onChange={(e) => setFormData({ ...formData, id: e.target.value })}
+                onChange={(e) => setFormData((prev) => ({ ...prev, id: e.target.value.toUpperCase() }))}
+                placeholder="PX-27-XXXXXX"
                 disabled={!hasAccess}
                 style={{
                   width: '100%',
@@ -480,6 +863,58 @@ export default function AdminIdCardStudio() {
                   disabled={!hasAccess}
                 />
                 <span>Verified attendee</span>
+              </label>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+                GENDER
+              </label>
+              <select
+                aria-label="Gender"
+                value={formData.gender || ''}
+                onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                disabled={!hasAccess}
+                style={controlStyle}
+              >
+                <option value="">Not set</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+                MEAL PREFERENCE
+              </label>
+              <select
+                aria-label="Meal preference"
+                value={formData.foodPreference || ''}
+                onChange={(e) => setFormData({ ...formData, foodPreference: e.target.value })}
+                disabled={!hasAccess}
+                style={controlStyle}
+              >
+                <option value="">Not set</option>
+                <option value="veg">Vegetarian</option>
+                <option value="non_veg">Non-vegetarian</option>
+              </select>
+            </div>
+
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+                ACCOMMODATION
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '38px', fontSize: '13px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  aria-label="Needs hostel accommodation"
+                  checked={Boolean(formData.needsAccommodation)}
+                  onChange={(e) =>
+                    setFormData({ ...formData, needsAccommodation: e.target.checked })
+                  }
+                  disabled={!hasAccess}
+                />
+                <span>Needs hostel accommodation</span>
               </label>
             </div>
           </div>
@@ -678,8 +1113,9 @@ export default function AdminIdCardStudio() {
         </div>
 
         {/* Right Side: Live CR80 Parallax Pass Preview */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+        <div className="admin-id-preview-col" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
           <div
+            className="px-idcard-modal-content px-printable-target"
             style={{
               width: '100%',
               display: 'flex',
@@ -691,12 +1127,13 @@ export default function AdminIdCardStudio() {
               kind={kind}
               customPalette={computedCustomPalette}
               paletteIdx={paletteIdx}
-              customData={formData}
+              customData={{ ...formData, name: formData.name || 'YOUR NAME' }}
               photoUrl={formData.photo}
               qrPayload={formData.qrPayload}
+              qrPendingLabel={formData.registrationId ? 'Awaiting pass' : undefined}
               showControls={false}
               allowPhotoUpload={true}
-              onPhotoUploaded={(url) => setFormData((prev) => ({ ...prev, photo: url }))}
+              onPhotoUploaded={uploadPhotoFile}
             />
           </div>
 

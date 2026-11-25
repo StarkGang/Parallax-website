@@ -111,9 +111,9 @@ export function api(path, options = {}) {
 
 async function runRequest(
   path,
-  { method = 'GET', body, form, retry = true, steppedUp = false, timeoutMs } = {},
+  { method = 'GET', body, form, retry = true, steppedUp = false, timeoutMs, headers: extraHeaders } = {},
 ) {
-  const headers = {};
+  const headers = { ...(extraHeaders || {}) };
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeout = controller
     ? setTimeout(() => controller.abort(), timeoutMs ?? (form ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS))
@@ -174,14 +174,14 @@ async function runRequest(
     if (res.status === 403 && error?.code === 'CSRF_INVALID' && retry) {
       await refreshCsrf();
       // Bypass the shared-read map: this is a retry of the same request.
-      return runRequest(path, { method, body, form, retry: false, timeoutMs });
+      return runRequest(path, { method, body, form, retry: false, timeoutMs, headers: extraHeaders });
     }
     if (res.status === 401) unauthorizedHandler?.();
     const code = error?.code || '';
     if (code === 'STEP_UP_REQUIRED' && stepUpHandler && !steppedUp) {
       const confirmed = await stepUpHandler(error);
       if (confirmed) {
-        return runRequest(path, { method, body, form, retry: false, steppedUp: true, timeoutMs });
+        return runRequest(path, { method, body, form, retry: false, steppedUp: true, timeoutMs, headers: extraHeaders });
       }
     }
     // A staff account that cannot complete enrolment/conversion yet gets a
@@ -221,13 +221,17 @@ export const publicApi = {
       body: payload,
     }),
   iconUrl: (iconId) => `${API_BASE}/public/icons/${iconId}`,
+  teamInvite: (code) => api(`/public/teams/${encodeURIComponent(code)}`),
 };
 
 export const authApi = {
   login: (payload) => api('/auth/login', { method: 'POST', body: payload }),
   logout: () => api('/auth/logout', { method: 'POST' }),
   me: () => api('/me'),
-  mfaSetup: () => api('/auth/mfa/setup', { method: 'POST' }),
+  mfaSetup: (params) => {
+    const query = params?.reset ? '?reset=true' : '';
+    return api(`/auth/mfa/setup${query}`, { method: 'POST' });
+  },
   mfaVerify: (payload) => api('/auth/mfa/verify', { method: 'POST', body: payload }),
   mfaChallenge: (payload) => api('/auth/mfa/challenge', { method: 'POST', body: payload }),
   mfaStepUp: (payload) => api('/auth/mfa/step-up', { method: 'POST', body: payload }),
@@ -240,7 +244,25 @@ export const authApi = {
 
 export const portalApi = {
   pass: (editionId) => api(`/editions/${editionId}/pass`),
-  createPassOrder: (editionId) => api(`/editions/${editionId}/pass/order`, { method: 'POST' }),
+  worklist: (editionId) => api(`/editions/${editionId}/worklist`),
+  basket: (editionId) => api(`/editions/${editionId}/basket`),
+  addToBasket: (editionId, eventIds) =>
+    api(`/editions/${editionId}/basket/events`, {
+      method: 'POST',
+      body: { eventIds },
+    }),
+  removeFromBasket: (editionId, eventId) =>
+    api(`/editions/${editionId}/basket/events/${eventId}`, { method: 'DELETE' }),
+  quote: (editionId, eventIds) =>
+    api(`/editions/${editionId}/quote`, { method: 'POST', body: { eventIds } }),
+  checkout: (editionId, quoteId, idempotencyKey) =>
+    api(`/editions/${editionId}/checkout`, {
+      method: 'POST',
+      body: { quoteId },
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
+  removeEvent: (editionId, eventId) =>
+    api(`/editions/${editionId}/events/${eventId}`, { method: 'DELETE' }),
   saveSelections: (editionId, eventIds) =>
     api(`/editions/${editionId}/pass/selections`, { method: 'PUT', body: { eventIds } }),
   registrations: (editionId) => api(`/editions/${editionId}/registrations`),
@@ -253,17 +275,14 @@ export const portalApi = {
     api(`/editions/${editionId}/teams`, { method: 'POST', body: payload }),
   joinTeam: (editionId, inviteCode) =>
     api(`/editions/${editionId}/teams/join`, { method: 'POST', body: { inviteCode } }),
-  leaveTeam: (editionId, teamId) =>
-    api(`/editions/${editionId}/teams/${teamId}`, { method: 'DELETE' }),
+  leaveTeam: (editionId, teamId, { disband = false } = {}) =>
+    api(`/editions/${editionId}/teams/${teamId}${disband ? '?disband=true' : ''}`, {
+      method: 'DELETE',
+    }),
   rotateInvite: (editionId, teamId) =>
     api(`/editions/${editionId}/teams/${teamId}/rotate-invite`, { method: 'POST' }),
   toggleTeamLock: (editionId, teamId) =>
     api(`/editions/${editionId}/teams/${teamId}/lock`, { method: 'POST' }),
-  verification: (editionId) => api(`/editions/${editionId}/verification`),
-  submitVerification: (editionId, form) =>
-    api(`/editions/${editionId}/verification`, { method: 'POST', form }),
-  confirmVerification: (editionId, code) =>
-    api(`/editions/${editionId}/verification/confirm`, { method: 'POST', body: { code } }),
   tickets: (editionId) => api(`/editions/${editionId}/tickets`),
   payment: (editionId, orderId) => api(`/editions/${editionId}/payments/${orderId}`),
   mockPay: (editionId, orderId) =>
@@ -344,6 +363,19 @@ export const adminApi = {
     api(`${adminBase(editionId)}/policies/check`, { method: 'POST', body: payload }),
   createPolicy: (editionId, payload) =>
     api(`${adminBase(editionId)}/policies`, { method: 'POST', body: payload }),
+  customCredentials: (editionId) => api(`${adminBase(editionId)}/custom-credentials`),
+  createCustomCredential: (editionId, payload) =>
+    api(`${adminBase(editionId)}/custom-credentials`, { method: 'POST', body: payload }),
+  updateCustomCredential: (editionId, credentialId, payload) =>
+    api(`${adminBase(editionId)}/custom-credentials/${credentialId}`, {
+      method: 'PATCH',
+      body: payload,
+    }),
+  revokeCustomCredential: (editionId, credentialId, payload = {}) =>
+    api(`${adminBase(editionId)}/custom-credentials/${credentialId}/revoke`, {
+      method: 'POST',
+      body: payload,
+    }),
   categories: (editionId) => api(`${adminBase(editionId)}/categories`),
   createCategory: (editionId, payload) =>
     api(`${adminBase(editionId)}/categories`, { method: 'POST', body: payload }),
@@ -360,6 +392,8 @@ export const adminApi = {
     api(`${adminBase(editionId)}/icons`, { method: 'POST', form }),
   uploadBanner: (editionId, form) =>
     api(`${adminBase(editionId)}/banner-upload`, { method: 'POST', form }),
+  uploadCredentialPhoto: (editionId, form) =>
+    api(`${adminBase(editionId)}/custom-credentials/photo`, { method: 'POST', form }),
   archiveIcon: (editionId, iconId) =>
     api(`${adminBase(editionId)}/icons/${iconId}`, { method: 'DELETE' }),
   users: (editionId, params = {}) => api(`${adminBase(editionId)}/users${query(params)}`),
@@ -374,21 +408,14 @@ export const adminApi = {
   refunds: (editionId) => api(`${adminBase(editionId)}/refunds`),
   createRefund: (editionId, payload) =>
     api(`${adminBase(editionId)}/refunds`, { method: 'POST', body: payload }),
-  verifications: (editionId, params = {}) =>
-    api(`${adminBase(editionId)}/verifications${query(params)}`),
-  verificationDocument: (editionId, verificationId) =>
-    api(`${adminBase(editionId)}/verifications/${verificationId}/document`),
-  resendVerificationCode: (editionId, verificationId) =>
-    api(`${adminBase(editionId)}/verifications/${verificationId}/email-code`, {
-      method: 'POST',
-    }),
-  decideVerification: (editionId, verificationId, payload) =>
-    api(`${adminBase(editionId)}/verifications/${verificationId}/decide`, {
-      method: 'POST',
-      body: payload,
-    }),
   registrations: (editionId, params = {}) =>
     api(`${adminBase(editionId)}/registrations${query(params)}`),
+  teams: (editionId, params = {}) =>
+    api(`${adminBase(editionId)}/teams${query(params)}`),
+  toggleTeamLock: (editionId, teamId) =>
+    api(`${adminBase(editionId)}/teams/${teamId}/lock`, { method: 'POST' }),
+  disbandTeam: (editionId, teamId) =>
+    api(`${adminBase(editionId)}/teams/${teamId}`, { method: 'DELETE' }),
   forceCancelEventRegistration: (editionId, registrationId, payload) =>
     api(`${adminBase(editionId)}/registrations/${registrationId}/force-cancel`, {
       method: 'POST',
@@ -431,6 +458,11 @@ export const adminApi = {
     api(`${registrationAdminBase(editionId)}/${id}/notes`, {
       method: 'POST',
       body: { note },
+    }),
+  updateRegistrationDetails: (editionId, id, payload) =>
+    api(`${registrationAdminBase(editionId)}/${id}/details`, {
+      method: 'PATCH',
+      body: payload,
     }),
   decideRegistration: (editionId, id, payload) =>
     api(`${registrationAdminBase(editionId)}/${id}/decision`, {

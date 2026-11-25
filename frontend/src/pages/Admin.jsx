@@ -1,26 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom';
+import { usePortalAvatar } from '../lib/portalAvatar.js';
+import { Link, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import jsQR from 'jsqr';
 import {
   ArrowUpRight,
-  BadgeCheck,
   CalendarDays,
   Camera,
   CameraOff,
-  Database,
-  LayoutDashboard,
   Check,
+  ChevronDown,
+  ChevronRight,
   ClipboardCheck,
   CreditCard,
+  Database,
   Download,
+  ExternalLink,
   FileText,
+  Flashlight,
   FlipHorizontal,
   IdCard,
   Image,
+  IndianRupee,
+  LayoutDashboard,
   LogOut,
   Megaphone,
-  Menu,
+  PanelLeft,
+  PanelLeftClose,
   Plus,
-  QrCode,
   RefreshCw,
   Search,
   Settings,
@@ -33,11 +39,10 @@ import {
   X,
 } from 'lucide-react';
 
-import { Avatar, Box, IconButton, Stack, Typography } from '@mui/material';
-
 import { adminApi, publicApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
+import { foodLabel, genderLabel } from '../lib/attendee.js';
 import {
   date,
   dateTime,
@@ -48,51 +53,79 @@ import {
   toLocalInput,
 } from '../lib/format.js';
 import {
+  AdminErrorBoundary,
   Badge,
   Button,
   DataTable,
-  Empty,
   ErrorBox,
   Eyebrow,
+  Feedback,
   Field,
   FieldGrid,
   InlineMessage,
   Loading,
-  PageTitle,
   Panel,
   SectionHead,
   Sheet,
-  Stat,
   StatusBadge,
   Toggle,
-  useAsync,
-  useDebounced,
-  clearAsyncCache,
-  AdminErrorBoundary,
-} from '../components/ui.jsx';
+} from '../components/admin-ui.jsx';
+import { clearAsyncCache, useAsync, useDebounced } from '../components/ui.jsx';
 
 const LOGO =
   String(import.meta.env.BASE_URL) +
   'images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp';
 
-const NAV = [
-  ['Overview', '/manage', LayoutDashboard, true],
-  ['Events', '/manage/events', CalendarDays],
-  ['Policy', '/manage/policy', ShieldCheck],
-  ['Registrations', '/manage/registrations', Ticket],
-  ['Cancelled & Refunds', '/manage/registrations?status=cancelled', Wallet],
-  ['Registration desk', '/manage/registration', IdCard],
-  ['ID Card Studio', '/manage/id-cards', CreditCard],
-  ['Users', '/manage/users', Users],
-  ['Verifications', '/manage/verifications', BadgeCheck],
-  ['Payments', '/manage/payments', Wallet],
-  ['Check-in', '/manage/check-in', ClipboardCheck],
-  ['Announcements', '/manage/announcements', Megaphone],
-  ['Attendance', '/manage/attendance', FileText],
-  ['Audit log', '/manage/audit', FileText],
-  ['DB Playground', '/manage/database', Database],
-  ['Registration config', '/manage/registration-settings', Settings],
-  ['Settings', '/manage/settings', Settings],
+const NAV_GROUPS = [
+  {
+    label: 'Overview',
+    items: [['Overview', '/manage', LayoutDashboard]],
+  },
+  {
+    label: 'Operations',
+    items: [
+      ['Events', '/manage/events', CalendarDays],
+      ['Registration desk', '/manage/registration', IdCard],
+      ['ID card studio', '/manage/id-cards', CreditCard],
+      ['Check-in', '/manage/check-in', ClipboardCheck],
+      ['Attendance', '/manage/attendance', FileText],
+    ],
+  },
+  {
+    label: 'Registrations',
+    items: [
+      ['All registrations', '/manage/registrations', Ticket],
+      ['Teams', '/manage/teams', Users],
+      ['Cancelled & refunds', '/manage/registrations?status=cancelled', Wallet],
+    ],
+  },
+  {
+    label: 'Finance',
+    items: [['Payments', '/manage/payments', Wallet]],
+  },
+  {
+    label: 'People',
+    items: [['Users', '/manage/users', Users]],
+  },
+  {
+    label: 'Communication',
+    items: [['Announcements', '/manage/announcements', Megaphone]],
+  },
+  {
+    label: 'Configuration',
+    items: [
+      ['Pass policy', '/manage/policy', ShieldCheck],
+      ['Registration config', '/manage/registration-settings', Settings],
+      ['Settings', '/manage/settings', Settings],
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      ['Audit log', '/manage/audit', FileText],
+      ['DB playground', '/manage/database', Database],
+    ],
+  },
 ];
 
 const ROLE_LABELS = {
@@ -100,30 +133,159 @@ const ROLE_LABELS = {
   super_admin: 'Super admin',
   edition_admin: 'Edition admin',
   finance_admin: 'Finance admin',
-  eligibility_verifier: 'Verifier',
   event_coordinator: 'Event coordinator',
   checkin_staff: 'Check-in staff',
   participant: 'Participant',
 };
 
+// Roles the staff API accepts on a grant or invite (MembershipGrant pattern).
+// ``owner`` is only a legacy label for a super admin; sending it is a 422.
+const GRANTABLE_ROLES = [
+  'edition_admin',
+  'finance_admin',
+  'event_coordinator',
+  'checkin_staff',
+];
+
+// Highest privilege first: when an account still carries stacked roles from
+// before grants became one-per-account, this is the one that describes them.
+const ROLE_RANK = {
+  owner: 0,
+  super_admin: 1,
+  edition_admin: 2,
+  finance_admin: 3,
+  event_coordinator: 4,
+  checkin_staff: 5,
+  participant: 6,
+};
+
+/** Collapse stacked memberships into one row per account. */
+function oneRolePerAccount(rows = []) {
+  const byUser = new Map();
+  for (const row of rows) {
+    const seen = byUser.get(row.userId);
+    if (!seen) {
+      byUser.set(row.userId, { ...row, staleRoles: [] });
+      continue;
+    }
+    const incoming = ROLE_RANK[row.role] ?? 99;
+    const current = ROLE_RANK[seen.role] ?? 99;
+    if (incoming < current) {
+      byUser.set(row.userId, {
+        ...row,
+        staleRoles: [...seen.staleRoles, seen.role],
+      });
+    } else {
+      seen.staleRoles.push(row.role);
+    }
+  }
+  return [...byUser.values()];
+}
+
 const ACCENTS = ['cyan', 'amber', 'orange', 'violet', 'lime', 'rose', 'ice'];
+
+const RAIL_KEY = 'px_admin_rail';
+
+function readRail() {
+  try {
+    return localStorage.getItem(RAIL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function initialsOf(email) {
+  const value = String(email || 'staff');
+  const base = value.split('@')[0].replace(/[^a-zA-Z0-9]+/g, ' ').trim();
+  const parts = base.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return base.slice(0, 2).toUpperCase() || 'PX';
+}
+
+/** One matcher for the whole rail: `/manage/registrations?status=cancelled`
+ *  and the unfiltered list share a path, so the query decides between them. */
+function navItemActive(to, pathname, searchParams) {
+  const [path, query] = to.split('?');
+  if (path === '/manage/registrations') {
+    if (pathname !== path) return false;
+    const wanted = new URLSearchParams(query || '').get('status');
+    const current = searchParams.get('status');
+    return wanted ? current === wanted : current !== 'cancelled';
+  }
+  if (path === '/manage') return pathname === path;
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
+
+function pageLabelFor(pathname, searchParams) {
+  for (const group of NAV_GROUPS) {
+    for (const [label, to] of group.items) {
+      if (navItemActive(to, pathname, searchParams) && !(to === '/manage' && pathname !== '/manage')) {
+        return label;
+      }
+    }
+  }
+  return 'Staff console';
+}
 
 export function AdminLayout() {
   const { isStaff, roles, user, loading, logout } = useAuth();
+  const [activeAvatar] = usePortalAvatar(user?.id, 'root');
   const site = useSite();
   const { edition, editionId } = site;
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncToast, setSyncToast] = useState(null);
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const [collapsed, setCollapsed] = useState(readRail);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    setMobileNavOpen(false);
-  }, [location.pathname]);
+    setMobileOpen(false);
+    setAccountOpen(false);
+  }, [location.pathname, location.search]);
+
+  const toggleRail = () => {
+    setCollapsed((value) => {
+      const next = !value;
+      try {
+        localStorage.setItem(RAIL_KEY, next ? '1' : '0');
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const onKey = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSearchOpen((value) => !value);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // The console scrolls inside its own column while Lenis drives the document,
+  // so pausing it stops the wheel from moving a page that never moves.
+  useEffect(() => {
+    const lenis = window.__lenis;
+    lenis?.stop?.();
+    return () => lenis?.start?.();
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const id = setTimeout(() => setToast(null), 3800);
+    return () => clearTimeout(id);
+  }, [toast]);
 
   const handleForceRefresh = async () => {
     setSyncing(true);
-    setSyncToast(null);
+    setToast(null);
     try {
       if (editionId) {
         await adminApi.sync(editionId);
@@ -132,48 +294,57 @@ export function AdminLayout() {
       try {
         sessionStorage.removeItem('px_cached_edition');
         sessionStorage.removeItem('px_cached_config');
-      } catch {}
+      } catch {
+        /* private mode */
+      }
       site.refresh();
-      setSyncToast('Server caches purged. Public pages can lag up to 60s at the edge.');
-      setTimeout(() => setSyncToast(null), 3500);
+      setToast('Server caches purged. Public pages can lag up to 60s at the edge.');
     } catch {
       clearAsyncCache();
       try {
         sessionStorage.removeItem('px_cached_edition');
         sessionStorage.removeItem('px_cached_config');
-      } catch {}
+      } catch {
+        /* private mode */
+      }
       site.refresh();
-      setSyncToast('Client cache purged & reloaded!');
-      setTimeout(() => setSyncToast(null), 3500);
+      setToast('Client cache purged and reloaded.');
     } finally {
       setSyncing(false);
     }
   };
 
-  if (loading) return <Loading label="Verifying staff credentials…" rows={0} />;
-  if (!user)
+  if (loading) {
+    return (
+      <div className="adm-scope adm-gate">
+        <Loading label="Verifying staff credentials…" rows={0} />
+      </div>
+    );
+  }
+  if (!user) {
     return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
+  }
   if (!isStaff) return <Navigate to="/portal" replace />;
 
   // Staff modules need the real database edition row: without it every request
   // would address an id the API does not know, so gate them on a verified load.
   if (!site.editionVerified) {
     return (
-      <div className="admin-gate">
+      <div className="adm-scope adm-gate">
         {site.editionError ? (
-          <>
+          <div className="adm-stack">
             <ErrorBox
               error={site.editionError}
               title="Could not load the convention edition"
               onRetry={site.refresh}
             />
-            <p className="muted" style={{ marginTop: 12 }}>
-              The console needs the live edition record before it can load staff modules.
-              This is usually a short database wake-up: retry in a moment. Signing out and
-              in again also refreshes the session.
+            <p className="muted">
+              The console needs the live edition record before it can load staff modules. This is
+              usually a short database wake-up: retry in a moment. Signing out and in again also
+              refreshes the session.
             </p>
-            <div className="admin-gate-actions">
-              <Button variant="ghost" icon={RefreshCw} onClick={site.refresh}>
+            <div className="adm-btn-row">
+              <Button variant="outline" icon={RefreshCw} onClick={site.refresh}>
                 Retry edition lookup
               </Button>
               <Button variant="ghost" to="/portal">
@@ -183,7 +354,7 @@ export function AdminLayout() {
                 Sign out
               </Button>
             </div>
-          </>
+          </div>
         ) : (
           <Loading label="Resolving convention edition…" rows={0} />
         )}
@@ -191,194 +362,533 @@ export function AdminLayout() {
     );
   }
 
+  const pageLabel = pageLabelFor(location.pathname, searchParams);
+  const roleLabel = ROLE_LABELS[roles[0]] || 'Staff';
+
+  const navGroups = (onNavigate) =>
+    NAV_GROUPS.map((group) => (
+      <div className="adm-nav-group" key={group.label}>
+        <div className="adm-nav-label">{group.label}</div>
+        {group.items.map(([label, to, Icon]) => {
+          const active = navItemActive(to, location.pathname, searchParams);
+          return (
+            <Link
+              key={`${group.label}-${label}`}
+              to={to}
+              title={label}
+              aria-current={active ? 'page' : undefined}
+              onClick={onNavigate}
+              className={`adm-nav-item ${active ? 'is-active' : ''}`.trim()}
+            >
+              <Icon aria-hidden="true" />
+              <span>{label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    ));
+
   return (
-    <div className="admin-shell">
-      {/* Dedicated Admin Header */}
-      <header className="admin-header">
-        <div className="admin-brand-lockup">
-          <Link to="/manage" className="admin-brand-link" aria-label="Staff operations home">
-            <img src={LOGO} alt={edition?.name || 'Parallax'} className="admin-brand-logo" />
+    <div
+      className={`adm adm-scope ${collapsed ? 'is-collapsed' : ''}`.trim()}
+      data-lenis-prevent
+    >
+      <aside className="adm-sidebar">
+        <div className="adm-sidebar-head">
+          <Link to="/manage" className="adm-brand" aria-label="Staff operations home">
+            <img src={LOGO} alt="" className="adm-brand-logo" />
+            <span className="adm-brand-text">
+              <b>{edition?.name || 'Parallax'}</b>
+              <small>Staff console</small>
+            </span>
           </Link>
-          <Badge tone="accent">Staff Console</Badge>
-          {edition?.name ? <Badge tone="muted">{edition.name}</Badge> : null}
-        </div>
-
-        <nav className="admin-header-nav" aria-label="Staff navigation shortcuts">
-          {/* Switch to Participant Portal */}
-          <Button
-            to="/portal"
-            variant="ghost"
-            size="small"
-            icon={Users}
-            title="Open participant portal"
-            className="admin-secondary-action"
-            sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
-          >
-            Participant Portal
-          </Button>
-
-          {/* Switch to Public Site */}
-          <Button
-            to="/"
-            variant="ghost"
-            size="small"
-            icon={ArrowUpRight}
-            title="View live convention website"
-            className="admin-secondary-action"
-            sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
-          >
-            Live Site
-          </Button>
-
-          {/* Force Cache Refresh */}
-          <Button
-            variant="ghost"
-            size="small"
-            icon={RefreshCw}
-            loading={syncing}
-            onClick={handleForceRefresh}
-            title="Force purge all caches and reload live database state"
-          >
-            {syncing ? 'Syncing…' : 'Force Refresh'}
-          </Button>
-
-          {/* Staff Identity Pill */}
-          <Stack
-            direction="row"
-            spacing={1}
-            sx={{ alignItems: 'center', px: 1.25, py: 0.5, borderRadius: 99, border: '1px solid', borderColor: 'divider' }}
-          >
-            <Badge tone="accent">{ROLE_LABELS[roles[0]] || 'Staff'}</Badge>
-            <Typography
-              variant="caption"
-              sx={{ color: 'text.secondary', display: { xs: 'none', md: 'block' } }}
-            >
-              {user?.email}
-            </Typography>
-          </Stack>
-
-          {/* Sign Out */}
-          <Button variant="ghost" size="small" icon={LogOut} onClick={logout} title="Sign out of staff account">
-            Sign out
-          </Button>
-
-          {/* Mobile Menu Button */}
           <button
-            className="admin-mobile-menu-btn"
-            onClick={() => setMobileNavOpen((open) => !open)}
-            aria-label={mobileNavOpen ? 'Close staff menu' : 'Open staff menu'}
-            aria-expanded={mobileNavOpen}
+            type="button"
+            className="adm-icon-btn adm-collapse-btn"
+            onClick={toggleRail}
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
           >
-            {mobileNavOpen ? (
-              <X size={18} strokeWidth={1.8} />
-            ) : (
-              <Menu size={18} strokeWidth={1.8} />
-            )}
+            <PanelLeftClose size={15} strokeWidth={1.7} />
           </button>
+        </div>
+
+        <nav className="adm-sidebar-nav" aria-label="Staff navigation">
+          {navGroups()}
         </nav>
-      </header>
 
-      {syncToast ? (
-        <div className="admin-sync-banner" role="status">
-          <Check size={14} />
-          <span>{syncToast}</span>
-        </div>
-      ) : null}
-
-      {/* Horizontal Swipeable Mobile Tabs */}
-      <nav className="admin-mobile-tabs" aria-label="Staff quick modules">
-        {NAV.map(([label, to, Icon, end]) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) => `admin-mobile-tab-item ${isActive ? 'is-active' : ''}`}
-          >
-            <Icon size={13} strokeWidth={1.6} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
-
-      {/* Mobile Drawer (Accessible full list) */}
-      {mobileNavOpen ? (
-        <div
-          className="admin-mobile-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Staff modules"
-        >
-          <div className="admin-drawer-header">
-            <span>Staff Console Modules</span>
+        <div className="adm-sidebar-foot">
+          <div className="adm-user">
+            <span className={`adm-avatar ${activeAvatar.kind === 'glyph' ? 'is-glyph' : ''}`}>
+              <img src={activeAvatar.src} alt={activeAvatar.label || roleLabel} />
+            </span>
+            <span className="adm-user-meta">
+              <b>{roleLabel}</b>
+              <small>{user?.email}</small>
+            </span>
             <button
-              className="admin-drawer-close-btn"
-              onClick={() => setMobileNavOpen(false)}
-              aria-label="Close menu"
+              type="button"
+              className="adm-icon-btn adm-rail-hide"
+              onClick={logout}
+              title="Sign out"
+              aria-label="Sign out"
             >
-              <X size={18} strokeWidth={1.8} />
-            </button>
-          </div>
-          <div className="admin-drawer-links">
-            {NAV.map(([label, to, Icon, end]) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                onClick={() => setMobileNavOpen(false)}
-                className={({ isActive }) => `admin-drawer-item ${isActive ? 'is-active' : ''}`}
-              >
-                <Icon size={15} strokeWidth={1.6} />
-                <span>{label}</span>
-              </NavLink>
-            ))}
-          </div>
-          <div className="admin-drawer-footer">
-            <div className="admin-drawer-user">
-              <b>{user?.email}</b>
-              <small>{ROLE_LABELS[roles[0]] || 'Staff'}</small>
-            </div>
-            <button className="admin-signout-btn" onClick={logout}>
-              <LogOut size={14} /> <span>Sign out</span>
+              <LogOut size={15} strokeWidth={1.7} />
             </button>
           </div>
         </div>
-      ) : null}
+      </aside>
 
-      {/* Main Admin Body */}
-      <div className="admin-body">
-        <aside className="admin-desktop-sidebar">
-          <div className="admin-sidebar-header">
-            <span className="admin-sidebar-heading">Operations</span>
-            <span className="admin-sidebar-meta">{NAV.length} modules</span>
+      <div className="adm-main">
+        <header className="adm-header">
+          <div className="adm-header-left">
+            <button
+              type="button"
+              className="adm-icon-btn"
+              onClick={() => {
+                if (window.matchMedia('(max-width: 1023px)').matches) setMobileOpen(true);
+                else toggleRail();
+              }}
+              aria-label="Toggle navigation"
+            >
+              <PanelLeft size={16} strokeWidth={1.7} />
+            </button>
+            <span className="adm-vsep" />
+            <nav className="adm-crumbs" aria-label="Breadcrumb">
+              <span>Staff console</span>
+              <ChevronRight size={14} strokeWidth={1.8} />
+              <b>{pageLabel}</b>
+            </nav>
           </div>
-          <nav className="admin-desktop-nav" aria-label="Staff navigation">
-            {NAV.map(([label, to, Icon, end]) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                className={({ isActive }) => `admin-sidebar-link ${isActive ? 'is-active' : ''}`}
+
+          <div className="adm-header-right">
+            <button
+              type="button"
+              className="adm-search-trigger"
+              onClick={() => setSearchOpen(true)}
+            >
+              <Search size={14} strokeWidth={1.8} />
+              <span>Search modules…</span>
+              <span className="adm-kbd">⌘K</span>
+            </button>
+            <button
+              type="button"
+              className="adm-icon-btn adm-hide-xs"
+              title="Refresh server caches"
+              aria-label="Refresh server caches"
+              onClick={handleForceRefresh}
+              disabled={syncing}
+            >
+              <RefreshCw
+                size={15}
+                strokeWidth={1.7}
+                className={syncing ? 'adm-spin' : ''}
+              />
+            </button>
+            <Link
+              to="/"
+              className="adm-icon-btn adm-hide-xs"
+              title="Open live site"
+              aria-label="Open live site"
+            >
+              <ExternalLink size={15} strokeWidth={1.7} />
+            </Link>
+            <Link
+              to="/portal"
+              className="adm-icon-btn adm-hide-xs"
+              title="Participant portal"
+              aria-label="Participant portal"
+            >
+              <Users size={15} strokeWidth={1.7} />
+            </Link>
+            <span className="adm-vsep" />
+            <div className="adm-account">
+              <button
+                type="button"
+                className="adm-account-btn"
+                aria-expanded={accountOpen}
+                aria-haspopup="menu"
+                onClick={() => setAccountOpen((value) => !value)}
               >
-                <Icon size={15} strokeWidth={1.5} />
-                <span>{label}</span>
-              </NavLink>
-            ))}
-          </nav>
-          <div className="admin-sidebar-footer">
-            <div className="admin-system-status">
-              <span className="status-live-dot" />
-              <span>Live Audit & RBAC Active</span>
+                <span className={`adm-avatar is-round ${activeAvatar.kind === 'glyph' ? 'is-glyph' : ''}`}>
+                  <img src={activeAvatar.src} alt={activeAvatar.label || roleLabel} />
+                </span>
+                <ChevronDown size={14} strokeWidth={1.8} />
+              </button>
+              {accountOpen ? (
+                <>
+                  <div className="adm-menu-backdrop" onClick={() => setAccountOpen(false)} />
+                  <div className="adm-menu" role="menu">
+                    <div className="adm-menu-head">
+                      <b>{roleLabel}</b>
+                      <small>{user?.email}</small>
+                    </div>
+                    <Link className="adm-menu-item" to="/portal" role="menuitem">
+                      <Users /> Participant portal
+                    </Link>
+                    <Link className="adm-menu-item" to="/" role="menuitem">
+                      <ArrowUpRight /> Live site
+                    </Link>
+                    <Link className="adm-menu-item" to="/manage/settings" role="menuitem">
+                      <Settings /> Console settings
+                    </Link>
+                    <div className="adm-menu-sep" />
+                    <button
+                      type="button"
+                      className="adm-menu-item is-danger"
+                      onClick={logout}
+                      role="menuitem"
+                    >
+                      <LogOut /> Sign out
+                    </button>
+                  </div>
+                </>
+              ) : null}
             </div>
           </div>
-        </aside>
+        </header>
 
-        <main className="admin-content-area" id="admin-main">
+        <main className="adm-content" id="admin-main" data-lenis-prevent>
           <AdminErrorBoundary key={location.pathname}>
             <Outlet />
           </AdminErrorBoundary>
         </main>
       </div>
+
+      {mobileOpen ? (
+        <>
+          <div className="adm-drawer-backdrop" onClick={() => setMobileOpen(false)} />
+          <div className="adm-drawer" role="dialog" aria-modal="true" aria-label="Staff modules">
+            <div className="adm-sidebar-head">
+              <Link
+                to="/manage"
+                className="adm-brand"
+                onClick={() => setMobileOpen(false)}
+              >
+                <img src={LOGO} alt="" className="adm-brand-logo" />
+                <span className="adm-brand-text">
+                  <b>{edition?.name || 'Parallax'}</b>
+                  <small>Staff console</small>
+                </span>
+              </Link>
+              <button
+                type="button"
+                className="adm-icon-btn"
+                onClick={() => setMobileOpen(false)}
+                aria-label="Close menu"
+              >
+                <X size={16} strokeWidth={1.8} />
+              </button>
+            </div>
+            <nav className="adm-sidebar-nav" aria-label="Staff modules">
+              {navGroups(() => setMobileOpen(false))}
+            </nav>
+            <div className="adm-sidebar-foot">
+              <div className="adm-user">
+                <span className={`adm-avatar ${activeAvatar.kind === 'glyph' ? 'is-glyph' : ''}`}>
+                  <img src={activeAvatar.src} alt={activeAvatar.label || roleLabel} />
+                </span>
+                <span className="adm-user-meta">
+                  <b>{roleLabel}</b>
+                  <small>{user?.email}</small>
+                </span>
+                <button
+                  type="button"
+                  className="adm-icon-btn"
+                  onClick={logout}
+                  aria-label="Sign out"
+                >
+                  <LogOut size={15} strokeWidth={1.7} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
+
+      {toast ? (
+        <div
+          className="adm-alert is-success"
+          role="status"
+          style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 1400, maxWidth: 380 }}
+        >
+          <Check aria-hidden="true" />
+          <div>{toast}</div>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function CommandPalette({ open, onClose }) {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setQuery('');
+    const id = setTimeout(() => inputRef.current?.focus(), 30);
+    const onKey = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const needle = query.trim().toLowerCase();
+  const groups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter(([label]) => label.toLowerCase().includes(needle)),
+  })).filter((group) => group.items.length);
+
+  const go = (to) => {
+    onClose();
+    navigate(to);
+  };
+
+  return (
+    <div
+      className="adm-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="adm-command" role="dialog" aria-modal="true" aria-label="Search modules">
+        <div className="adm-command-input">
+          <Search size={15} strokeWidth={1.8} />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search admin modules…"
+            aria-label="Search admin modules"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && groups[0]?.items[0]) go(groups[0].items[0][1]);
+            }}
+          />
+          <span className="adm-kbd">esc</span>
+        </div>
+        <div className="adm-command-list">
+          {groups.length ? (
+            groups.map((group) => (
+              <div key={group.label}>
+                <div className="adm-command-group">{group.label}</div>
+                {group.items.map(([label, to, Icon]) => (
+                  <button
+                    key={to}
+                    type="button"
+                    className="adm-command-item"
+                    onClick={() => go(to)}
+                  >
+                    <Icon aria-hidden="true" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            ))
+          ) : (
+            <div className="adm-command-empty">No modules match “{query}”.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({ icon: Icon, label, value, note, badge, badgeTone = 'muted', chart = null }) {
+  return (
+    <div className="adm-metric">
+      <div className="adm-metric-top">
+        <span className="adm-metric-icon">
+          <Icon aria-hidden="true" />
+        </span>
+        {badge ? <Badge tone={badgeTone}>{badge}</Badge> : null}
+      </div>
+      <span className="adm-metric-label">{label}</span>
+      <b className="adm-metric-value">{value}</b>
+      {chart}
+      {note ? <span className="adm-metric-note">{note}</span> : null}
+    </div>
+  );
+}
+
+function Sparkline({ values, color = 'var(--adm-chart, #7dd3fc)' }) {
+  const list = (values || []).map((value) => Number(value) || 0);
+  if (list.length < 2) return null;
+  const max = Math.max(...list);
+  const min = Math.min(...list);
+  const span = max - min || 1;
+  const W = 120;
+  const H = 34;
+  const points = list.map((value, index) => [
+    (index / (list.length - 1)) * W,
+    H - 2 - ((value - min) / span) * (H - 6),
+  ]);
+  const path = points
+    .map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg className="adm-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      <path d={path} fill="none" stroke={color} strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Donut({ segments, total, centerLabel = 'total' }) {
+  const size = 104;
+  const stroke = 11;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const sum = total || segments.reduce((count, segment) => count + (segment.count || 0), 0);
+  let offset = 0;
+  return (
+    <div className="adm-donut">
+      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label={centerLabel}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="rgba(255,255,255,0.08)"
+          strokeWidth={stroke}
+        />
+        {sum
+          ? segments
+              .filter((segment) => segment.count > 0)
+              .map((segment) => {
+                const length = (segment.count / sum) * circumference;
+                const node = (
+                  <circle
+                    key={segment.label}
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke={segment.color}
+                    strokeWidth={stroke}
+                    strokeDasharray={`${length} ${circumference - length}`}
+                    strokeDashoffset={-offset}
+                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
+                  />
+                );
+                offset += length;
+                return node;
+              })
+          : null}
+      </svg>
+      <div className="adm-donut-center">
+        <b>{sum}</b>
+        <span>{centerLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+function Breakdown({ items, emptyLabel = 'No data yet.', centerLabel = 'total' }) {
+  const total = items.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+  if (!total) return <p className="muted" style={{ margin: 0 }}>{emptyLabel}</p>;
+  return (
+    <div className="adm-donut-wrap">
+      <Donut segments={items} total={total} centerLabel={centerLabel} />
+      <div className="adm-dist-legend" style={{ marginTop: 0, flex: 1 }}>
+        {items.map((item) => (
+          <div className="adm-dist-row" key={item.label}>
+            <span className="adm-dot" style={{ background: item.color }} />
+            <span>{item.label}</span>
+            <b>
+              {item.count}{' '}
+              <small style={{ color: 'var(--adm-fg-dim)', fontWeight: 400 }}>
+                ({Math.round((item.count / total) * 100)}%)
+              </small>
+            </b>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SalesChart({ rows }) {
+  const raw = (rows || []).slice(-14);
+  if (!raw.length) {
+    return <p className="muted" style={{ margin: 0 }}>No paid orders recorded yet.</p>;
+  }
+
+  // Pad to at least 7 days ending on the latest recorded day so single-day
+  // launches render a real trend curve instead of one isolated dot.
+  let series = raw;
+  if (raw.length < 7) {
+    const byDate = new Map(raw.map((r) => [String(r.date), Number(r.amountPaise) || 0]));
+    const lastParsed = new Date(`${raw[raw.length - 1].date}T00:00:00`);
+    if (!Number.isNaN(lastParsed.getTime())) {
+      series = [];
+      for (let offset = 6; offset >= 0; offset -= 1) {
+        const d = new Date(lastParsed);
+        d.setDate(d.getDate() - offset);
+        const key = d.toISOString().slice(0, 10);
+        series.push({ date: key, amountPaise: byDate.get(key) || 0 });
+      }
+    }
+  }
+
+  const amounts = series.map((row) => Number(row.amountPaise) || 0);
+  const peak = Math.max(...amounts, 1);
+  const W = 720;
+  const H = 190;
+  const top = 12;
+  const bottom = 26;
+  const plotH = H - top - bottom;
+  const step = series.length > 1 ? (W - 16) / (series.length - 1) : 0;
+  const points = amounts.map((value, index) => [
+    8 + index * step,
+    top + plotH - (value / peak) * plotH,
+  ]);
+  const line = points
+    .map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(' ');
+  const area = `${line} L ${points[points.length - 1][0].toFixed(1)},${H - bottom} L ${points[0][0].toFixed(1)},${H - bottom} Z`;
+  const dayLabel = (value) => {
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime())
+      ? String(value || '')
+      : parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+
+  return (
+    <>
+      <div className="adm-chart">
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Paid revenue per day">
+          <defs>
+            <linearGradient id="adm-area" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#7dd3fc" stopOpacity="0.24" />
+              <stop offset="100%" stopColor="#7dd3fc" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {[0, 1, 2, 3].map((index) => {
+            const y = top + (plotH / 3) * index;
+            return <line key={index} className="adm-chart-grid" x1="8" x2={W - 8} y1={y} y2={y} />;
+          })}
+          <path d={area} fill="url(#adm-area)" />
+          <path d={line} className="adm-chart-line" />
+          {points.map(([x, y], index) => (
+            <circle key={index} className="adm-chart-dot" cx={x} cy={y} r={series.length > 10 ? 2 : 2.6} />
+          ))}
+        </svg>
+      </div>
+      <div className="adm-chart-axis">
+        <span>{dayLabel(series[0].date)}</span>
+        <span>{series.length > 2 ? dayLabel(series[Math.floor(series.length / 2)].date) : ''}</span>
+        <span>{dayLabel(series[series.length - 1].date)}</span>
+      </div>
+    </>
   );
 }
 
@@ -404,122 +914,438 @@ export function AdminOverview() {
     );
   }
 
+  const sales = data?.salesByDay || [];
   const recent = data?.recentRegistrations || [];
+  const passesSold = data?.passesSold ?? 0;
+  const checkedIn = data?.checkedIn ?? 0;
+  const refunded = data?.refundedPaise || 0;
+  const revenueCollected = sales.reduce((sum, row) => sum + (Number(row.amountPaise) || 0), 0);
+  const orders = sales.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+  const peakDay = sales.reduce((peak, row) => Math.max(peak, Number(row.amountPaise) || 0), 0);
+  const checkRate = passesSold ? Math.round((checkedIn / passesSold) * 100) : 0;
+  const seatsTaken = data?.seatsTaken ?? 0;
+  const seatsCapacity = data?.seatsCapacity ?? 0;
+  const capacityPct = seatsCapacity ? Math.min(100, Math.round((seatsTaken / seatsCapacity) * 100)) : 0;
+  const units = Object.entries(data?.seatsTakenByUnit || {});
+  const genderSplit = data?.genderSplit || [];
+  const foodSplit = data?.foodSplit || [];
+  const accommodation = data?.accommodation || {};
+  const passCategories = data?.passCategories || [];
+  const eventRegistrations = data?.eventRegistrations || [];
+  const attendees = genderSplit.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+  const categoryTotal = passCategories.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
 
   return (
     <>
-      <div className="admin-page-header">
-        <div className="admin-page-header-text">
-          <Eyebrow>Operations Telemetry</Eyebrow>
-          <h1>Convention Overview</h1>
-          <p>Real-time metrics, ticketing volume, capacity, and door check-in status.</p>
+      <div className="adm-page-head">
+        <div className="adm-page-head-text">
+          <p className="adm-kicker">Operations telemetry</p>
+          <h1>Overview</h1>
+          <p>
+            Real-time metrics, ticketing volume, capacity and door check-in status for{' '}
+            {data?.editionName || 'the convention'}.
+          </p>
         </div>
-        <Button variant="ghost" onClick={stats.reload} icon={RefreshCw}>
-          Refresh
-        </Button>
+        <div className="adm-head-actions">
+          <Button variant="outline" icon={RefreshCw} onClick={stats.reload} loading={stats.loading}>
+            Refresh
+          </Button>
+          <Button to="/manage/check-in" icon={ClipboardCheck}>
+            Open check-in
+          </Button>
+        </div>
       </div>
 
-      <div className="stat-grid">
-        <Stat
-          label="PASSES SOLD"
-          value={data?.passesSold ?? 0}
-          note={`${data?.passesPending ?? 0} pending`}
+      <div className="adm-metrics">
+        <MetricCard
+          icon={Ticket}
+          label="Passes sold"
+          value={passesSold}
+          badge={`${data?.registrationsConfirmed ?? 0} confirmed`}
+          badgeTone="accent"
+          note="Active convention passes issued."
         />
-        <Stat
-          label="REVENUE"
-          value={money(data?.revenuePaise || 0)}
-          note={`${money(data?.refundedPaise || 0)} refunded`}
+        <MetricCard
+          icon={IndianRupee}
+          label="Net revenue"
+          value={money(data?.netRevenuePaise ?? data?.revenuePaise ?? 0)}
+          badge={refunded ? `${money(refunded)} refunded` : 'No refunds'}
+          badgeTone={refunded ? 'bad' : 'muted'}
+          note={`Gross ${money(data?.revenuePaise || 0)} across ${orders} paid orders.`}
+          chart={<Sparkline values={sales.map((row) => Number(row.amountPaise) || 0)} />}
         />
-        <Stat
-          label="REGISTRATIONS"
+        <MetricCard
+          icon={Users}
+          label="Registrations"
           value={data?.registrationsConfirmed ?? 0}
-          note={`${data?.registrationsPending ?? 0} pending`}
-        />
-        <Stat label="CHECKED IN" value={data?.checkedIn ?? 0} note="Across both convention days" />
-        <Stat
-          label="EVENTS"
-          value={`${data?.eventsPublished ?? 0} / ${data?.eventsTotal ?? 0}`}
-          note="Published / total catalogue"
-        />
-        <Stat
-          label="SEATS TAKEN"
-          value={`${data?.seatsTaken ?? 0} / ${data?.seatsCapacity ?? 0}`}
-          note="Taken / capacity"
-        />
-        <Stat
-          label="VERIFICATIONS"
-          value={data?.verificationsPending ?? 0}
-          note="Awaiting review"
-          tone={data?.verificationsPending ? 'warn' : ''}
-        />
-        <Link to="/manage/registrations?status=cancelled" style={{ textDecoration: 'none', display: 'block' }}>
-          <Stat
-            label="CANCELLATIONS / REFUNDS"
-            value={data?.registrationsCancelled ?? 0}
-            note={`${money(data?.refundedPaise || 0)} refunded · Click to review`}
-            tone={data?.registrationsCancelled ? 'warn' : ''}
-          />
-        </Link>
-        <Stat
-          label="LATEST DAY SALES"
-          value={
-            (data?.salesByDay || []).length ? money(data.salesByDay.at(-1)?.amountPaise || 0) : '₹0'
+          badge={`${data?.registrationsPending ?? 0} pending`}
+          badgeTone={data?.registrationsPending ? 'warn' : 'muted'}
+          note="Passes and event sign-ups."
+          chart={
+            <div className="adm-metric-meter">
+              <i
+                style={{
+                  width: `${
+                    (data?.registrationsConfirmed ?? 0) + (data?.registrationsPending ?? 0)
+                      ? Math.round(
+                          ((data?.registrationsConfirmed ?? 0) /
+                            ((data?.registrationsConfirmed ?? 0) +
+                              (data?.registrationsPending ?? 0))) *
+                            100,
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
           }
-          note="Recorded on latest day"
+        />
+        <MetricCard
+          icon={ClipboardCheck}
+          label="Checked in"
+          value={checkedIn}
+          badge={`${checkRate}% of passes`}
+          badgeTone={checkRate >= 50 ? 'good' : 'muted'}
+          note="Door scans across both convention days."
+          chart={
+            <div className="adm-metric-meter">
+              <i style={{ width: `${checkRate}%` }} />
+            </div>
+          }
         />
       </div>
 
-      <div className="portal-columns">
-        <Panel>
-          <div className="panel-head-row">
-            <Eyebrow>Recent Registrations</Eyebrow>
-            <NavLink className="text-link" to="/manage/registrations">
-              All registrations →
-            </NavLink>
+      <div className="adm-card">
+        <div className="adm-card-head">
+          <div>
+            <h2>Revenue performance</h2>
+            <p>Paid orders per day for the last {Math.max(sales.length, 7)} days.</p>
           </div>
-          {recent.length ? (
-            <div className="registration-list">
-              {recent.slice(0, 8).map((row, index) => (
-                <div
-                  className="registration-row"
-                  key={`${row.id || row.registrationNumber || index}`}
-                >
-                  <span className="event-dot" />
-                  <div>
-                    <b>{row.userName || row.participantName || row.name || 'Participant'}</b>
-                    <small>{row.eventTitle || row.event || 'Convention pass'}</small>
-                  </div>
-                  <StatusBadge status={row.status} />
-                </div>
-              ))}
+          <div className="adm-head-actions">
+            <Badge tone="muted">{orders} orders</Badge>
+            <Badge tone="good">{money(revenueCollected)} collected</Badge>
+          </div>
+        </div>
+        <SalesChart rows={sales} />
+        <div className="adm-chart-legend">
+          <span>
+            <i className="adm-chart-swatch" /> Daily revenue
+          </span>
+          <span>Peak day {money(peakDay)}</span>
+        </div>
+      </div>
+
+      <div className="adm-columns-3">
+        <div className="adm-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Gender split</h2>
+              <p>{attendees} attendees on file.</p>
+            </div>
+          </div>
+          <Breakdown
+            centerLabel="attendees"
+            emptyLabel="No gender answers recorded yet."
+            items={genderSplit.map((row) => ({
+              label: row.label,
+              count: row.count || 0,
+              color: row.key === 'male' ? '#7dd3fc' : row.key === 'female' ? '#f0abfc' : '#404040',
+            }))}
+          />
+        </div>
+
+        <div className="adm-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Meal preference</h2>
+              <p>Kitchen headcount by plate.</p>
+            </div>
+          </div>
+          <Breakdown
+            centerLabel="meals"
+            emptyLabel="No meal preferences recorded yet."
+            items={foodSplit.map((row) => ({
+              label: row.label,
+              count: row.count || 0,
+              color:
+                row.key === 'veg' ? '#4ade80' : row.key === 'non_veg' ? '#f87171' : '#404040',
+            }))}
+          />
+        </div>
+
+        <div className="adm-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Accommodation</h2>
+              <p>{accommodation.needed ?? 0} attendees need a hostel bed.</p>
+            </div>
+          </div>
+          <Breakdown
+            centerLabel="stays"
+            emptyLabel="No accommodation answers recorded yet."
+            items={[
+              { label: 'Hostel stay', count: accommodation.needed || 0, color: '#fafafa' },
+              { label: 'No stay needed', count: accommodation.notNeeded || 0, color: '#404040' },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="adm-columns-2">
+        <div className="adm-card adm-table-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Registrations by event</h2>
+              <p>Every event in the edition · confirmed and pending entries.</p>
+            </div>
+            <div className="adm-head-actions">
+              <Badge tone="muted">{eventRegistrations.length} events</Badge>
+              <Link className="text-link" to="/manage/events">
+                Manage events →
+              </Link>
+            </div>
+          </div>
+          {eventRegistrations.length ? (
+            <div className="adm-table-wrap">
+              <table className="adm-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Event</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Registrations</th>
+                    <th scope="col">Filled</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eventRegistrations.map((row) => {
+                    const pct = row.capacity
+                      ? Math.min(100, Math.round((row.count / row.capacity) * 100))
+                      : 0;
+                    return (
+                      <tr key={row.id}>
+                        <td>
+                          <b>{row.title}</b>
+                          <div className="table-sub">
+                            {row.capacity ? `${row.capacity} ${row.capacityUnit}` : 'Unlimited'}
+                          </div>
+                        </td>
+                        <td>
+                          <StatusBadge status={row.status} />
+                        </td>
+                        <td>{row.count}</td>
+                        <td style={{ minWidth: 130 }}>
+                          <div className="adm-progress">
+                            <i style={{ width: `${pct}%` }} />
+                          </div>
+                          <div className="table-sub">{pct}%</div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           ) : (
-            <p className="muted">No registrations recorded yet.</p>
+            <div className="adm-table-empty">No events in the catalogue yet.</div>
           )}
-        </Panel>
-        <Panel>
-          <Eyebrow>Quick Operational Actions</Eyebrow>
-          <div className="quick-links">
-            <Button to="/manage/check-in" variant="ghost" icon={ClipboardCheck}>
-              Open Check-in Door Desk
-            </Button>
-            <Button to="/manage/registrations" variant="ghost" icon={Ticket}>
-              Browse & Search Registrations
-            </Button>
-            <Button to="/manage/events" variant="ghost" icon={CalendarDays}>
-              Manage Event Catalogue
-            </Button>
-            <Button to="/manage/verifications" variant="ghost" icon={BadgeCheck}>
-              Review Student ID Verifications
-            </Button>
-            <Button to="/manage/policy" variant="ghost" icon={ShieldCheck}>
-              Update Pricing & Pass Policy
-            </Button>
-            <Button to="/manage/settings" variant="ghost" icon={Settings}>
-              Convention Edition Settings
-            </Button>
+          {eventRegistrations.length ? (
+            <div className="adm-table-empty" style={{ borderTop: '1px solid var(--adm-border)' }}>
+              Showing all {eventRegistrations.length} events, including events with no
+              registrations yet.
+            </div>
+          ) : null}
+        </div>
+
+        <div className="adm-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Pass categories</h2>
+              <p>Which pass type each attendee bought.</p>
+            </div>
+            <Badge tone="muted">{categoryTotal} passes</Badge>
           </div>
-        </Panel>
+          {passCategories.length ? (
+            <div className="adm-count-list">
+              {passCategories.map((row) => {
+                const pct = categoryTotal ? Math.round((row.count / categoryTotal) * 100) : 0;
+                return (
+                  <div className="adm-count-row" key={row.code}>
+                    <div className="adm-count-meta">
+                      <b>{row.name}</b>
+                      <small>
+                        {row.count} · {pct}%
+                      </small>
+                    </div>
+                    <div className="adm-progress">
+                      <i style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="muted" style={{ margin: 0 }}>
+              No pass categories recorded yet.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="adm-split">
+        <div className="adm-card adm-table-card">
+          <div className="adm-card-head">
+            <div>
+              <h2>Recent registrations</h2>
+              <p>Latest {recent.length} passes and event sign-ups.</p>
+            </div>
+            <div className="adm-head-actions">
+              <Badge tone="muted">
+                {data?.registrationsConfirmed ?? 0} confirmed
+              </Badge>
+              <Link className="text-link" to="/manage/registrations">
+                View all →
+              </Link>
+            </div>
+          </div>
+          {recent.length ? (
+            <div className="adm-table-wrap">
+              <table className="adm-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Attendee</th>
+                    <th scope="col">Registration</th>
+                    <th scope="col">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent.slice(0, 8).map((row, index) => (
+                    <tr key={`${row.id || row.registrationNumber || index}`}>
+                      <td>
+                        <b>{row.userName || row.participantName || row.name || 'Participant'}</b>
+                        <div className="table-sub">{row.registrationNumber || 'Convention pass'}</div>
+                      </td>
+                      <td>{row.eventTitle || row.event || 'Convention pass'}</td>
+                      <td>
+                        <StatusBadge status={row.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="adm-table-empty">No registrations recorded yet.</div>
+          )}
+        </div>
+
+        <div className="adm-stack">
+          <div className="adm-card">
+            <div className="adm-card-head">
+              <div>
+                <h2>Quick actions</h2>
+              </div>
+            </div>
+            <div className="adm-action-list">
+              <Link className="adm-action" to="/manage/check-in">
+                <ClipboardCheck />
+                <span>Open check-in door desk</span>
+              </Link>
+              <Link className="adm-action" to="/manage/registrations">
+                <Ticket />
+                <span>Browse registrations</span>
+              </Link>
+              <Link className="adm-action" to="/manage/registrations?status=cancelled">
+                <Wallet />
+                <span>Cancellations &amp; refunds</span>
+                <em>{data?.registrationsCancelled ?? 0}</em>
+              </Link>
+              <Link className="adm-action" to="/manage/events">
+                <CalendarDays />
+                <span>Manage event catalogue</span>
+              </Link>
+              <Link className="adm-action" to="/manage/policy">
+                <ShieldCheck />
+                <span>Pricing &amp; pass policy</span>
+              </Link>
+              <Link className="adm-action" to="/manage/settings">
+                <Settings />
+                <span>Edition settings</span>
+              </Link>
+            </div>
+          </div>
+
+          <div className="adm-card">
+            <div className="adm-card-head">
+              <div>
+                <h2>Capacity</h2>
+                <p>
+                  {seatsTaken} of {seatsCapacity || 'unlimited'} seats taken.
+                </p>
+              </div>
+            </div>
+            <div className="adm-progress-row">
+              <div className="adm-progress-meta">
+                <span>Overall occupancy</span>
+                <b>{capacityPct}%</b>
+              </div>
+              <div className="adm-progress">
+                <i style={{ width: `${capacityPct}%` }} />
+              </div>
+            </div>
+            {units.map(([unit, taken]) => {
+              const unitCapacity = data?.capacityByUnit?.[unit] ?? 0;
+              const pct = unitCapacity ? Math.min(100, Math.round((taken / unitCapacity) * 100)) : 0;
+              return (
+                <div className="adm-progress-row" key={unit} style={{ marginTop: 12 }}>
+                  <div className="adm-progress-meta">
+                    <span style={{ textTransform: 'capitalize' }}>{unit}</span>
+                    <b>
+                      {taken}
+                      {unitCapacity ? ` / ${unitCapacity}` : ''}
+                    </b>
+                  </div>
+                  <div className="adm-progress">
+                    <i style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <div className="adm-progress-row" style={{ marginTop: 14 }}>
+              <div className="adm-progress-meta">
+                <span>Door check-in</span>
+                <b>
+                  {checkedIn} / {passesSold}
+                </b>
+              </div>
+              <div className="adm-progress">
+                <i style={{ width: `${checkRate}%` }} />
+              </div>
+            </div>
+          </div>
+
+          <div className="adm-card">
+            <div className="adm-card-head">
+              <div>
+                <h2>Catalogue</h2>
+                <p>Published events and latest day sales.</p>
+              </div>
+            </div>
+            <div className="adm-card-head" style={{ marginBottom: 0 }}>
+              <div className="adm-progress-meta" style={{ width: '100%' }}>
+                <span>Events published</span>
+                <b>
+                  {data?.eventsPublished ?? 0} / {data?.eventsTotal ?? 0}
+                </b>
+              </div>
+            </div>
+            <div className="adm-progress-row" style={{ marginTop: 12 }}>
+              <div className="adm-progress-meta">
+                <span>Latest day sales</span>
+                <b>{money(sales.at(-1)?.amountPaise || 0)}</b>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </>
   );
@@ -549,6 +1375,8 @@ function formFromEvent(item) {
       descriptionMd: '',
       rulesMd: '',
       prizesMd: '',
+      soloGuideMd: '',
+      teamGuideMd: '',
       isFeatured: false,
       includedEligible: true,
       requiresApproval: false,
@@ -581,6 +1409,8 @@ function formFromEvent(item) {
     descriptionMd: item.descriptionMd || '',
     rulesMd: item.rulesMd || '',
     prizesMd: item.prizesMd || '',
+    soloGuideMd: item.soloGuideMd || '',
+    teamGuideMd: item.teamGuideMd || '',
     isFeatured: Boolean(item.isFeatured),
     includedEligible: item.includedEligible !== false,
     requiresApproval: Boolean(item.requiresApproval),
@@ -683,6 +1513,8 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
         descriptionMd: form.descriptionMd,
         rulesMd: form.rulesMd,
         prizesMd: form.prizesMd,
+        soloGuideMd: form.soloGuideMd,
+        teamGuideMd: form.teamGuideMd,
         format: form.format,
         teamMinSize: Number(form.teamMinSize) || 1,
         teamMaxSize: Number(form.teamMaxSize) || 1,
@@ -1075,6 +1907,30 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           placeholder="1st Prize: ₹10,000&#10;2nd Prize: ₹5,000&#10;Certificates for all finalists"
         />
       </Field>
+      <Field
+        label="Solo participation guide (Markdown)"
+        className="full-span"
+        hint="What one person does and gets — shown on the event room"
+      >
+        <textarea
+          rows="3"
+          value={form.soloGuideMd}
+          onChange={(event) => set('soloGuideMd', event.target.value)}
+          placeholder="Who it is for, what you build/solve alone, what you get..."
+        />
+      </Field>
+      <Field
+        label="Team participation guide (Markdown)"
+        className="full-span"
+        hint="Team size, roles, judging, who pays — shown on the event room"
+      >
+        <textarea
+          rows="3"
+          value={form.teamGuideMd}
+          onChange={(event) => set('teamGuideMd', event.target.value)}
+          placeholder="Ideal team size, suggested roles, how judging works..."
+        />
+      </Field>
       <div className="toggle-row">
         <Toggle
           checked={form.includedEligible}
@@ -1101,7 +1957,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           hint="Admissions require manual verification before confirmation"
         />
       </div>
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       <div className="sheet-actions">
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -1223,7 +2079,7 @@ function CategoryManager({ editionId, categories, onChanged }) {
           </Button>
         ) : null}
       </form>
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
     </Panel>
   );
 }
@@ -1268,7 +2124,7 @@ export function AdminEvents() {
           </Button>
         }
       />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {events.loading ? <Loading label="Loading events" rows={2} /> : null}
       {events.error ? <ErrorBox error={events.error} onRetry={events.reload} /> : null}
       <DataTable
@@ -1630,7 +2486,7 @@ export function AdminPolicy() {
       passPrice: rupees(current.passPricePaise),
       includedEventCount: current.includedEventCount,
       mode: current.includedSelectionMode,
-      cap: rupees(current.includedValueCapPaise),
+      cap: current.includedValueCapPaise != null ? rupees(current.includedValueCapPaise) : '',
       capInclusive: current.capInclusive,
       lunchDays: current.lunchIncludedDays || [],
       addonRequiresPass: current.addonRequiresPass,
@@ -1649,7 +2505,7 @@ export function AdminPolicy() {
     passPricePaise: paise(form.passPrice),
     includedEventCount: Number(form.includedEventCount) || 0,
     includedSelectionMode: form.mode,
-    includedValueCapPaise: paise(form.cap),
+    includedValueCapPaise: form.cap === '' || form.cap == null ? null : paise(form.cap),
     capInclusive: form.capInclusive,
     lunchIncludedDays: form.lunchDays,
     addonRequiresPass: form.addonRequiresPass,
@@ -1714,7 +2570,7 @@ export function AdminPolicy() {
   return (
     <>
       <SectionHead kicker="PRICING RULES" title="Edition policy" />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {check ? (
         <Panel>
           <Eyebrow>POLICY CHECK</Eyebrow>
@@ -1737,7 +2593,10 @@ export function AdminPolicy() {
           <Badge tone="accent">Current v{current?.version}</Badge>
         </div>
         <FieldGrid>
-          <Field label="Pass price (₹)">
+          <Field
+            label="Fallback pass price (₹)"
+            hint="Registration tiers set what attendees actually pay. This price is only for manual passes and desk seeding."
+          >
             <input
               type="number"
               min="0"
@@ -1761,12 +2620,13 @@ export function AdminPolicy() {
               <option value="exact">Exactly</option>
             </select>
           </Field>
-          <Field label="Included value cap (₹)">
+          <Field label="Included value cap (₹, blank = no cap)">
             <input
               type="number"
               min="0"
               step="50"
               value={form.cap}
+              placeholder="No cap"
               onChange={(event) => set('cap', event.target.value)}
             />
           </Field>
@@ -1846,7 +2706,9 @@ export function AdminPolicy() {
         </div>
       </Panel>
 
-      <DataTable head={['Version', 'Pass', 'Included', 'Cap', 'Mode', 'Published', 'Reason']}>
+      <DataTable
+        head={['Version', 'Fallback pass', 'Included', 'Cap', 'Mode', 'Published', 'Reason']}
+      >
         {rows.map((row) => (
           <tr key={row.id}>
             <td>
@@ -1854,13 +2716,149 @@ export function AdminPolicy() {
             </td>
             <td>{money(row.passPricePaise)}</td>
             <td>{row.includedEventCount}</td>
-            <td>{money(row.includedValueCapPaise)}</td>
+            <td>{row.includedValueCapPaise != null ? money(row.includedValueCapPaise) : 'No cap'}</td>
             <td>{row.includedSelectionMode}</td>
             <td>{date(row.createdAt)}</td>
             <td>{row.reason || '-'}</td>
           </tr>
         ))}
       </DataTable>
+    </>
+  );
+}
+
+export function AdminTeams() {
+  const { editionId } = useSite();
+  const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [message, setMessage] = useState(null);
+  const [busy, setBusy] = useState('');
+  const teams = useAsync(
+    () => adminApi.teams(editionId, statusFilter ? { status: statusFilter } : {}),
+    [editionId, statusFilter],
+    { enabled: Boolean(editionId) },
+  );
+
+  const rows = (teams.data?.data || []).filter((t) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return (
+      t.name.toLowerCase().includes(q) ||
+      t.eventTitle.toLowerCase().includes(q) ||
+      t.leaderName.toLowerCase().includes(q) ||
+      t.leaderEmail.toLowerCase().includes(q) ||
+      (t.inviteCode || '').toLowerCase().includes(q)
+    );
+  });
+
+  const toggleLock = async (team) => {
+    setBusy(`lock-${team.id}`);
+    setMessage(null);
+    try {
+      await adminApi.toggleTeamLock(editionId, team.id);
+      await teams.reload();
+      setMessage({
+        tone: 'success',
+        text: team.status === 'locked' ? `Unlocked ${team.name}.` : `Locked ${team.name}.`,
+      });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const disband = async (team) => {
+    if (!window.confirm(`Disband team "${team.name}"? All members' seats and tickets will be revoked and paid fees refunded.`)) {
+      return;
+    }
+    setBusy(`disband-${team.id}`);
+    setMessage(null);
+    try {
+      await adminApi.disbandTeam(editionId, team.id);
+      await teams.reload();
+      setMessage({ tone: 'success', text: `Team ${team.name} disbanded and seats revoked.` });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <>
+      <SectionHead
+        kicker="Team Events"
+        title="Teams & rosters"
+        action={
+          <Button variant="ghost" icon={RefreshCw} onClick={() => teams.reload()}>
+            Refresh
+          </Button>
+        }
+      />
+      <Feedback message={message} />
+      <Panel>
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search team, event, leader, or invite code…"
+            style={{ flex: '1 1 240px', minWidth: '200px' }}
+          />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="locked">Locked</option>
+            <option value="disbanded">Disbanded</option>
+          </select>
+        </div>
+        {teams.loading ? <Loading label="Loading teams" rows={3} /> : null}
+        {teams.error ? <ErrorBox error={teams.error} onRetry={teams.reload} /> : null}
+        {!teams.loading && !rows.length ? (
+          <p className="muted">No teams match the current filter.</p>
+        ) : null}
+        <DataTable
+          head={['Team', 'Event', 'Leader', 'Members', 'Invite', 'Status', 'Actions']}
+          rows={rows.map((t) => [
+            <strong key="n">{t.name}</strong>,
+            t.eventTitle,
+            <span key="l">
+              {t.leaderName}
+              <br />
+              <small className="muted">{t.leaderEmail}</small>
+            </span>,
+            <span key="m">
+              {t.members.length} / {t.maxSize}
+              <br />
+              <small className="muted">{t.members.map((m) => m.fullName).join(', ')}</small>
+            </span>,
+            <code key="c">{t.inviteCode || '—'}</code>,
+            <StatusBadge key="s" status={t.status} />,
+            t.status !== 'disbanded' ? (
+              <div key="a" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy === `lock-${t.id}`}
+                  onClick={() => toggleLock(t)}
+                >
+                  {t.status === 'locked' ? 'Unlock' : 'Lock'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy === `disband-${t.id}`}
+                  onClick={() => disband(t)}
+                >
+                  Disband
+                </Button>
+              </div>
+            ) : (
+              '—'
+            ),
+          ])}
+        />
+      </Panel>
     </>
   );
 }
@@ -2142,36 +3140,23 @@ export function AdminRegistrations() {
         </Button>
         <Button
           variant={status === 'confirmed' ? 'primary' : 'ghost'}
+          className="adm-chip-good"
           onClick={() => updateFilters('confirmed', selectedEventId)}
         >
           Confirmed active
         </Button>
         <Button
           variant={status === 'reserved' ? 'primary' : 'ghost'}
+          className="adm-chip-warn"
           onClick={() => updateFilters('reserved', selectedEventId)}
         >
           Reserved
         </Button>
         <Button
           variant={status === 'cancelled' ? 'primary' : 'ghost'}
+          className="adm-chip-bad"
           icon={X}
           onClick={() => updateFilters('cancelled', selectedEventId)}
-          sx={
-            status === 'cancelled'
-              ? {
-                  backgroundColor: '#f87171',
-                  color: '#1b0707',
-                  '&:hover': { backgroundColor: '#f97c7c' },
-                }
-              : {
-                  color: '#fca5a5',
-                  borderColor: 'rgba(248, 113, 113, 0.42)',
-                  '&:hover': {
-                    backgroundColor: 'rgba(248, 113, 113, 0.12)',
-                    borderColor: 'rgba(248, 113, 113, 0.75)',
-                  },
-                }
-          }
         >
           Cancelled &amp; removed
         </Button>
@@ -2283,6 +3268,7 @@ export function AdminRegistrations() {
       <Sheet
         open={Boolean(forceCancelTarget)}
         title="Force Remove Attendee from Event"
+        message={actionMessage}
         onClose={() => setForceCancelTarget(null)}
       >
         <p className="muted" style={{ marginTop: 0 }}>
@@ -2456,6 +3442,7 @@ export function AdminRegistrations() {
       <Sheet
         open={Boolean(refundTarget)}
         title="Issue Refund for Cancelled Registration"
+        message={actionMessage}
         onClose={() => setRefundTarget(null)}
       >
         <p className="muted" style={{ marginTop: 0 }}>
@@ -2613,7 +3600,7 @@ export function AdminUsers() {
   return (
     <>
       <SectionHead kicker="PEOPLE" title="Users" />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       <div className="table-filters">
         <Field label="Search">
           <input
@@ -2626,40 +3613,80 @@ export function AdminUsers() {
       {users.loading ? <Loading label="Loading users" rows={2} /> : null}
       {users.error ? <ErrorBox error={users.error} onRetry={users.reload} /> : null}
       <DataTable
-        head={['Name', 'College', 'Roles', 'Pass', 'Verification', 'Status', '']}
+        head={['User & Contact', 'College & Profile', 'Roles', 'Pass & Events', 'Last Sign-In', 'Status', '']}
         empty={!rows.length && !users.loading ? 'No users match.' : null}
       >
-        {rows.map((row) => (
-          <tr key={row.id}>
-            <td>
-              <b>{row.fullName}</b>
-              <div className="table-sub">{row.email}</div>
-            </td>
-            <td>{row.collegeName || '-'}</td>
-            <td>
-              {(row.roles || []).map((role) => ROLE_LABELS[role] || role).join(', ') ||
-                'Participant'}
-            </td>
-            <td>{row.passStatus ? <StatusBadge status={row.passStatus} /> : '-'}</td>
-            <td>
-              <StatusBadge status={row.verificationStatus} />
-            </td>
-            <td>
-              <StatusBadge status={row.status} />
-            </td>
-            <td>
-              <button className="table-action" onClick={() => setTarget(row)}>
-                {row.status === 'active' ? 'Suspend' : 'Reactivate'}
-              </button>
-            </td>
-          </tr>
-        ))}
+        {rows.map((row) => {
+          const academic = [row.course, row.branch, row.yearOfStudy ? `Yr ${row.yearOfStudy}` : null]
+            .filter(Boolean)
+            .join(' · ');
+          const location = [row.city, row.state].filter(Boolean).join(', ');
+          return (
+            <tr key={row.id}>
+              <td>
+                <b>{row.fullName}</b>
+                <div className="table-sub">{row.email}</div>
+                {row.phone ? <div className="table-sub">{row.phone}</div> : null}
+              </td>
+              <td>
+                <div>{row.collegeName || '-'}</div>
+                {academic ? <div className="table-sub">{academic}</div> : null}
+                {location ? <div className="table-sub">{location}</div> : null}
+              </td>
+              <td>
+                {(row.roles || []).map((role) => ROLE_LABELS[role] || role).join(', ') ||
+                  'Participant'}
+              </td>
+              <td>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                  {row.passStatus ? <StatusBadge status={row.passStatus} /> : <span className="table-sub">No pass</span>}
+                  {row.eventCount > 0 ? (
+                    <span className="table-sub">{row.eventCount} event{row.eventCount === 1 ? '' : 's'}</span>
+                  ) : null}
+                </div>
+              </td>
+              <td>
+                <span className="table-sub">
+                  {row.lastLoginAt ? dateTime(row.lastLoginAt) : row.createdAt ? dateTime(row.createdAt) : '-'}
+                </span>
+              </td>
+              <td>
+                <StatusBadge status={row.status} />
+              </td>
+              <td>
+                <button className="table-action" onClick={() => setTarget(row)}>
+                  {row.status === 'active' ? 'Suspend' : 'Reactivate'}
+                </button>
+              </td>
+            </tr>
+          );
+        })}
       </DataTable>
-      <Sheet open={Boolean(target)} title="Change account status" onClose={() => setTarget(null)}>
+      <Sheet
+        open={Boolean(target)}
+        title="Change account status"
+        message={message}
+        onClose={() => setTarget(null)}
+      >
         <p className="muted">
           {target?.status === 'active' ? 'Suspend' : 'Reactivate'} <b>{target?.fullName}</b>?
-          Suspended accounts cannot sign in or register.
         </p>
+        {target?.status === 'active' ? (
+          <InlineMessage tone="warn">
+            <b>Warning:</b> Suspending this account will immediately:
+            <ul style={{ margin: '6px 0 0 16px', padding: 0, lineHeight: 1.5 }}>
+              <li>Revoke their convention pass &amp; door check-in QR</li>
+              <li>Cancel all booked event registrations and release their seats</li>
+              <li>Queue refunds for any paid add-on event bookings</li>
+              <li>Remove them from team rosters (if they lead a team, leadership is transferred to another member)</li>
+              <li>Terminate active login sessions across all devices</li>
+            </ul>
+          </InlineMessage>
+        ) : (
+          <InlineMessage tone="info">
+            Reactivating this account restores login access and pass status. Cancelled event seats will need to be re-selected if still available.
+          </InlineMessage>
+        )}
         <Field label="Reason">
           <input
             value={reason}
@@ -2672,174 +3699,6 @@ export function AdminUsers() {
             Cancel
           </Button>
           <Button onClick={apply}>Apply change</Button>
-        </div>
-      </Sheet>
-    </>
-  );
-}
-
-export function AdminVerifications() {
-  const { editionId } = useSite();
-  const [status, setStatus] = useState('pending');
-  const rows = useAsync(() => adminApi.verifications(editionId, { status }), [editionId, status], {
-    enabled: Boolean(editionId),
-  });
-  const [target, setTarget] = useState(null);
-  const [decision, setDecision] = useState('verified');
-  const [reason, setReason] = useState('');
-  const [message, setMessage] = useState(null);
-  const list = rows.data?.data || [];
-
-  const openDocument = async (id) => {
-    setMessage(null);
-    try {
-      const body = await adminApi.verificationDocument(editionId, id);
-      const url = body.data?.url || body.data?.documentUrl;
-      if (!url) throw new Error('No document is attached.');
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    }
-  };
-
-  const decide = async () => {
-    setMessage(null);
-    try {
-      await adminApi.decideVerification(editionId, target.id, {
-        decision,
-        reason: reason || null,
-      });
-      await rows.reload();
-      setTarget(null);
-      setReason('');
-      setMessage({ tone: 'success', text: 'Verification decision recorded.' });
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    }
-  };
-
-  return (
-    <>
-      <SectionHead kicker="STUDENT STATUS" title="Verification queue" />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-      <div className="table-filters">
-        <Field label="Status">
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            {['pending', 'verified', 'rejected', 'unverified'].map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Button variant="ghost" onClick={rows.reload}>
-          Refresh
-        </Button>
-      </div>
-      {rows.loading ? <Loading label="Loading verifications" rows={2} /> : null}
-      {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
-      <DataTable
-        head={['Student', 'College', 'Method', 'Submitted', 'Status', '']}
-        empty={!list.length && !rows.loading ? 'Nothing in this queue.' : null}
-      >
-        {list.map((row) => (
-          <tr key={row.id}>
-            <td>
-              <b>{row.fullName}</b>
-              <div className="table-sub">{row.email}</div>
-            </td>
-            <td>{row.collegeName || '-'}</td>
-            <td>{row.method}</td>
-            <td>{dateTime(row.submittedAt)}</td>
-            <td>
-              <StatusBadge status={row.status} />
-            </td>
-            <td className="row-actions">
-              {row.documentName ? (
-                <button className="table-action" onClick={() => openDocument(row.id)}>
-                  View Document
-                </button>
-              ) : null}
-              {row.status === 'pending' && row.method === 'college_email' ? (
-                <button
-                  className="table-action"
-                  onClick={async () => {
-                    setMessage(null);
-                    try {
-                      await adminApi.resendVerificationCode(editionId, row.id);
-                      setMessage({
-                        tone: 'success',
-                        text: `A new confirmation code was sent to ${row.fullName}.`,
-                      });
-                    } catch (error) {
-                      setMessage({ tone: 'error', text: error.message });
-                    }
-                  }}
-                >
-                  Resend code
-                </button>
-              ) : null}
-              {row.status === 'pending' ? (
-                <button
-                  className="table-action"
-                  style={{ color: '#22c55e' }}
-                  onClick={async () => {
-                    try {
-                      await adminApi.decideVerification(editionId, row.id, {
-                        decision: 'verified',
-                        reason: 'Approved via quick action',
-                      });
-                      await rows.reload();
-                      setMessage({ tone: 'success', text: `Verified student: ${row.fullName}` });
-                    } catch (err) {
-                      setMessage({ tone: 'error', text: err.message });
-                    }
-                  }}
-                >
-                  Quick Approve
-                </button>
-              ) : null}
-              <button
-                className="table-action"
-                onClick={() => {
-                  setTarget(row);
-                  setDecision('verified');
-                  setReason(row.rejectionReason || '');
-                }}
-              >
-                Review
-              </button>
-            </td>
-          </tr>
-        ))}
-      </DataTable>
-      <Sheet open={Boolean(target)} title="Review verification" onClose={() => setTarget(null)}>
-        <p className="muted">
-          {target?.fullName} · {target?.email}
-        </p>
-        <Field label="Decision">
-          <select value={decision} onChange={(event) => setDecision(event.target.value)}>
-            <option value="verified">Verify student</option>
-            <option value="rejected">Reject</option>
-          </select>
-        </Field>
-        <Field
-          label="Reason"
-          hint={decision === 'rejected' ? 'Required for a rejection.' : 'Optional note.'}
-        >
-          <input value={reason} onChange={(event) => setReason(event.target.value)} />
-        </Field>
-        <div className="sheet-actions">
-          <Button variant="ghost" onClick={() => setTarget(null)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={decide}
-            disabled={decision === 'rejected' && !reason.trim()}
-            icon={BadgeCheck}
-          >
-            Save decision
-          </Button>
         </div>
       </Sheet>
     </>
@@ -2893,7 +3752,7 @@ export function AdminPayments() {
   return (
     <>
       <SectionHead kicker="FINANCE" title="Payments and refunds" />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {payments.loading ? <Loading label="Loading payments" rows={2} /> : null}
       {payments.error ? <ErrorBox error={payments.error} onRetry={payments.reload} /> : null}
       <DataTable
@@ -2946,7 +3805,12 @@ export function AdminPayments() {
         ))}
       </DataTable>
 
-      <Sheet open={Boolean(target)} title="Request a refund" onClose={() => setTarget(null)}>
+      <Sheet
+        open={Boolean(target)}
+        title="Request a refund"
+        message={message}
+        onClose={() => setTarget(null)}
+      >
         <p className="muted">
           {target?.userName} · {money(target?.amountPaise)} order
         </p>
@@ -3013,11 +3877,18 @@ export function AdminCheckin() {
   const [busy, setBusy] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [facingMode, setFacingMode] = useState('environment');
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [scanStatus, setScanStatus] = useState('');
   const [rosterFilter, setRosterFilter] = useState('all');
   const [rosterSearch, setRosterSearch] = useState('');
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const scanIntervalRef = useRef(null);
+  const scanBusyRef = useRef(false);
+  const lastScannedRef = useRef({ code: '', at: 0 });
+  const performCheckinRef = useRef(null);
 
   useEffect(() => {
     const evId = searchParams.get('eventId');
@@ -3049,7 +3920,9 @@ export function AdminCheckin() {
   const performCheckin = async (rawToken) => {
     const cleanToken = (rawToken || token || '').trim();
     if (!cleanToken) return;
+    scanBusyRef.current = true;
     setBusy(true);
+    setScanStatus('Checking…');
     setMessage(null);
     setResult(null);
     try {
@@ -3060,11 +3933,13 @@ export function AdminCheckin() {
       });
       setResult(body.data);
       setToken('');
+      setScanStatus(body.data?.result === 'duplicate' ? 'Already checked in' : 'Admitted ✓');
       recent.reload();
       attendance.reload();
       if (selectedEventId) {
         rosterAsync.reload();
       }
+      navigator.vibrate?.(body.data?.result === 'duplicate' ? [40, 40, 40] : 80);
       // Audible chime
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -3077,10 +3952,14 @@ export function AdminCheckin() {
       } catch {}
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
+      setScanStatus('Entry denied');
+      navigator.vibrate?.([120, 60, 120]);
     } finally {
+      scanBusyRef.current = false;
       setBusy(false);
     }
   };
+  performCheckinRef.current = performCheckin;
 
   const scan = async (event) => {
     event.preventDefault();
@@ -3117,7 +3996,19 @@ export function AdminCheckin() {
     }
   };
 
-  // Camera video stream lifecycle
+  const toggleTorch = async () => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch {
+      setTorchAvailable(false);
+    }
+  };
+
+  // Camera video stream lifecycle (works across desktop & mobile via jsQR + optional BarcodeDetector)
   useEffect(() => {
     if (!cameraActive) {
       if (streamRef.current) {
@@ -3128,15 +4019,30 @@ export function AdminCheckin() {
         clearInterval(scanIntervalRef.current);
         scanIntervalRef.current = null;
       }
+      setTorchAvailable(false);
+      setTorchOn(false);
+      setScanStatus('');
       return undefined;
     }
 
     let active = true;
 
     async function startCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMessage({
+          tone: 'error',
+          text: 'Camera API is unavailable in this browser context. On mobile, open this page over HTTPS (or localhost) to use the camera.',
+        });
+        setCameraActive(false);
+        return;
+      }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode } },
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
         if (!active) {
@@ -3144,32 +4050,79 @@ export function AdminCheckin() {
           return;
         }
         streamRef.current = stream;
+        const track = stream.getVideoTracks()[0];
+        const caps = track?.getCapabilities?.();
+        setTorchAvailable(Boolean(caps?.torch));
+        setTorchOn(false);
+        setScanStatus('Point camera at QR code');
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play();
+          await videoRef.current.play().catch(() => {});
         }
 
-        if ('BarcodeDetector' in window) {
-          const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
-          scanIntervalRef.current = setInterval(async () => {
-            if (
-              videoRef.current &&
-              videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
-            ) {
-              try {
-                const barcodes = await barcodeDetector.detect(videoRef.current);
-                if (barcodes && barcodes.length > 0) {
-                  const scannedVal = barcodes[0].rawValue;
-                  if (scannedVal) {
-                    performCheckin(scannedVal);
-                  }
-                }
-              } catch {
-                // Ignore detector frame error
-              }
-            }
-          }, 400);
+        const nativeDetector =
+          'BarcodeDetector' in window
+            ? new window.BarcodeDetector({ formats: ['qr_code'] })
+            : null;
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement('canvas');
         }
+
+        scanIntervalRef.current = setInterval(async () => {
+          const video = videoRef.current;
+          if (!video || video.readyState < video.HAVE_CURRENT_DATA || scanBusyRef.current) {
+            return;
+          }
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (!vw || !vh) return;
+
+          let decoded = '';
+          if (nativeDetector) {
+            try {
+              const barcodes = await nativeDetector.detect(video);
+              if (barcodes?.length && barcodes[0].rawValue) {
+                decoded = barcodes[0].rawValue;
+              }
+            } catch {
+              // Fall back to jsQR below
+            }
+          }
+
+          if (!decoded) {
+            try {
+              const maxDim = 640;
+              const scale = Math.min(1, maxDim / Math.max(vw, vh));
+              const cw = Math.max(1, Math.round(vw * scale));
+              const ch = Math.max(1, Math.round(vh * scale));
+              const canvas = canvasRef.current;
+              if (canvas.width !== cw) canvas.width = cw;
+              if (canvas.height !== ch) canvas.height = ch;
+              const ctx = canvas.getContext('2d', { willReadFrequently: true });
+              if (ctx) {
+                ctx.drawImage(video, 0, 0, cw, ch);
+                const img = ctx.getImageData(0, 0, cw, ch);
+                const qr = jsQR(img.data, cw, ch, { inversionAttempts: 'attemptBoth' });
+                if (qr?.data) decoded = qr.data;
+              }
+            } catch {
+              // Ignore frame decode error
+            }
+          }
+
+          if (decoded) {
+            const now = Date.now();
+            if (
+              lastScannedRef.current.code === decoded &&
+              now - lastScannedRef.current.at < 2500
+            ) {
+              return;
+            }
+            lastScannedRef.current = { code: decoded, at: now };
+            performCheckinRef.current?.(decoded);
+          }
+        }, 200);
       } catch (err) {
         setMessage({
           tone: 'error',
@@ -3217,7 +4170,20 @@ export function AdminCheckin() {
 
   return (
     <>
-      <SectionHead kicker="DOOR DESK &amp; EVENT CHECK-IN" title="Check-in &amp; Scanner Station" />
+      <SectionHead
+        kicker="DOOR DESK &amp; EVENT CHECK-IN"
+        title="Check-in &amp; Scanner Station"
+        action={
+          <Button
+            type="button"
+            variant={cameraActive ? 'danger' : 'info'}
+            onClick={() => setCameraActive((v) => !v)}
+            icon={cameraActive ? CameraOff : Camera}
+          >
+            {cameraActive ? 'Close Camera Scanner' : 'Open Camera QR Scanner'}
+          </Button>
+        }
+      />
       <Panel className="checkin-panel">
         {/* Live Camera Scanner Box */}
         {cameraActive ? (
@@ -3225,21 +4191,44 @@ export function AdminCheckin() {
             style={{
               position: 'relative',
               width: '100%',
-              maxWidth: '380px',
+              maxWidth: '420px',
+              aspectRatio: '4 / 3',
               margin: '0 auto 20px auto',
-              borderRadius: '14px',
+              borderRadius: '16px',
               overflow: 'hidden',
-              border: '2px solid rgba(56, 189, 248, 0.5)',
+              border: '2px solid rgba(56, 189, 248, 0.55)',
               background: '#09090b',
-              boxShadow: '0 12px 32px rgba(0,0,0,0.8)',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.65)',
             }}
           >
             <video
               ref={videoRef}
               playsInline
               muted
-              style={{ width: '100%', height: '240px', objectFit: 'cover' }}
+              autoPlay
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
             />
+            {scanStatus ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '10px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(9, 9, 11, 0.82)',
+                  color: '#e2e8f0',
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  borderRadius: '999px',
+                  padding: '4px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  backdropFilter: 'blur(6px)',
+                }}
+              >
+                {scanStatus}
+              </div>
+            ) : null}
             {/* Visual targeting grid */}
             <div
               style={{
@@ -3253,11 +4242,11 @@ export function AdminCheckin() {
             >
               <div
                 style={{
-                  width: '180px',
-                  height: '180px',
+                  width: 'min(200px, 56%)',
+                  aspectRatio: '1 / 1',
                   border: '2px dashed rgba(56, 189, 248, 0.9)',
-                  borderRadius: '12px',
-                  boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)',
+                  borderRadius: '14px',
+                  boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.35)',
                 }}
               />
             </div>
@@ -3265,11 +4254,12 @@ export function AdminCheckin() {
             <div
               style={{
                 position: 'absolute',
-                bottom: '10px',
-                left: 0,
-                right: 0,
+                bottom: '12px',
+                left: '10px',
+                right: '10px',
                 display: 'flex',
                 justifyContent: 'center',
+                flexWrap: 'wrap',
                 gap: '8px',
               }}
             >
@@ -3277,73 +4267,72 @@ export function AdminCheckin() {
                 type="button"
                 onClick={() => setFacingMode((m) => (m === 'environment' ? 'user' : 'environment'))}
                 style={{
-                  background: 'rgba(15, 23, 42, 0.85)',
+                  background: 'rgba(15, 23, 42, 0.88)',
                   color: '#fff',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '6px',
-                  padding: '6px 12px',
-                  fontSize: '11px',
+                  border: '1px solid rgba(255,255,255,0.22)',
+                  borderRadius: '8px',
+                  padding: '8px 12px',
+                  fontSize: '12px',
                   fontWeight: 600,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '6px',
                 }}
               >
-                <FlipHorizontal size={13} /> Switch Camera
+                <FlipHorizontal size={14} /> Flip
               </button>
+              {torchAvailable ? (
+                <button
+                  type="button"
+                  onClick={toggleTorch}
+                  style={{
+                    background: torchOn ? 'rgba(245, 158, 11, 0.9)' : 'rgba(15, 23, 42, 0.88)',
+                    color: torchOn ? '#09090b' : '#fff',
+                    border: '1px solid rgba(255,255,255,0.22)',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Flashlight size={14} /> {torchOn ? 'Flash On' : 'Flash'}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setCameraActive(false)}
                 style={{
-                  background: 'rgba(239, 68, 68, 0.85)',
+                  background: 'rgba(225, 29, 72, 0.9)',
                   color: '#fff',
                   border: 'none',
-                  borderRadius: '6px',
-                  padding: '6px 12px',
-                  fontSize: '11px',
+                  borderRadius: '8px',
+                  padding: '8px 12px',
+                  fontSize: '12px',
                   fontWeight: 600,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '6px',
                 }}
               >
-                <CameraOff size={13} /> Stop Camera
+                <CameraOff size={14} /> Stop
               </button>
             </div>
           </div>
         ) : null}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
-          <Button
-            type="button"
-            variant={cameraActive ? 'primary' : 'ghost'}
-            onClick={() => setCameraActive((v) => !v)}
-            icon={cameraActive ? CameraOff : Camera}
-          >
-            {cameraActive ? 'Close Camera Scanner' : 'Open Camera QR Scanner'}
-          </Button>
-        </div>
 
         <form onSubmit={scan} className="checkin-form">
           <Field
             label="Check-in Station / Event"
             hint="Pick an event for workshop / competition verification, or General Pass for door turnstile admission."
           >
-            <select
-              value={selectedEventId}
-              onChange={(e) => setSelectedEventId(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'rgba(255,255,255,0.05)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: '8px',
-                padding: '9px 12px',
-                fontSize: '14px',
-              }}
-            >
+            <select value={selectedEventId} onChange={(e) => setSelectedEventId(e.target.value)}>
+
               <option value="">🎟️ General Fest Turnstile Admission (All Passes)</option>
               {(eventsList.data?.data || []).map((ev) => (
                 <option key={ev.id} value={ev.id}>
@@ -3361,7 +4350,10 @@ export function AdminCheckin() {
               value={token}
               onChange={(event) => setToken(event.target.value)}
               placeholder="Scan QR or paste PX-…"
-              autoFocus
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="characters"
+              spellCheck={false}
               required
             />
           </Field>
@@ -3370,12 +4362,12 @@ export function AdminCheckin() {
             <input type="date" value={day} onChange={(event) => setDay(event.target.value)} />
           </Field>
 
-          <Button type="submit" disabled={busy || !token.trim()} icon={ClipboardCheck}>
+          <Button type="submit" variant="success" disabled={busy || !token.trim()} icon={ClipboardCheck}>
             {busy ? 'Verifying…' : 'Admit & Check-in'}
           </Button>
         </form>
 
-        {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+        <Feedback message={message} />
 
         {result ? (
           <div className={`checkin-result ${result.result}`}>
@@ -3396,6 +4388,36 @@ export function AdminCheckin() {
             </div>
 
             <h3 style={{ margin: '4px 0' }}>{result.participantName}</h3>
+
+            {result.gender || result.foodPreference || result.needsAccommodation !== undefined ? (
+              <div
+                className="checkin-logistics"
+                style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0' }}
+              >
+                {[
+                  result.gender ? genderLabel(result.gender) : null,
+                  result.foodPreference ? foodLabel(result.foodPreference) : null,
+                  result.needsAccommodation ? 'Accommodation: yes' : 'Accommodation: no',
+                ]
+                  .filter(Boolean)
+                  .map((label) => (
+                    <span
+                      key={label}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: '0.02em',
+                        background: 'rgba(148, 163, 184, 0.18)',
+                        border: '1px solid rgba(148, 163, 184, 0.35)',
+                      }}
+                    >
+                      {label}
+                    </span>
+                  ))}
+              </div>
+            ) : null}
 
             {result.team ? (
               <div
@@ -3709,7 +4731,7 @@ export function AdminAnnouncements() {
           </Button>
         }
       />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {rows.loading ? <Loading label="Loading announcements" rows={2} /> : null}
       {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
       <DataTable
@@ -3742,6 +4764,7 @@ export function AdminAnnouncements() {
       <Sheet
         open={Boolean(sheet)}
         title={sheet?.id ? 'Edit announcement' : 'New announcement'}
+        message={message}
         onClose={() => setSheet(null)}
       >
         <form className="admin-form" onSubmit={save}>
@@ -4006,7 +5029,6 @@ export function AdminSettings() {
       registrationClosesAt: toLocalInput(data.registrationClosesAt),
       status: data.status || 'draft',
       contactEmail: data.contactEmail || '',
-      allowedEmailDomains: (data.allowedEmailDomains || []).join(', '),
     });
   }, [settings.data]);
 
@@ -4028,10 +5050,6 @@ export function AdminSettings() {
         registrationClosesAt: fromLocalInput(form.registrationClosesAt),
         status: form.status,
         contactEmail: form.contactEmail || null,
-        allowedEmailDomains: form.allowedEmailDomains
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean),
       });
       await settings.reload();
       refresh();
@@ -4048,10 +5066,20 @@ export function AdminSettings() {
     setBusy('staff');
     setMessage(null);
     try {
-      await adminApi.grantMembership(editionId, staffForm);
+      const body = await adminApi.grantMembership(editionId, staffForm);
       await memberships.reload();
       setStaffForm({ email: '', role: 'event_coordinator' });
-      setMessage({ tone: 'success', text: 'Staff role granted.' });
+      // One role per account: say which role was replaced so nobody assumes the
+      // previous permission set is still live.
+      const replaced = body.data?.replacedRoles || [];
+      setMessage({
+        tone: 'success',
+        text: replaced.length
+          ? `Staff role granted as ${ROLE_LABELS[staffForm.role] || staffForm.role}. Replaced ${
+              replaced.map((role) => ROLE_LABELS[role] || role).join(', ')
+            }.`
+          : 'Staff role granted.',
+      });
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     } finally {
@@ -4100,13 +5128,13 @@ export function AdminSettings() {
   if (settings.loading || !form) return <Loading label="Loading settings" rows={3} />;
   if (settings.error) return <ErrorBox error={settings.error} onRetry={settings.reload} />;
 
-  const memberRows = memberships.data?.data || [];
+  const memberRows = oneRolePerAccount(memberships.data?.data || []);
   const iconRows = icons.data?.data || [];
 
   return (
     <>
       <SectionHead kicker="CONFIGURATION" title="Edition settings" />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       <Panel>
         <form className="admin-form" onSubmit={save}>
           <FieldGrid>
@@ -4124,16 +5152,25 @@ export function AdminSettings() {
               />
             </Field>
             <Field label="Venue">
-              <input value={form.venue} onChange={(event) => set('venue', event.target.value)} />
+              <input
+                value={form.venue}
+                onChange={(event) => set('venue', event.target.value)}
+                required
+              />
             </Field>
             <Field label="City">
-              <input value={form.city} onChange={(event) => set('city', event.target.value)} />
+              <input
+                value={form.city}
+                onChange={(event) => set('city', event.target.value)}
+                required
+              />
             </Field>
             <Field label="Starts at">
               <input
                 type="datetime-local"
                 value={form.startsAt}
                 onChange={(event) => set('startsAt', event.target.value)}
+                required
               />
             </Field>
             <Field label="Ends at">
@@ -4141,6 +5178,7 @@ export function AdminSettings() {
                 type="datetime-local"
                 value={form.endsAt}
                 onChange={(event) => set('endsAt', event.target.value)}
+                required
               />
             </Field>
             <Field label="Registration opens">
@@ -4159,11 +5197,15 @@ export function AdminSettings() {
             </Field>
             <Field label="Status">
               <select value={form.status} onChange={(event) => set('status', event.target.value)}>
-                {['draft', 'published', 'archived'].map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
+                {/* Keep an out-of-list server status (open/closed) selectable so the
+                    field never renders blank and never rewrites it by accident. */}
+                {Array.from(new Set(['draft', 'published', 'archived', form.status])).map(
+                  (status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ),
+                )}
               </select>
             </Field>
             <Field label="Contact email">
@@ -4171,12 +5213,6 @@ export function AdminSettings() {
                 type="email"
                 value={form.contactEmail}
                 onChange={(event) => set('contactEmail', event.target.value)}
-              />
-            </Field>
-            <Field label="Allowed email domains" hint="Comma separated." className="full-span">
-              <input
-                value={form.allowedEmailDomains}
-                onChange={(event) => set('allowedEmailDomains', event.target.value)}
               />
             </Field>
           </FieldGrid>
@@ -4206,13 +5242,11 @@ export function AdminSettings() {
                 value={staffForm.role}
                 onChange={(event) => setStaffForm({ ...staffForm, role: event.target.value })}
               >
-                {Object.entries(ROLE_LABELS)
-                  .filter(([role]) => role !== 'participant' && role !== 'super_admin')
-                  .map(([role, label]) => (
-                    <option key={role} value={role}>
-                      {label}
-                    </option>
-                  ))}
+                {GRANTABLE_ROLES.map((role) => (
+                  <option key={role} value={role}>
+                    {ROLE_LABELS[role] || role}
+                  </option>
+                ))}
               </select>
             </Field>
             <Button type="submit" disabled={busy === 'staff'} variant="ghost">
@@ -4240,6 +5274,12 @@ export function AdminSettings() {
                 <div>
                   <b>{row.fullName || row.email}</b>
                   <small>{row.email}</small>
+                  {row.staleRoles?.length ? (
+                    <small className="muted">
+                      Also holds {row.staleRoles.map((role) => ROLE_LABELS[role] || role).join(', ')}{' '}
+                      from an older grant. Grant one role again to collapse it.
+                    </small>
+                  ) : null}
                 </div>
                 <Badge tone="accent">{ROLE_LABELS[row.role] || row.role}</Badge>
                 <StatusBadge status={row.status} />

@@ -25,7 +25,10 @@ export function loadRazorpay() {
   });
 }
 
-/** Backwards-compatible helper for existing portal code */
+/**
+ * Opens the checkout modal for a server-priced order. The order carries exactly
+ * orderId, amountPaise, gatewayOrderId, razorpayKeyId and mock.
+ */
 export async function openCheckout(order, user, description = 'Convention registration') {
   const Razorpay = await loadRazorpay();
   return new Promise((resolve, reject) => {
@@ -38,12 +41,8 @@ export async function openCheckout(order, user, description = 'Convention regist
       resolve(value);
     };
 
-    const keyId = order.razorpayKeyId || order.keyId || order.key || getRazorpayKeyId();
-    const gatewayOrderId =
-      order.gatewayOrderId ||
-      order.gateway_order_id ||
-      order.order_id ||
-      (typeof order.orderId === 'string' && order.orderId.startsWith('order_') ? order.orderId : null);
+    const keyId = order.razorpayKeyId || getRazorpayKeyId();
+    const gatewayOrderId = order.gatewayOrderId;
 
     if (!gatewayOrderId && !order.mock) {
       settled = true;
@@ -52,9 +51,9 @@ export async function openCheckout(order, user, description = 'Convention regist
     }
 
     const cleanPrefill = {};
-    const name = (user?.fullName || user?.name || '').trim();
+    const name = (user?.fullName || '').trim();
     const email = (user?.email || '').trim();
-    const phone = (user?.phone || user?.contact || user?.mobile || '').trim();
+    const phone = (user?.phone || '').trim();
     if (name) cleanPrefill.name = name;
     if (email) cleanPrefill.email = email;
     if (phone) cleanPrefill.contact = phone;
@@ -62,7 +61,7 @@ export async function openCheckout(order, user, description = 'Convention regist
     const options = {
       key: keyId,
       order_id: gatewayOrderId,
-      amount: Math.round(Number(order.amountPaise || order.amount)),
+      amount: Math.round(Number(order.amountPaise)),
       currency: 'INR',
       name: 'Parallax 2027',
       description: description || 'Convention registration',
@@ -89,10 +88,8 @@ export async function openCheckout(order, user, description = 'Convention regist
       options.prefill = cleanPrefill;
     }
 
-    if (order.orderId || order.id) {
-      options.notes = {
-        order_id: String(order.orderId || order.id),
-      };
+    if (order.orderId) {
+      options.notes = { order_id: String(order.orderId) };
     }
 
     // Only set image if HTTPS to prevent mixed-content or "undefined" image crashes on local development

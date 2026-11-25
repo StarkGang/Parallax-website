@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ShieldCheck, Wrench } from 'lucide-react';
+import { ArrowUpRight, Wrench } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
-import { useSite } from '../lib/site.jsx';
-import { Button, Eyebrow, Field, InlineMessage, Panel } from '../components/ui.jsx';
+import { Button, Eyebrow, Field, InlineMessage } from '../components/ui.jsx';
 
-const LOGO = `${import.meta.env.BASE_URL}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp`;
+const PROTOCOL_FRAME = `${import.meta.env.BASE_URL}images/login_protocol_frame.png`;
 
-function GoogleIcon() {
+function GoogleIcon({ size = 18 }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
       <path
         fill="#4285F4"
         d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -39,7 +38,6 @@ const ERROR_MESSAGES = {
 
 export default function Login() {
   const { user, loading, login } = useAuth();
-  const { edition } = useSite();
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const next = params.get('next') || '/portal';
@@ -78,112 +76,113 @@ export default function Login() {
 
   return (
     <section className="login-page">
-      <aside className="login-art">
-        <Link to="/" className="login-brand" aria-label="Parallax Home">
-          <img src={LOGO} alt={edition?.name || 'Parallax 2027'} />
-        </Link>
-        <div>
-          <Eyebrow>Attendee & Staff Portal</Eyebrow>
-          <h1>Convention Sign In</h1>
-          <p>
-            Passes, included events, add-on registrations, team invites and entry tickets live in
-            the portal. Authorized staff and organizers are automatically directed to the management console.
-          </p>
-          <div className="login-points">
-            <span>
-              <ShieldCheck size={16} strokeWidth={1.5} /> Secure Google authentication
-            </span>
-            <span>
-              <CheckCircle2 size={16} strokeWidth={1.5} /> Payments Powered by RazorPay
-            </span>
-          </div>
-        </div>
-        <Link to="/" className="text-link">
-          <ArrowLeft size={15} strokeWidth={1.5} /> Back to the convention
-        </Link>
-      </aside>
+      <div className="login-nebula" aria-hidden="true" />
 
-      <div className="login-panel">
-        <Panel className="login-card">
-            <Eyebrow>Single Sign-On</Eyebrow>
-            <h2>Access your account</h2>
-            <p className="muted">
-              Sign in with your Google account. Attendees will access passes and registrations; organizers will be directed to the admin console.
-            </p>
-
-            {error ? (
-              <div style={{ marginTop: '14px' }}>
-                <InlineMessage tone="error">{error}</InlineMessage>
-              </div>
-            ) : null}
-
-            <div className="login-oauth-action" style={{ margin: '28px 0 20px 0' }}>
-              <a
-                href={`/api/v1/auth/google/login?next=${encodeURIComponent(next)}`}
-                className="google-sign-in-btn"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '12px',
-                  width: '100%',
-                  padding: '14px 22px',
-                  backgroundColor: '#ffffff',
-                  color: '#1f1f1f',
-                  border: '1px solid #dadce0',
-                  borderRadius: '9999px',
-                  fontSize: '15px',
-                  fontWeight: '600',
-                  fontFamily: 'inherit',
-                  textDecoration: 'none',
-                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
-                  transition: 'all 0.2s ease',
-                  cursor: 'pointer',
-                }}
-              >
-                <GoogleIcon />
-                <span>Sign in with Google</span>
-              </a>
+      <div className="login-shell">
+        <div className="login-grid">
+          <aside className="login-art">
+            <div className="login-hero-copy">
+              <h1>
+                Sign in to
+                <br />
+                <em>the portal.</em>
+              </h1>
+              <p className="login-lead">
+                Access your convention passes, event registrations, and digital QR ID.
+              </p>
             </div>
 
-            {isDevMode && (
-              <div
-                style={{
-                  marginTop: '24px',
-                  padding: '16px',
-                  borderRadius: '8px',
-                  border: '1px dashed var(--line-strong)',
-                  background: 'rgba(255, 255, 255, 0.02)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
-                  <Wrench size={14} color="var(--accent)" />
-                  <span style={{ font: '11px var(--mono)', color: 'var(--accent)', textTransform: 'uppercase' }}>
-                    Local Dev Only Sign-In
-                  </span>
-                </div>
-                <form onSubmit={submitDevLogin} className="login-form" style={{ marginTop: 0 }}>
-                  <Field label="Test Email">
-                    <input
-                      type="email"
-                      value={devEmail}
-                      onChange={(event) => setDevEmail(event.target.value)}
-                      placeholder="test@example.com"
-                      required
-                    />
-                  </Field>
-                  <Button type="submit" disabled={busy} className="full">
-                    {busy ? 'Signing in…' : 'Local Dev Login'}
-                  </Button>
-                </form>
+            <div className="login-points">
+              <div className="login-point">
+                <span className="login-point-num">01</span>
+                <span>Digital pass &amp; QR check-in</span>
               </div>
-            )}
+              <div className="login-point">
+                <span className="login-point-num">02</span>
+                <span>Event entries &amp; team invites</span>
+              </div>
+              <div className="login-point">
+                <span className="login-point-num">03</span>
+                <span>Instant payment receipts</span>
+              </div>
+            </div>
+          </aside>
 
-            <p className="login-legal">
-              By continuing you agree to the convention code of conduct.
-              Authentication is securely handled by Google.
-            </p>
-        </Panel>
+          <div className="login-panel">
+            <div className="login-frame-wrap">
+              <div className="login-protocol-card">
+                <img
+                  className="login-protocol-frame"
+                  src={PROTOCOL_FRAME}
+                  alt=""
+                  draggable="false"
+                  decoding="async"
+                />
+                <div className="login-protocol-bay">
+                  <div className="login-bezel-head">
+                    <span className="login-bezel-code">01 / SINGLE SIGN-ON</span>
+                  </div>
+
+                  <div className="login-frame-main">
+                    <h2 className="login-frame-title">Access your account</h2>
+                    <p className="login-frame-sub">
+                      Continue with Google to open your convention portal.
+                    </p>
+
+                    {error ? (
+                      <div style={{ width: '100%', marginTop: '10px' }}>
+                        <InlineMessage tone="error">{error}</InlineMessage>
+                      </div>
+                    ) : null}
+
+                    <div className="login-oauth-action">
+                      <a
+                        href={`/api/v1/auth/google/login?next=${encodeURIComponent(next)}`}
+                        className="login-machined-btn is-gold login-google-gold-btn"
+                      >
+                        <GoogleIcon size={18} />
+                        <span>Sign in with Google</span>
+                        <ArrowUpRight size={15} strokeWidth={2} />
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="login-frame-foot">
+                    <span className="login-legal">Convention Code of Conduct applies</span>
+                    <Link to="/contact" className="login-foot-help">
+                      Need help? <ArrowUpRight size={12} strokeWidth={2} />
+                    </Link>
+                  </div>
+                </div>
+              </div>
+
+              {isDevMode && (
+                <div className="bezel login-dev-wrap">
+                  <div className="bezel-core login-dev-core">
+                    <div className="login-dev-head">
+                      <Wrench size={13} color="var(--cyan)" />
+                      <span>Local Dev Only Sign-In</span>
+                    </div>
+                    <form onSubmit={submitDevLogin} className="login-form">
+                      <Field label="Test Email">
+                        <input
+                          type="email"
+                          value={devEmail}
+                          onChange={(event) => setDevEmail(event.target.value)}
+                          placeholder="test@example.com"
+                          required
+                        />
+                      </Field>
+                      <Button type="submit" disabled={busy} className="full">
+                        {busy ? 'Signing in…' : 'Local Dev Login'}
+                      </Button>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

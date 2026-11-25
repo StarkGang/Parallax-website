@@ -1,46 +1,56 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { QRCodeCanvas } from 'qrcode.react';
+import { Link, NavLink, Outlet, useNavigate, useSearchParams } from 'react-router-dom';
 import { Avatar, Box, Stack, Typography } from '@mui/material';
 import {
   ArrowRight,
-  LayoutDashboard,
   ArrowUpRight,
-  BadgeCheck,
-  Calendar,
   Check,
-  CheckCircle2,
-  Clipboard,
-  Clock3,
+  Copy,
   CreditCard,
   Download,
-  IdCard,
   LogOut,
-  MapPin,
   Plus,
   Printer,
-  ReceiptText,
   RefreshCw,
   ShieldCheck,
   Ticket,
   Users,
-  Utensils,
 } from 'lucide-react';
-import { authApi, portalApi, publicApi, registrationApi } from '../lib/api.js';
+import { authApi, portalApi, publicApi } from '../lib/api.js';
 import { openCheckout } from '../lib/razorpay.js';
 import { PaymentProgress } from '../components/PaymentProgress.jsx';
+import '../components/PassTierCard.css';
 import { ISTE, LOGO, NSSCE } from './Public.jsx';
-import { BrandedQr } from '../components/BrandedQr.jsx';
+import './Worklist.css';
+import './EventCard.css';
+
+import { PORTAL_AVATARS, usePortalAvatar } from '../lib/portalAvatar.js';
+
+const REG_EVENT_FRAME = `${import.meta.env.BASE_URL}images/event_frame.png`;
+const REG_BG_CORE = `${import.meta.env.BASE_URL}images/parallax-bg-core.webp`;
+const REG_BG_VAULT = `${import.meta.env.BASE_URL}images/parallax-bg-vault.webp`;
+const REG_BG_PEDESTAL = `${import.meta.env.BASE_URL}images/parallax-bg-pedestal.webp`;
+const REG_BG_DEPTH = `${import.meta.env.BASE_URL}images/parallax-depth-bg.webp`;
+
+function regBackdrop(category = '') {
+  const cat = String(category).toLowerCase();
+  if (cat.includes('comput') || cat.includes('code')) return REG_BG_CORE;
+  if (cat.includes('robot') || cat.includes('electr')) return REG_BG_VAULT;
+  if (cat.includes('civil') || cat.includes('mech')) return REG_BG_PEDESTAL;
+  return REG_BG_DEPTH;
+}
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
-import { useTheme } from '../lib/theme.jsx';
-import { date, dateRange, dateTime, dayLabel, initials, money, percent } from '../lib/format.js';
+import { date, dateTime, initials, money } from '../lib/format.js';
+import { eventListPricePaise } from '../lib/pricing.js';
+import { FOOD_OPTIONS, GENDER_OPTIONS } from '../lib/attendee.js';
 import {
   Badge,
   Button,
   Empty,
   ErrorBox,
   Eyebrow,
+  Feedback,
   Field,
   FieldGrid,
   InlineMessage,
@@ -48,17 +58,49 @@ import {
   PageTitle,
   Panel,
   SectionHead,
-  Stat,
   StatusBadge,
   Sheet,
   clearAsyncCache,
   useAsync,
 } from '../components/ui.jsx';
 
+/**
+ * Run the checkout for one order and report what happened.
+ *
+ * Used by add-on bookings and by team seats (a priced team seat is reserved
+ * until it is paid), so both paths behave the same on cancel, decline and mock
+ * payments.
+ */
+async function payOrder(editionId, order, user, title) {
+  if (!order) return { status: 'paid' };
+  if (order.mock) {
+    await portalApi.mockPay(editionId, order.orderId);
+    return { status: 'paid' };
+  }
+  const attendee = {
+    ...user,
+    fullName: user?.fullName || '',
+    email: user?.email || '',
+    phone: user?.phone || '',
+  };
+  const response = await openCheckout(order, attendee, title);
+  if (!response) return { status: 'cancelled' };
+  if (response.failed) {
+    return { status: 'failed', message: response.error?.message };
+  }
+  await portalApi.verifyPayment(editionId, {
+    orderId: order.orderId,
+    razorpayPaymentId: response.razorpay_payment_id,
+    razorpaySignature: response.razorpay_signature,
+  });
+  return { status: 'paid' };
+}
+
 const PORTAL_NAV = [
   ['My Pass & Ticket', '/portal/registration'],
-  ['Select Events', '/portal/select-events'],
-  ['My Registrations & Teams', '/portal/registrations'],
+  ['My Events', '/portal/events'],
+  ['Teams & Invites', '/portal/teams'],
+  ['My Registrations & Bills', '/portal/registrations'],
   ['Profile & Settings', '/portal/profile'],
 ];
 
@@ -66,6 +108,7 @@ export function PortalLayout() {
   const { user, logout, isStaff, reload: reloadUser } = useAuth();
   const { edition, refresh: refreshSite } = useSite();
   const navigate = useNavigate();
+  const [activeGlyph] = usePortalAvatar(user?.id, isStaff ? 'lisbon' : 'root');
   const [pageKey, setPageKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState('');
@@ -89,6 +132,10 @@ export function PortalLayout() {
     setRefreshing(true);
     setRefreshNote('');
     try {
+      try {
+        localStorage.removeItem('px_visited_events_portal');
+        localStorage.removeItem('px_visited_teams_portal');
+      } catch {}
       clearAsyncCache();
       const freshUser = await reloadUser();
       refreshSite();
@@ -121,6 +168,7 @@ export function PortalLayout() {
               icon={RefreshCw}
               loading={refreshing}
               onClick={refreshAll}
+              className="portal-header-btn"
               title="Re-fetch your profile, pass and bookings from the server"
             >
               {refreshing ? 'Refreshing…' : 'Refresh'}
@@ -130,14 +178,16 @@ export function PortalLayout() {
                 {refreshNote}
               </Typography>
             ) : null}
+            <span className="portal-side-role" style={{ marginBottom: 0 }}>
+              {isStaff ? 'Staff Access' : `${edition?.name || 'Convention'} Attendee`}
+            </span>
+            {user?.profileComplete ? (
+              <span className="portal-side-role portal-side-role--good" style={{ marginBottom: 0 }}>
+                Profile Complete
+              </span>
+            ) : null}
             {isStaff ? (
-              <Badge tone="accent">Staff Access</Badge>
-            ) : (
-              <Badge tone="accent">{edition?.name || 'Convention'} Attendee</Badge>
-            )}
-            {user?.profileComplete ? <Badge tone="accent">Profile complete</Badge> : null}
-            {isStaff ? (
-              <Button variant="ghost" size="small" to="/manage" icon={ArrowUpRight}>
+              <Button variant="ghost" size="small" to="/manage" icon={ArrowUpRight} className="portal-header-btn">
                 Staff Console
               </Button>
             ) : null}
@@ -156,7 +206,18 @@ export function PortalLayout() {
           }}
         >
           <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0 }}>
-            <Avatar sx={{ width: 32, height: 32, fontSize: 12, bgcolor: 'primary.dark' }}>
+            <Avatar
+              className={`portal-side-avatar ${isStaff ? 'is-staff' : 'is-attendee'} ${activeGlyph.kind === 'portrait' ? 'is-portrait' : ''}`}
+              src={activeGlyph.src}
+              alt={`${activeGlyph.label} avatar`}
+              imgProps={{
+                style:
+                  activeGlyph.kind === 'portrait'
+                    ? { objectFit: 'cover', objectPosition: 'center top', padding: 0 }
+                    : { objectFit: 'contain', padding: '4px' },
+              }}
+              sx={{ width: 38, height: 38, fontSize: 13 }}
+            >
               {initials(user?.fullName)}
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
@@ -174,7 +235,7 @@ export function PortalLayout() {
               </Typography>
             </Box>
           </Stack>
-          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut}>
+          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut} className="portal-side-signout">
             Sign out
           </Button>
         </Box>
@@ -191,7 +252,7 @@ export function PortalLayout() {
             </NavLink>
           ))}
           {isStaff ? (
-            <Link to="/manage" className="portal-mobile-tab-item" style={{ color: '#38bdf8' }}>
+            <Link to="/manage" className="portal-mobile-tab-item portal-mobile-staff-tab">
               <span>Staff Console ↗</span>
             </Link>
           ) : null}
@@ -200,7 +261,18 @@ export function PortalLayout() {
 
       <section className="section portal-layout">
         <aside className="portal-side">
-          <Avatar sx={{ width: 56, height: 56, fontSize: 20, bgcolor: 'primary.main', mb: 1.25 }}>
+          <Avatar
+            className={`portal-side-avatar ${isStaff ? 'is-staff' : 'is-attendee'} ${activeGlyph.kind === 'portrait' ? 'is-portrait' : ''}`}
+            src={activeGlyph.src}
+            alt={`${activeGlyph.label} avatar`}
+            imgProps={{
+              style:
+                activeGlyph.kind === 'portrait'
+                  ? { objectFit: 'cover', objectPosition: 'center top', padding: 0 }
+                  : { objectFit: 'contain', padding: '6px' },
+            }}
+            sx={{ width: 56, height: 56, fontSize: 18, mb: 1.25 }}
+          >
             {initials(user?.fullName)}
           </Avatar>
           <Typography variant="h4" component="h3">
@@ -209,15 +281,9 @@ export function PortalLayout() {
           <Typography variant="caption" component="p" sx={{ mb: 1.25, wordBreak: 'break-word' }}>
             {user?.email}
           </Typography>
-          {isStaff ? (
-            <span className="pill staff-pill" style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)' }}>
-              Staff Administrator
-            </span>
-          ) : (
-            <span className="pill" style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: 'var(--cyan)' }}>
-              Attendee Portal
-            </span>
-          )}
+          <span className="portal-side-role">
+            {isStaff ? 'Staff Administrator' : 'Attendee Portal'}
+          </span>
           <nav aria-label="Participant portal">
             {PORTAL_NAV.map(([label, to, end]) => (
               <NavLink key={to} to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -226,13 +292,13 @@ export function PortalLayout() {
               </NavLink>
             ))}
             {isStaff ? (
-              <Link to="/manage" style={{ color: 'var(--cyan)' }}>
+              <Link to="/manage" className="portal-side-staff-link">
                 Staff console
                 <ArrowUpRight size={15} strokeWidth={1.5} />
               </Link>
             ) : null}
           </nav>
-          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut} sx={{ mt: 1.5 }}>
+          <Button variant="ghost" size="small" icon={LogOut} onClick={signOut} className="portal-side-signout" sx={{ mt: 1.5 }}>
             Sign out
           </Button>
         </aside>
@@ -244,343 +310,8 @@ export function PortalLayout() {
   );
 }
 
-function PassStatusCard({ pass, policy }) {
-  const selection = pass?.selection;
-  if (!pass) {
-    return (
-      <Panel className="portal-banner">
-        <Eyebrow>Convention Pass</Eyebrow>
-        <h2>No pass yet</h2>
-        <p>
-          Buy the {money(policy?.passPricePaise)} pass to unlock event selection, add-ons and your
-          entry ticket.
-        </p>
-        <Button to="/portal/registration" icon={ArrowRight}>
-          Get the pass
-        </Button>
-      </Panel>
-    );
-  }
-  return (
-    <Panel className="portal-banner">
-      <div className="banner-top">
-        <Eyebrow>CONVENTION PASS</Eyebrow>
-        <StatusBadge status={pass.status} />
-      </div>
-      <h2>{pass.status === 'active' ? 'Pass active' : 'Pass awaiting payment'}</h2>
-      <p>
-        {money(pass.pricePaise)} · policy v{pass.policyVersion} ·{' '}
-        {pass.paidAt ? `paid ${date(pass.paidAt)}` : 'payment pending'}
-      </p>
-      <div className="banner-actions">
-        <Button to="/portal/registration" variant="ghost" icon={Ticket}>
-          View pass & ticket
-        </Button>
-        <Button to="/portal/select-events" icon={ArrowRight}>
-          {selection?.valid ? 'Review selections' : 'Finish selections'}
-        </Button>
-      </div>
-    </Panel>
-  );
-}
-
-export function PortalOverview() {
-  const { user, isStaff } = useAuth();
-  const { editionId, policy } = useSite();
-  const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
-  const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
-    enabled: Boolean(editionId),
-  });
-  const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
-    enabled: Boolean(editionId),
-  });
-  const verification = useAsync(() => portalApi.verification(editionId), [editionId], {
-    enabled: Boolean(editionId),
-  });
-
-  const passData = pass.data?.data;
-  const selection = passData?.selection;
-  const registrations = regs.data?.data || [];
-  const ticketRows = tickets.data?.data || [];
-  const verificationStatus = verification.data?.data;
-
-  return (
-    <>
-      {pass.loading ? <Loading label="Loading your pass" rows={1} /> : null}
-      {pass.error ? <ErrorBox error={pass.error} onRetry={pass.reload} /> : null}
-      {!pass.loading ? <PassStatusCard pass={passData} policy={policy} /> : null}
-
-      <Panel
-        className="portal-stats"
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
-          gap: 1.5,
-          p: 1.5,
-          my: 2,
-        }}
-      >
-        <Stat
-          label="INCLUDED CHOICES"
-          value={`${selection?.count || 0} / ${policy?.includedEventCount || 0}`}
-          note={selection?.valid ? 'Selection valid' : 'Needs attention'}
-        />
-        <Stat
-          label="SELECTED VALUE"
-          value={money(selection?.valuePaise || 0)}
-          note={`Cap ${money(policy?.includedValueCapPaise)}`}
-        />
-        <Stat label="REGISTRATIONS" value={registrations.length} note="Included and add-on" />
-        <Stat label="TICKETS" value={ticketRows.length} note="Live entry credentials" />
-      </Panel>
-
-      <div className="portal-columns">
-        <Panel className="next-card">
-          <Eyebrow>NEXT STEP</Eyebrow>
-          <h3>
-            {isStaff
-              ? 'Staff Administration Active'
-              : !passData
-              ? 'Buy your convention pass'
-              : !selection?.valid
-                ? 'Complete your included selection'
-                : verificationStatus?.status !== 'verified'
-                  ? 'Finish student verification'
-                  : 'You are ready for the convention'}
-          </h3>
-          <p>
-            {isStaff
-              ? 'You are signed in with staff privileges. Monitor live event registrations, scan badges at the door, and adjust convention controls.'
-              : !passData
-              ? 'The pass is mandatory and includes lunch, entry and the included-event allowance.'
-              : !selection?.valid
-                ? selection?.message || 'Choose included events within the published allowance.'
-                : verificationStatus?.status !== 'verified'
-                  ? 'Verification confirms your student status for the convention record.'
-                  : 'Your pass, selections and ticket are all active.'}
-          </p>
-          <Button
-            to={
-              isStaff
-                ? '/manage'
-                : !passData
-                  ? '/portal/registration'
-                  : !selection?.valid
-                    ? '/portal/select-events'
-                    : '/portal/registration'
-            }
-            icon={ArrowRight}
-          >
-            {isStaff ? 'Open Staff Console' : 'Continue'}
-          </Button>
-        </Panel>
-        <Panel>
-          <Eyebrow>PROGRESS</Eyebrow>
-          <div className="progress-row">
-            <span>Selection value</span>
-            <b>{percent(selection?.valuePaise || 0, policy?.includedValueCapPaise || 0)}%</b>
-          </div>
-          <div className="progress-track">
-            <i style={{ width: `${percent(selection?.valuePaise || 0, policy?.includedValueCapPaise || 0)}%` }} />
-          </div>
-          <div className="detail-row">
-            <span>Selection deadline</span>
-            <b>{date(policy?.selectionChangeDeadline)}</b>
-          </div>
-          <div className="detail-row">
-            <span>Verification</span>
-            <b style={isStaff ? { color: 'var(--cyan)' } : {}}>
-              {isStaff ? 'Staff Exempt' : (verificationStatus?.status || 'unverified')}
-            </b>
-          </div>
-          <div className="detail-row">
-            <span>Lunch</span>
-            <b>{(passData?.lunchDays || policy?.lunchIncludedDays || []).map(dayLabel).join(', ')}</b>
-          </div>
-        </Panel>
-      </div>
-
-      {ticketRows.length ? (
-        <Panel>
-          <div className="panel-head-row">
-            <Eyebrow>ENTRY TICKETS</Eyebrow>
-            <Link className="text-link" to="/portal/registration">
-              All tickets <ArrowRight size={15} strokeWidth={1.5} />
-            </Link>
-          </div>
-          <div className="mini-ticket">
-            <Ticket size={18} strokeWidth={1.4} />
-            <div>
-              <b>{ticketRows[0].title}</b>
-              <small>
-                {ticketRows[0].registrationNumber} · issued {date(ticketRows[0].issuedAt)}
-              </small>
-            </div>
-            <StatusBadge status={ticketRows[0].status} />
-          </div>
-        </Panel>
-      ) : null}
-    </>
-  );
-}
-
-export function PortalPass() {
-  const { editionId, policy } = useSite();
-  const { user } = useAuth();
-  const navigate = useNavigate();
-  const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
-  const [order, setOrder] = useState(null);
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState(null);
-
-  const passData = pass.data?.data;
-
-  const handleBuyPass = async () => {
-    setBusy('pay');
-    setMessage(null);
-    try {
-      let activeOrder = order;
-      if (!activeOrder) {
-        const body = await portalApi.createPassOrder(editionId);
-        activeOrder = body.data;
-        setOrder(activeOrder);
-      }
-      if (activeOrder.mock) {
-        await portalApi.mockPay(editionId, activeOrder.orderId);
-      } else {
-        const paid = await openCheckout(activeOrder, user, 'Convention pass - Parallax 2027');
-        if (!paid || paid.failed) {
-          setMessage({
-            tone: 'info',
-            text: paid?.error?.message || 'Payment window closed. Click complete payment to resume.',
-          });
-          setBusy('');
-          return;
-        }
-        await portalApi.verifyPayment(editionId, {
-          orderId: activeOrder.orderId,
-          razorpayPaymentId: paid.razorpay_payment_id,
-          razorpaySignature: paid.razorpay_signature,
-        });
-      }
-      await pass.reload();
-      setOrder(null);
-      setMessage({ tone: 'success', text: 'Pass activated! Your entry ticket has been issued.' });
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      navigate('/portal/registration');
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  return (
-    <>
-      <SectionHead kicker="Convention Pass" title="One pass, full access" />
-      {pass.loading ? <Loading label="Loading pass" rows={1} /> : null}
-      {pass.error ? <ErrorBox error={pass.error} onRetry={pass.reload} /> : null}
-      {!pass.loading && passData ? (
-        <Panel>
-          <div className="pass-summary">
-            <div>
-              <Eyebrow>STATUS</Eyebrow>
-              <h3>{passData.status === 'active' ? 'Active pass' : 'Awaiting payment'}</h3>
-              <p>
-                {money(passData.pricePaise)} · policy v{passData.policyVersion}
-              </p>
-            </div>
-            <StatusBadge status={passData.status} />
-          </div>
-          <div className="detail-row">
-            <span>Purchased</span>
-            <b>{date(passData.createdAt)}</b>
-          </div>
-          <div className="detail-row">
-            <span>Paid</span>
-            <b>{passData.paidAt ? dateTime(passData.paidAt) : 'Not paid'}</b>
-          </div>
-          <div className="detail-row">
-            <span>Lunch</span>
-            <b>{(passData.lunchDays || []).map(dayLabel).join(', ') || 'Included'}</b>
-          </div>
-          <div className="detail-row">
-            <span>Included events</span>
-            <b>{passData.selection?.count || 0} of {policy?.includedEventCount}</b>
-          </div>
-          <div className="banner-actions">
-            <Button to="/portal/registration" variant="ghost" icon={Ticket}>
-              Tickets
-            </Button>
-            <Button to="/portal/select-events" icon={ArrowRight}>
-              Choose events
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
-
-      {!pass.loading && !passData ? (
-        <Panel className="buy-pass">
-          <div className="buy-pass-head">
-            <div>
-              <Eyebrow>STEP 01</Eyebrow>
-              <h2>Buy the convention pass</h2>
-              <p className="buy-price">{money(policy?.passPricePaise)}</p>
-            </div>
-            <CreditCard size={40} strokeWidth={1} />
-          </div>
-          <ul className="check-list">
-            <li>
-              <Check size={15} strokeWidth={2.2} /> Lunch on{' '}
-              {(policy?.lunchIncludedDays || []).map(dayLabel).join(' and ')}
-            </li>
-            <li>
-              <Check size={15} strokeWidth={2.2} />{' '}
-              {policy?.includedSelectionMode === 'exact' ? 'Exactly' : 'Up to'}{' '}
-              {policy?.includedEventCount} included events within{' '}
-              {money(policy?.includedValueCapPaise)}
-            </li>
-            <li>
-              <Check size={15} strokeWidth={2.2} /> Entry ticket with a scannable token
-            </li>
-            <li>
-              <Check size={15} strokeWidth={2.2} /> Add-on events available after activation
-            </li>
-          </ul>
-          {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-          {order ? (
-            <div className="order-box" style={{ marginBottom: '14px' }}>
-              <div className="detail-row">
-                <span>Amount</span>
-                <b>{money(order.amountPaise)}</b>
-              </div>
-              <div className="detail-row">
-                <span>Payment method</span>
-                <b>{order.mock ? 'Instant verification' : 'Razorpay Secure'}</b>
-              </div>
-            </div>
-          ) : null}
-          <Button onClick={handleBuyPass} disabled={Boolean(busy)} icon={CreditCard}>
-            {busy
-              ? 'Opening payment gateway…'
-              : order
-                ? `Complete pass payment · ${money(order.amountPaise)}`
-                : `Pay ${money(policy?.passPricePaise)} with Razorpay`}
-          </Button>
-          <p className="notice">
-            <ShieldCheck size={16} strokeWidth={1.5} />
-            {order?.mock === false
-              ? 'Card and UPI details are encrypted and entered on the payment gateway, never on this site.'
-              : 'Completing payment activates your convention pass and issues your verified badge.'}
-          </p>
-        </Panel>
-      ) : null}
-    </>
-  );
-}
-
 export function PortalSelectEvents() {
-  const { editionId, slug, policy } = useSite();
+  const { editionId, slug, policy, edition } = useSite();
   const { user } = useAuth();
   const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
   const catalogue = useAsync(() => publicApi.events(slug, { pageSize: 100 }), [slug], {
@@ -592,6 +323,9 @@ export function PortalSelectEvents() {
   const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
+  const teams = useAsync(() => portalApi.teams(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
 
   const passData = pass.data?.data;
   const selection = passData?.selection;
@@ -600,6 +334,8 @@ export function PortalSelectEvents() {
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
   const [payStage, setPayStage] = useState(null);
+  const [payTitle, setPayTitle] = useState('');
+  const [payAmount, setPayAmount] = useState(0);
   const [slowPayment, setSlowPayment] = useState(false);
 
   // Re-sync the draft only when the server's saved selection actually changes,
@@ -620,7 +356,9 @@ export function PortalSelectEvents() {
 
   const required = selection?.requiredCount ?? policy?.includedEventCount ?? 0;
   const mode = selection?.mode || policy?.includedSelectionMode || 'up_to';
-  const cap = selection?.capPaise ?? policy?.includedValueCapPaise ?? 0;
+  // A null cap is a real state ("no value cap"), not zero.
+  const cap = selection?.capPaise ?? policy?.includedValueCapPaise ?? null;
+  const hasCap = cap != null;
   const capInclusive = selection?.capInclusive !== false;
 
   const addonRegisteredIds = new Set(
@@ -638,17 +376,21 @@ export function PortalSelectEvents() {
     .filter((item) => selected.includes(item.eventId))
     .reduce((sum, item) => sum + item.baseValuePaise, 0);
 
-  const withinCap = capInclusive ? value <= cap : value < cap;
+  const excessPaise = !hasCap
+    ? 0
+    : capInclusive
+      ? Math.max(0, value - cap)
+      : Math.max(0, value - Math.max(0, cap - 1));
+  const paidDeltaPaise = selection?.paidDeltaPaise || 0;
+  const duePaise = Math.max(0, excessPaise - paidDeltaPaise);
   const withinCount = mode === 'exact' ? selected.length === required : selected.length <= required;
-  const valid = withinCap && withinCount && !selection?.locked;
+  const valid = withinCount && !selection?.locked;
 
   const canAdd = (event) => {
     if (selection?.locked) return false;
     if (selected.includes(event.eventId)) return true;
     if (event.selectable === false) return false;
-    if (selected.length >= required) return false;
-    const nextValue = value + event.baseValuePaise;
-    return capInclusive ? nextValue <= cap : nextValue < cap;
+    return selected.length < required;
   };
 
   // Only confirmed registrations block add-on booking; unpaid or expired holds can be re-selected
@@ -659,10 +401,15 @@ export function PortalSelectEvents() {
   );
   const addonOptions = (catalogue.data?.data || []).filter(
     (event) =>
+      event.format !== 'team' &&
       !selected.includes(event.id) &&
       !confirmedEventIds.has(event.id) &&
       event.registrationOpen,
   );
+  const teamEvents = (catalogue.data?.data || []).filter(
+    (event) => event.format === 'team' && event.registrationOpen,
+  );
+  const teamByEventId = new Map((teams.data?.data || []).map((t) => [t.eventId, t]));
   const addonTotal = addonOptions
     .filter((event) => addons.includes(event.id))
     .reduce((sum, event) => sum + event.addonPricePaise, 0);
@@ -696,14 +443,6 @@ export function PortalSelectEvents() {
       });
       return;
     }
-    const nextValue = value + option.baseValuePaise;
-    if (capInclusive ? nextValue > cap : nextValue >= cap) {
-      setMessage({
-        tone: 'error',
-        text: `Adding ${option.title} would take you past the ${money(cap)} base-value cap.`,
-      });
-      return;
-    }
     setMessage(null);
     setSelected([...selected, eventId]);
   };
@@ -712,14 +451,40 @@ export function PortalSelectEvents() {
     setBusy('save');
     setMessage(null);
     try {
-      await portalApi.saveSelections(editionId, selected);
+      const res = await portalApi.saveSelections(editionId, selected);
+      const order = res.data?.order;
+      if (order) {
+        const title = `Included Events Allowance Difference - ${edition?.name || 'Parallax'}`;
+        setPayTitle(title);
+        setPayAmount(order.amountPaise);
+        setPayStage(order.mock ? 'verifying' : null);
+        const outcome = await payOrder(editionId, order, user, title);
+        if (outcome.status !== 'paid') {
+          setPayStage(null);
+          setMessage({
+            tone: outcome.status === 'cancelled' ? 'info' : 'error',
+            text:
+              outcome.status === 'cancelled'
+                ? 'Payment was cancelled. Your over-allowance selections were not confirmed.'
+                : outcome.message || 'Payment failed. Your over-allowance selections were not confirmed.',
+          });
+          return;
+        }
+        setPayStage('success');
+      }
       await Promise.all([
         pass.reload(),
         regs.reload(),
         tickets.reload(),
       ]);
-      setMessage({ tone: 'success', text: 'Selections saved! Your included registrations and entry passes have been updated.' });
+      setMessage({
+        tone: 'success',
+        text: order
+          ? 'Difference paid and selections saved! Your included registrations and entry passes have been updated.'
+          : 'Selections saved! Your included registrations and entry passes have been updated.',
+      });
     } catch (error) {
+      setPayStage(null);
       setMessage({ tone: 'error', text: error.message });
     } finally {
       setBusy('');
@@ -730,50 +495,47 @@ export function PortalSelectEvents() {
     if (!addons.length) return;
     setBusy('addons');
     setMessage(null);
+    setPayTitle(`Add-on Event Bookings (${addons.length}) - ${edition?.name || 'Parallax'}`);
+    setPayAmount(addonTotal);
     setPayStage('preparing');
     const slowTimer = setTimeout(() => setSlowPayment(true), 7000);
     try {
       const body = await portalApi.registerAddons(editionId, addons);
       const order = body.data?.order;
-      if (order?.mock) {
-        setPayStage('verifying');
-        await portalApi.mockPay(editionId, order.orderId);
-      } else if (order) {
-        const attendeeUser = {
-          ...user,
-          fullName: user?.fullName || '',
-          email: user?.email || '',
-          phone: user?.phone || '',
-        };
-        // Close preparing overlay so Razorpay modal/drawer has 100% viewport access on Android/mobile
-        setPayStage(null);
-        const response = await openCheckout(
+      if (order) {
+        if (!order.mock) {
+          // Close preparing overlay so Razorpay modal/drawer has 100% viewport access on Android/mobile
+          setPayStage(null);
+        } else {
+          setPayStage('verifying');
+        }
+        const outcome = await payOrder(
+          editionId,
           order,
-          attendeeUser,
-          `Add-on Event Bookings (${addons.length}) - Parallax 2027`
+          user,
+          `Add-on Event Bookings (${addons.length}) - ${edition?.name || 'Parallax 2027'}`
         );
-        if (!response) {
+        if (outcome.status === 'cancelled') {
           setMessage({
             tone: 'info',
             text: 'Payment was cancelled or closed. Your add-on bookings were not charged.',
           });
           await regs.reload();
+          setPayStage(null);
           return;
         }
-        if (response.failed) {
+        if (outcome.status === 'failed') {
           setMessage({
             tone: 'error',
-            text: response.error?.message || 'Payment declined in Razorpay. Please retry or choose another payment method.',
+            text:
+              outcome.message ||
+              'Payment declined in Razorpay. Please retry or choose another payment method.',
           });
           await regs.reload();
+          setPayStage(null);
           return;
         }
-        setPayStage('verifying');
-        await portalApi.verifyPayment(editionId, {
-          orderId: order.orderId,
-          razorpayPaymentId: response.razorpay_payment_id,
-          razorpaySignature: response.razorpay_signature,
-        });
+        if (!order.mock) setPayStage('verifying');
       }
       setPayStage('success');
       setAddons([]);
@@ -811,6 +573,35 @@ export function PortalSelectEvents() {
       </Empty>
     );
   }
+  // A rejected, refunded or suspended pass cannot pick events or buy add-ons - the
+  // backend enforces this too, but the page must not pretend otherwise.
+  if (user?.status === 'suspended') {
+    return (
+      <Empty
+        title="Account suspended"
+        desc="Your account has been suspended by the organisers. Event selection and add-on purchases are closed."
+      >
+        <Button to="/portal/registration" icon={ArrowRight}>
+          Open registration status
+        </Button>
+      </Empty>
+    );
+  }
+  if (passData.status && !['active', 'pending'].includes(passData.status)) {
+    const deadPassCopy =
+      passData.status === 'refunded'
+        ? 'Your pass was refunded, so event selection and add-on purchases are closed.'
+        : passData.status === 'suspended'
+        ? 'Your convention pass has been suspended by the organisers. Event selection and add-on purchases are closed.'
+        : 'Your pass was rejected by the registration desk, so event selection and add-on purchases are closed.';
+    return (
+      <Empty title="Event selection unavailable" desc={deadPassCopy}>
+        <Button to="/portal/registration" icon={ArrowRight}>
+          Open registration status
+        </Button>
+      </Empty>
+    );
+  }
 
   return (
     <>
@@ -819,7 +610,8 @@ export function PortalSelectEvents() {
         <Ticket size={18} strokeWidth={1.4} />
         <p>
           Pass {money(passData.pricePaise)} · {mode === 'exact' ? 'Exactly' : 'Up to'} {required}{' '}
-          included events · cap {money(cap)}. Base values decide the cap; add-on prices are separate.
+          included events{hasCap ? ` · cap ${money(cap)}` : ''}. Base values decide the cap;
+          add-on prices are separate.
         </p>
       </div>
       <div className="selector-summary">
@@ -833,15 +625,25 @@ export function PortalSelectEvents() {
           <span>BASE VALUE TOTAL</span>
           <b>{money(value)}</b>
         </div>
-        <div>
-          <span>CAP ROOM</span>
-          <b>{money(Math.max(0, cap - value))}</b>
-        </div>
+        {hasCap ? (
+          <div>
+            <span>PASS ALLOWANCE</span>
+            <b>{money(cap)}</b>
+          </div>
+        ) : null}
+        {hasCap ? (
+          <div>
+            <span>{duePaise > 0 ? 'DIFFERENCE TO PAY' : 'CAP ROOM'}</span>
+            <b style={duePaise > 0 ? { color: '#fbbf24' } : undefined}>
+              {money(duePaise > 0 ? duePaise : Math.max(0, cap - value))}
+            </b>
+          </div>
+        ) : null}
         <Button variant="ghost" onClick={() => setSelected([])} icon={RefreshCw}>
           Reset
         </Button>
       </div>
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {selection?.locked ? (
         <InlineMessage tone="error">
           The selection deadline has passed. Contact the organisers for a change.
@@ -899,20 +701,68 @@ export function PortalSelectEvents() {
         <Button
           onClick={save}
           disabled={busy === 'save' || Boolean(selection?.locked) || !valid}
-          icon={Check}
+          icon={duePaise > 0 ? CreditCard : Check}
         >
-          {busy === 'save' ? 'Saving' : 'Save included selections'}
+          {busy === 'save'
+            ? 'Saving'
+            : duePaise > 0
+              ? `Pay ${money(duePaise)} & Save Selections`
+              : 'Save included selections'}
         </Button>
         <span className={valid ? 'valid-note' : 'invalid-note'}>
-          {valid
-            ? 'Within the allowance'
-            : selection?.locked
+          {!valid
+            ? selection?.locked
               ? 'Locked after the deadline'
-              : !withinCap
-                ? `Value exceeds the ${money(cap)} cap`
-                : `${selected.length} of ${required} chosen — ${mode === 'exact' ? 'exactly' : 'up to'} ${required} within ${money(cap)}`}
+              : `${selected.length} of ${required} chosen — ${mode === 'exact' ? 'exactly' : 'up to'} ${required}`
+            : duePaise > 0
+              ? `Exceeds ${money(cap)} allowance by ${money(duePaise)} (pay the difference to confirm)`
+              : 'Within the allowance'}
         </span>
       </div>
+
+      {teamEvents.length ? (
+        <div style={{ margin: '28px 0 12px 0' }}>
+          <h2 className="section-sub">Team events — Create or join a team</h2>
+          <InlineMessage tone="info">
+            Team events are booked by forming a team or joining one with an invite code — not via
+            individual checkboxes. You can form a separate team for each team event.
+          </InlineMessage>
+          <div className="choice-list" style={{ marginTop: '12px' }}>
+            {teamEvents.map((event) => {
+              const existingTeam = teamByEventId.get(event.id);
+              const basisLabel =
+                event.teamFeeBasis === 'per_team'
+                  ? `${money(event.addonPricePaise)} per team`
+                  : event.addonPricePaise > 0
+                    ? `${money(event.addonPricePaise)} per member`
+                    : 'Free';
+              return (
+                <div className="choice" key={event.id} style={{ cursor: 'default' }}>
+                  <span className="choice-check">
+                    <Users size={14} strokeWidth={2} />
+                  </span>
+                  <span className="choice-title">
+                    <b>{event.title}</b>
+                    <small>
+                      Team {event.teamMinSize}–{event.teamMaxSize} · {basisLabel}
+                      {existingTeam ? ` · In team "${existingTeam.name}"` : ''}
+                    </small>
+                  </span>
+                  <span className="choice-price">
+                    <Button
+                      to={existingTeam ? '/portal/teams' : `/portal/teams?event=${event.id}`}
+                      variant={existingTeam ? 'ghost' : 'primary'}
+                      icon={ArrowRight}
+                    >
+                      {existingTeam ? 'Manage Team' : 'Create / Join Team'}
+                    </Button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <h2 className="section-sub">Additional paid events</h2>
       <p className="muted">
@@ -922,8 +772,8 @@ export function PortalSelectEvents() {
         <InlineMessage tone="info">
           You still have {required - selected.length} included{' '}
           {required - selected.length === 1 ? 'slot' : 'slots'} on your pass. Events inside your{' '}
-          {money(cap)} allowance are already covered, so claim them above instead of paying the
-          add-on price here.
+          {hasCap ? `${money(cap)} allowance` : 'included allowance'} are already covered, so claim
+          them above instead of paying the add-on price here.
         </InlineMessage>
       ) : null}
       <div className="addon-box">
@@ -947,7 +797,14 @@ export function PortalSelectEvents() {
                   {event.categoryName} · {event.format}
                 </small>
               </span>
-              <b>{money(event.addonPricePaise)}</b>
+              <b>
+                {event.addonPricePaise > 0 ? (
+                  <s style={{ opacity: 0.55, marginRight: 6 }}>
+                    {money(eventListPricePaise(event.addonPricePaise, event.slug))}
+                  </s>
+                ) : null}
+                {money(event.addonPricePaise)}
+              </b>
             </label>
           ))
         ) : (
@@ -989,9 +846,9 @@ export function PortalSelectEvents() {
 
       <PaymentProgress
         stage={payStage}
-        amount={addonTotal}
+        amount={payAmount || addonTotal}
         slow={slowPayment}
-        title={payStage === 'success' ? 'Add-on Bookings Confirmed!' : undefined}
+        title={payStage === 'success' ? 'Payment Confirmed!' : payTitle || undefined}
         subtitle={payStage === 'success' ? 'Your tickets and entry passes have been updated.' : undefined}
       />
     </>
@@ -1000,16 +857,70 @@ export function PortalSelectEvents() {
 
 export function PortalRegistrations() {
   const { editionId } = useSite();
-  const [activeTab, setActiveTab] = useState('events');
+  const { user } = useAuth();
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
   const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
     enabled: Boolean(editionId),
   });
+  const pass = useAsync(() => portalApi.pass(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const teams = useAsync(() => portalApi.teams(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const eventsCatalog = useAsync(() => publicApi.events(editionId), [editionId], {
+    enabled: Boolean(editionId),
+  });
+  const myTeams = teams.data?.data || [];
+  const openTeams = myTeams.filter((team) => team.status === 'active');
+  const isSuspended = user?.status === 'suspended' || pass.data?.data?.status === 'suspended';
   const [confirm, setConfirm] = useState(null);
   const [message, setMessage] = useState(null);
   const rows = regs.data?.data || [];
+  const hasVisitedTeamsPortal = (() => {
+    try {
+      return localStorage.getItem('px_visited_teams_portal') === '1';
+    } catch {
+      return false;
+    }
+  })();
+
+  const eventById = useMemo(() => {
+    const map = new Map();
+    for (const ev of eventsCatalog.data?.data || []) {
+      if (ev?.id) map.set(String(ev.id), ev);
+    }
+    return map;
+  }, [eventsCatalog.data]);
+
+  const dateGroups = useMemo(() => {
+    const groups = new Map();
+    const sorted = [...rows].sort((a, b) => {
+      const ta = a.eventStartsAt ? new Date(a.eventStartsAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const tb = b.eventStartsAt ? new Date(b.eventStartsAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return ta - tb;
+    });
+    for (const row of sorted) {
+      const ev = eventById.get(String(row.eventId || ''));
+      const rawDate = row.eventStartsAt || ev?.startsAt || null;
+      const d = rawDate ? new Date(rawDate) : null;
+      const valid = d && !Number.isNaN(d.getTime());
+      const key = valid ? d.toISOString().slice(0, 10) : 'tba';
+      const label = valid
+        ? d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })
+        : 'Schedule TBA';
+      const subLabel = valid
+        ? d.toLocaleDateString('en-IN', { weekday: 'long' })
+        : 'Date to be announced';
+      if (!groups.has(key)) {
+        groups.set(key, { key, label, subLabel, items: [] });
+      }
+      groups.get(key).items.push({ row, ev, rawDate });
+    }
+    return Array.from(groups.values());
+  }, [rows, eventById]);
   const cancelCutoff = confirm?.eventStartsAt
     ? new Date(confirm.eventStartsAt).getTime() - 24 * 60 * 60 * 1000
     : null;
@@ -1030,97 +941,213 @@ export function PortalRegistrations() {
 
   return (
     <>
-      <div className="portal-subtabs" style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <Button
-          variant={activeTab === 'events' ? 'primary' : 'ghost'}
-          icon={Ticket}
-          onClick={() => setActiveTab('events')}
-        >
-          My Event Registrations
-          {rows.length ? <Badge tone="accent">{rows.length}</Badge> : null}
-        </Button>
-        <Button
-          variant={activeTab === 'teams' ? 'primary' : 'ghost'}
-          icon={Users}
-          onClick={() => setActiveTab('teams')}
-        >
-          My Teams &amp; Invites
-        </Button>
-      </div>
-
-      {activeTab === 'teams' ? (
-        <PortalTeams />
-      ) : (
-        <>
           <SectionHead
             kicker="Selection Record"
             title="My registrations"
             action={
-              <Button to="/portal/select-events" variant="ghost" icon={Plus}>
-                Add events
-              </Button>
+              !isSuspended ? (
+                <Button to="/portal/events" variant="ghost" icon={Plus}>
+                  Open event worklist
+                </Button>
+              ) : null
             }
           />
-          {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+          <Feedback message={message} />
+          {myTeams.length && !hasVisitedTeamsPortal ? (
+            <InlineMessage tone="info">
+              {openTeams.length
+                ? `You are on ${openTeams.length} open team roster${openTeams.length === 1 ? '' : 's'}. Share the invite code with your teammates and lock the roster before the event starts.`
+                : 'Your team rosters are set. Every member has their own event registration.'}{' '}
+              <Link to="/portal/teams" style={{ color: '#38bdf8', fontWeight: 600 }}>
+                Manage Teams →
+              </Link>
+            </InlineMessage>
+          ) : null}
           {regs.loading ? <Loading label="Loading registrations" rows={2} /> : null}
           {regs.error ? <ErrorBox error={regs.error} onRetry={regs.reload} /> : null}
           {!regs.loading && !rows.length ? (
             <Empty title="No registrations yet" desc="Included selections and add-on events appear here.">
-              <Button to="/portal/select-events" icon={ArrowRight}>
-                Choose events
-              </Button>
+              {!isSuspended ? (
+                <Button to="/portal/events" icon={ArrowRight}>
+                  Choose events
+                </Button>
+              ) : null}
             </Empty>
           ) : null}
-          <div className="registration-list">
-            {rows.map((row) => (
-              <div className="registration-row" key={row.id}>
-                <span className="event-dot" />
-                <div>
-                  <b>{row.eventTitle}</b>
-                  <small>
-                    {row.registrationNumber} · {row.category} ·{' '}
-                    {row.teamName ? `${row.teamName} · ` : ''}
-                    {row.kind === 'included' ? 'Included with Pass (Free)' : row.kind}
-                  </small>
-                  {row.status === 'cancelled' && row.cancelledBy === 'admin' ? (
-                    <div style={{ fontSize: '12px', color: '#f87171', marginTop: '4px', fontWeight: 500 }}>
-                      ⚠️ Removed by administration{row.cancellationReason ? `: ${row.cancellationReason}` : ''}
+          {rows.length ? (
+            <div className="reg-timeline">
+              {dateGroups.map((group) => (
+                <section className="reg-tl-group" key={group.key}>
+                  <div className="reg-tl-date-row">
+                    <span className="reg-tl-diamond" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18">
+                        <polygon
+                          points="12,1.5 22.5,12 12,22.5 1.5,12"
+                          fill="#12100b"
+                          stroke="#d4af37"
+                          strokeWidth="1.2"
+                        />
+                        <polygon points="12,3.5 18.5,12 12,12" fill="#fde68a" />
+                        <polygon points="12,3.5 5.5,12 12,12" fill="#f5d061" />
+                        <polygon points="5.5,12 12,20.5 12,12" fill="#b45309" />
+                        <polygon points="18.5,12 12,20.5 12,12" fill="#d97706" />
+                        <line x1="12" y1="3.5" x2="12" y2="20.5" stroke="#fef3c7" strokeOpacity="0.45" strokeWidth="0.6" />
+                        <line x1="5.5" y1="12" x2="18.5" y2="12" stroke="#fef3c7" strokeOpacity="0.45" strokeWidth="0.6" />
+                      </svg>
+                    </span>
+                    <div className="reg-tl-date-head">
+                      <strong>{group.label}</strong>
+                      <span>{group.subLabel}</span>
                     </div>
-                  ) : row.status === 'cancelled' && row.cancelledBy === 'user' ? (
-                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginTop: '4px' }}>
-                      Cancelled by you · Seat released
-                    </div>
-                  ) : null}
-                </div>
-                <span className="reg-fee">{money(row.feePaise)}</span>
-                <div>
-                  {row.status === 'cancelled' ? (
-                    row.cancelledBy === 'admin' ? (
-                      <Badge tone="bad">Removed by Admin</Badge>
-                    ) : (
-                      <Badge tone="muted">Cancelled</Badge>
-                    )
-                  ) : (
-                    <StatusBadge status={row.status} />
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  {/* The full receipt (payment ID, paid date, event) needs the
-                      ticket payload, so this jumps to the credential that owns it. */}
-                  {row.kind !== 'included' && row.feePaise > 0 && row.status !== 'cancelled' ? (
-                    <Link className="table-action" to="/portal/registration">
-                      Receipt
-                    </Link>
-                  ) : null}
-                  {row.status !== 'cancelled' ? (
-                    <button className="table-action" onClick={() => setConfirm(row)}>
-                      Cancel
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
+                  </div>
+
+                  <div className="reg-tl-cards">
+                    {group.items.map(({ row, ev, rawDate }) => {
+                      const title = row.eventTitle || ev?.title || 'Event';
+                      const isCancelled = row.status === 'cancelled';
+                      const isEventCancelled = Boolean(
+                        row.eventStatus && ['cancelled', 'closed', 'draft'].includes(row.eventStatus)
+                      );
+                      const statusInfo = isEventCancelled
+                        ? { label: 'Event Cancelled', tone: 'bad' }
+                        : isCancelled && row.cancelledBy === 'admin'
+                          ? { label: 'Removed by Admin', tone: 'bad' }
+                          : isCancelled
+                            ? { label: 'Cancelled', tone: 'muted' }
+                            : row.status === 'confirmed'
+                              ? { label: 'Confirmed', tone: 'good' }
+                              : { label: row.status || 'Pending', tone: 'warn' };
+
+                      const billingLabel =
+                        row.billingRole === 'team_covered'
+                          ? 'Team entry · covered by team'
+                          : row.billingRole === 'payer'
+                            ? 'Team entry · paid by you'
+                            : row.kind === 'included'
+                              ? 'Included with Pass (Free)'
+                              : row.kind;
+
+                      const timeStr = rawDate
+                        ? new Date(rawDate).toLocaleTimeString('en-IN', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })
+                        : 'Time TBA';
+
+                      const bannerSrc =
+                        ev?.posterUrl || ev?.bannerUrl || ev?.imageUrl || regBackdrop(row.category);
+                      const venue = ev?.venue || ev?.room || null;
+                      const formatLabel = ev?.teamMode === 'team' ? 'Team Event' : 'Solo Entry';
+
+                      return (
+                        <article
+                          className={`reg-tl-card${isCancelled || isEventCancelled ? ' is-cancelled' : ''}`}
+                          key={row.id}
+                        >
+                          <div className="reg-tl-main">
+                            <div className="reg-tl-top">
+                              <div className="reg-tl-top-left">
+                                <span className="reg-tl-time">{timeStr}</span>
+                                <span className="reg-tl-cat">{row.category || 'Event'}</span>
+                              </div>
+                              <span className="reg-tl-num">{row.registrationNumber}</span>
+                            </div>
+
+                            <h3 className="reg-tl-title">
+                              {ev?.slug ? (
+                                <Link to={`/events/${ev.slug}`}>{title}</Link>
+                              ) : (
+                                title
+                              )}
+                            </h3>
+
+                            <div className="reg-tl-specs">
+                              <span className="reg-tl-spec">
+                                <b>Pass:</b> {billingLabel}
+                              </span>
+                              <span className="reg-tl-spec">
+                                <b>Mode:</b> {formatLabel}
+                              </span>
+                              {venue ? (
+                                <span className="reg-tl-spec">
+                                  <b>Venue:</b> {venue}
+                                </span>
+                              ) : null}
+                              {row.teamName ? (
+                                <span className="reg-tl-spec">
+                                  <b>Squad:</b> {row.teamName}
+                                </span>
+                              ) : null}
+                            </div>
+
+                            {isEventCancelled ? (
+                              <div className="reg-tl-alert is-bad">
+                                Event cancelled by the organisers
+                              </div>
+                            ) : isCancelled && row.cancelledBy === 'admin' ? (
+                              <div className="reg-tl-alert is-bad">
+                                Removed by administration
+                                {row.cancellationReason ? `: ${row.cancellationReason}` : ''}
+                              </div>
+                            ) : isCancelled && row.cancelledBy === 'user' ? (
+                              <div className="reg-tl-alert is-muted">
+                                Cancelled by you · Seat released
+                              </div>
+                            ) : null}
+
+                            <div className="reg-tl-foot">
+                              <div className="reg-tl-badges">
+                                <Badge tone={statusInfo.tone}>{statusInfo.label}</Badge>
+                                {row.paymentStatus === 'refunded' ? (
+                                  <Badge tone="bad">Refunded</Badge>
+                                ) : row.paymentStatus === 'refund_pending' ? (
+                                  <Badge tone="warn">Refund Pending</Badge>
+                                ) : (
+                                  <span className="reg-tl-fee">
+                                    {row.feePaise > 0 ? money(row.feePaise) : '₹0 · Pass'}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="reg-tl-actions">
+                                {row.status === 'confirmed' ? (
+                                  <Link className="reg-tl-btn is-primary" to="/portal/registration">
+                                    Ticket <ArrowRight size={12} strokeWidth={2.2} />
+                                  </Link>
+                                ) : null}
+                                {row.teamId ? (
+                                  <Link className="reg-tl-btn" to="/portal/teams">
+                                    Team <ArrowUpRight size={12} strokeWidth={2} />
+                                  </Link>
+                                ) : row.kind !== 'included' && row.feePaise > 0 ? (
+                                  <Link className="reg-tl-btn" to="/portal/registration">
+                                    Receipt <ArrowUpRight size={12} strokeWidth={2} />
+                                  </Link>
+                                ) : null}
+                                {row.status !== 'cancelled' ? (
+                                  <button
+                                    type="button"
+                                    className="reg-tl-btn is-danger"
+                                    onClick={() => setConfirm(row)}
+                                  >
+                                    Cancel
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="reg-tl-banner">
+                            <img src={bannerSrc} alt={title} loading="lazy" />
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : null}
           <Sheet open={Boolean(confirm)} title="Cancel registration" onClose={() => setConfirm(null)}>
             <p className="muted">
               Cancel the registration for <b>{confirm?.eventTitle}</b>? Your seat is released
@@ -1161,285 +1188,10 @@ export function PortalRegistrations() {
               </Button>
             </div>
           </Sheet>
-        </>
-      )}
     </>
   );
 }
 
-export function PortalTickets() {
-  const { user } = useAuth();
-  const { edition, editionId } = useSite();
-  const { accent } = useTheme();
-  const [qrTheme, setQrTheme] = useState('auto');
-  const tickets = useAsync(() => portalApi.tickets(editionId), [editionId], {
-    enabled: Boolean(editionId),
-  });
-  const profile = useAsync(() => authApi.profile(), [], { enabled: Boolean(user) });
-  const [message, setMessage] = useState(null);
-  const [downloadTicket, setDownloadTicket] = useState(null);
-  const [receiptTicket, setReceiptTicket] = useState(null);
-  const qrDownloadRef = useRef(null);
-  const rows = tickets.data?.data || [];
-  const prof = profile.data?.data || {};
-
-  // The QR is drawn in the browser from the signed token the API returns, so
-  // downloading it is just a canvas export.
-  useEffect(() => {
-    if (!downloadTicket) return;
-    const canvas = qrDownloadRef.current?.querySelector('canvas');
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png');
-    link.download = `parallax-pass-${downloadTicket.registrationNumber || downloadTicket.id}.png`;
-    link.click();
-    setMessage({ tone: 'success', text: 'Pass QR downloaded (PNG).' });
-    setDownloadTicket(null);
-  }, [downloadTicket]);
-
-  const copy = async (token) => {
-    try {
-      await navigator.clipboard.writeText(token);
-      setMessage({ tone: 'success', text: 'Ticket token copied to clipboard.' });
-    } catch {
-      setMessage({ tone: 'error', text: 'Clipboard access was blocked.' });
-    }
-  };
-
-  const printBadge = () => {
-    window.print();
-  };
-
-  const downloadQr = (ticket) => {
-    if (!ticket?.token) {
-      setMessage({ tone: 'error', text: 'This ticket has no scannable token yet.' });
-      return;
-    }
-    setDownloadTicket(ticket);
-  };
-
-  return (
-    <>
-      <SectionHead
-        kicker="Entry Credentials"
-        title="Your official convention pass"
-        action={
-          rows.length ? (
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              <Button
-                to="/portal/registration"
-                variant="ghost"
-                icon={IdCard}
-              >
-                Open pass &amp; save PDF
-              </Button>
-              <Button variant="light" onClick={printBadge} icon={Printer}>
-                Print / Save pass
-              </Button>
-            </div>
-          ) : null
-        }
-      />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-      {tickets.loading ? <Loading label="Loading tickets" rows={2} /> : null}
-      {tickets.error ? <ErrorBox error={tickets.error} onRetry={tickets.reload} /> : null}
-      {!tickets.loading && !rows.length ? (
-        <Empty title="No ticket issued yet" desc="Tickets are issued when a pass or paid registration activates.">
-          <Button to="/portal/registration" icon={ArrowRight}>
-            Get the pass
-          </Button>
-        </Empty>
-      ) : null}
-
-      <div className="makemypass-container">
-        {rows.map((ticket) => (
-          <div key={ticket.id} className="makemypass-card rise">
-            {/* Top Lanyard Slot */}
-            <div className="badge-hanger">
-              <div className="badge-lanyard-strap" />
-              <div className="badge-slot" />
-            </div>
-
-            {/* Badge Masthead */}
-            <div className="badge-masthead">
-              <div className="badge-brand-center">
-                <img src={LOGO} alt="Parallax" className="badge-logo-center" />
-                <div className="badge-sub-row">
-                  <img src={ISTE} alt="ISTE" className="badge-host-logo-inline" />
-                  <span className="badge-sub">{edition?.organizer || 'ISTE STUDENT CHAPTER · NSSCE'}</span>
-                </div>
-              </div>
-              <div className="badge-campus-tag">
-                <MapPin size={12} />
-                <span>{edition?.host || 'NSS College of Engineering, Palakkad'}</span>
-              </div>
-            </div>
-
-            {/* Attendee Identity Section */}
-            <div className="badge-attendee-section">
-              <div className="badge-role-pill">
-                <span>{ticket.kind === 'pass' ? 'ALL-ACCESS DELEGATE' : 'EVENT PARTICIPANT'}</span>
-              </div>
-              <h2 className="badge-name">{prof.fullName || user?.fullName || 'Convention Delegate'}</h2>
-              <p className="badge-college">
-                {prof.collegeName || 'NSS College of Engineering, Palakkad'}
-              </p>
-              {prof.branch || prof.course ? (
-                <p className="badge-dept">
-                  {[prof.course, prof.branch, prof.yearOfStudy ? `Year ${prof.yearOfStudy}` : null].filter(Boolean).join(' · ')}
-                </p>
-              ) : null}
-              <div className="badge-reg-strip">
-                <span className="badge-reg-num">REF #{ticket.registrationNumber}</span>
-                <span className="badge-status-chip">
-                  <CheckCircle2 size={12} />
-                  <span>{ticket.status === 'active' ? 'VALID PASS' : ticket.status.toUpperCase()}</span>
-                </span>
-              </div>
-            </div>
-
-            {/* Perforation Line with Side Notches */}
-            <div className="badge-perforation">
-              <div className="notch-cut notch-left" />
-              <div className="perf-line" />
-              <div className="notch-cut notch-right" />
-            </div>
-
-            {/* Core QR Matrix Box with Theme Styling & Laser Sweep */}
-            <div className="badge-qr-box">
-              <div className="qr-reticle reticle-tl" />
-              <div className="qr-reticle reticle-tr" />
-              <div className="qr-reticle reticle-bl" />
-              <div className="qr-reticle reticle-br" />
-              <div className="qr-matrix-surface">
-                <BrandedQr
-                  value={ticket.token}
-                  title={`QR entry pass for ${ticket.title}`}
-                  className="qr-img"
-                />
-              </div>
-
-              {/* QR Theme Quick Switcher */}
-              <div className="qr-mode-selector">
-                <button
-                  type="button"
-                  className={`qr-mode-pill ${qrTheme === 'auto' ? 'is-active' : ''}`}
-                  onClick={() => setQrTheme('auto')}
-                  title="Follow active website theme"
-                >
-                  Theme Auto
-                </button>
-                <button
-                  type="button"
-                  className={`qr-mode-pill ${qrTheme === 'light' ? 'is-active' : ''}`}
-                  onClick={() => setQrTheme('light')}
-                  title="High-contrast print mode"
-                >
-                  Print High-Contrast
-                </button>
-              </div>
-            </div>
-
-            {/* Security Token Bar */}
-            <div className="badge-token-bar">
-              <span className="token-label">TOKEN</span>
-              <code className="token-code">{ticket.token}</code>
-              <button
-                type="button"
-                className="token-copy-btn"
-                onClick={() => copy(ticket.token)}
-                title="Copy token to clipboard"
-                aria-label="Copy ticket token"
-              >
-                <Clipboard size={14} />
-              </button>
-            </div>
-
-            {/* Convention Logistics Stub */}
-            <div className="badge-logistics-grid">
-              <div className="logistics-cell">
-                <Calendar size={13} />
-                <div>
-                  <span className="cell-lbl">DATES</span>
-                  <b>{ticket.startsAt ? dateTime(ticket.startsAt) : dateRange(edition?.startsAt, edition?.endsAt)}</b>
-                </div>
-              </div>
-              <div className="logistics-cell">
-                <Utensils size={13} />
-                <div>
-                  <span className="cell-lbl">MEALS</span>
-                  <b>{(edition?.policy?.lunchIncludedDays || ['day1', 'day2']).length ? 'LUNCH INCLUDED' : 'NOT INCLUDED'}</b>
-                </div>
-              </div>
-              <div className="logistics-cell full-width">
-                <MapPin size={13} />
-                <div>
-                  <span className="cell-lbl">VENUE & CHECK-IN</span>
-                  <b>
-                    {ticket.venueRoom
-                      ? `${ticket.venueRoom.toUpperCase()} · ${(edition?.venue || 'NSSCE CAMPUS').toUpperCase()}`
-                      : (edition?.venue ? edition.venue.toUpperCase() : 'NSSCE CAMPUS, PALAKKAD')}
-                  </b>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Bar */}
-            <div className="badge-actions-bar">
-              <Button variant="light" onClick={printBadge} icon={Printer}>
-                Print pass
-              </Button>
-              <Button variant="ghost" onClick={() => downloadQr(ticket)} icon={Download}>
-                Save QR
-              </Button>
-              {ticket.kind === 'registration' ? (
-                <Button
-                  variant="ghost"
-                  onClick={() => setReceiptTicket(ticket)}
-                  icon={ReceiptText}
-                >
-                  Payment receipt
-                </Button>
-              ) : null}
-            </div>
-
-            {/* Subtle Security Footer */}
-            <div className="badge-footer">
-              <span>ISTE NSSCE CHAPTER · OFFICIAL ENTRY PASS</span>
-              <span className="badge-security-hash">SECURE HMAC-SHA256 DERIVED</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      {downloadTicket ? (
-        <div ref={qrDownloadRef} style={{ display: 'none' }} aria-hidden="true">
-          <QRCodeCanvas
-            value={downloadTicket.token}
-            size={640}
-            level="M"
-            marginSize={4}
-            bgColor="#ffffff"
-            fgColor="#000000"
-          />
-        </div>
-      ) : null}
-      {receiptTicket ? (
-        <TicketReceiptSheet
-          ticket={receiptTicket}
-          profile={prof}
-          user={user}
-          edition={edition}
-          onClose={() => setReceiptTicket(null)}
-        />
-      ) : null}
-    </>
-  );
-}
-
-/**
- * Printable receipt for a single event payment: order, gateway reference,
- * amount, attendee and event, in the same paper style as the pass receipt.
- */
 function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
   const amount = Number(ticket?.amountPaise || 0);
   const holder = profile?.fullName || user?.fullName || 'Convention Delegate';
@@ -1452,7 +1204,7 @@ function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
   return (
     <Sheet
       open
-      title="Parallax 2027 · Event Payment Receipt"
+      title={`${edition?.name || 'Parallax 2027'} · Event Payment Receipt`}
       onClose={onClose}
       wide
       eyebrow="RECEIPT & CONFIRMATION"
@@ -1468,7 +1220,7 @@ function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
               />
               <div className="px-receipt-title">
                 <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>
-                  PARALLAX 2027 · PAYMENT RECEIPT
+                  {(edition?.name || 'Parallax 2027').toUpperCase()} · PAYMENT RECEIPT
                 </h2>
                 <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#475569' }}>
                   25th Annual State Student Convention · ISTE Kerala Section &amp; NSSCE Palakkad
@@ -1601,7 +1353,9 @@ function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
             Computer-generated receipt for event registration #{ticket?.registrationNumber}. Quote the
             payment ID for any refund or reconciliation query. Retain it for reimbursement.
             Non-transferable; valid with a photo ID. Helpdesk:{' '}
-            {edition?.helpdeskPhone || '+91 94460 00000'} · parallax-iste.vercel.app
+            {edition?.helpdeskPhone && !/00000/.test(edition.helpdeskPhone)
+              ? edition.helpdeskPhone
+              : `${typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://parallax-iste.vercel.app'}/contact`}
           </p>
         </div>
 
@@ -1623,24 +1377,55 @@ function TicketReceiptSheet({ ticket, profile, user, edition, onClose }) {
 
 export function PortalTeams() {
   const { editionId, slug, policy } = useSite();
+  const { user } = useAuth();
+  useEffect(() => {
+    try {
+      localStorage.setItem('px_visited_teams_portal', '1');
+    } catch {}
+  }, []);
+  const [searchParams] = useSearchParams();
+  const requestedEventId = searchParams.get('event') || '';
   const teams = useAsync(() => portalApi.teams(editionId), [editionId], { enabled: Boolean(editionId) });
   const pass = useAsync(() => portalApi.pass(editionId), [editionId], { enabled: Boolean(editionId) });
+  const regs = useAsync(() => portalApi.registrations(editionId), [editionId], { enabled: Boolean(editionId) });
   const catalogue = useAsync(() => publicApi.events(slug, { format: 'team', pageSize: 100 }), [slug], {
     enabled: Boolean(slug),
   });
-  const [form, setForm] = useState({ eventId: '', name: '' });
+  const [form, setForm] = useState({ eventId: requestedEventId, name: '' });
   const [joinCode, setJoinCode] = useState('');
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState('');
+  // Leaving as leader hands the team to the next member; disbanding is a
+  // separate, explicit choice, so the prompt offers both.
+  const [confirmLeave, setConfirmLeave] = useState(null);
 
-  const teamEvents = catalogue.data?.data || [];
+  const allTeamEvents = catalogue.data?.data || [];
+  const registeredEventIds = new Set(
+    (regs.data?.data || [])
+      .filter((r) => ['confirmed', 'reserved'].includes(r.status))
+      .map((r) => r.eventId),
+  );
+  const teamEvents = allTeamEvents.filter((event) => registeredEventIds.has(event.id));
   const rows = teams.data?.data || [];
+  const joinedEventIds = new Set(rows.map((team) => team.eventId));
   const passActive = pass.data?.data?.status === 'active';
   const needsPass = Boolean(policy?.teamMembersRequirePass) && !passActive && !pass.loading;
+  const selectedEvent = teamEvents.find((event) => event.id === form.eventId);
 
   useEffect(() => {
-    if (!form.eventId && teamEvents.length) setForm((current) => ({ ...current, eventId: teamEvents[0].id }));
-  }, [teamEvents.length]);
+    if (requestedEventId && teamEvents.some((event) => event.id === requestedEventId)) {
+      setForm((current) => ({ ...current, eventId: requestedEventId }));
+      return;
+    }
+    if ((!form.eventId || !teamEvents.some((e) => e.id === form.eventId) || joinedEventIds.has(form.eventId)) && teamEvents.length) {
+      const nextOpen = teamEvents.find((event) => !joinedEventIds.has(event.id)) || teamEvents[0];
+      if (nextOpen && nextOpen.id !== form.eventId) {
+        setForm((current) => ({ ...current, eventId: nextOpen.id }));
+      }
+    } else if (!teamEvents.length && form.eventId) {
+      setForm((current) => ({ ...current, eventId: '' }));
+    }
+  }, [requestedEventId, teamEvents.length, rows.length, regs.data]);
 
   const run = async (key, action, success) => {
     setBusy(key);
@@ -1674,51 +1459,126 @@ export function PortalTeams() {
           </Link>
         </InlineMessage>
       ) : null}
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <div className="team-protocol-strip">
+        <div className="team-protocol-col">
+          <span className="team-protocol-tag">01 / CREATE</span>
+          <p>Form a separate team for each team event you want to compete in.</p>
+        </div>
+        <div className="team-protocol-col">
+          <span className="team-protocol-tag">02 / INVITE</span>
+          <p>Share the invite code with teammates so they can join from the Portal or invite link.</p>
+        </div>
+        <div className="team-protocol-col">
+          <span className="team-protocol-tag">03 / LOCK ROSTER</span>
+          <p>Lock the roster before the event starts to finalize your squad for check-in.</p>
+        </div>
+      </div>
+      <Feedback message={message} />
 
-      <div className="portal-columns">
-        <Panel>
-          <Eyebrow>CREATE A TEAM</Eyebrow>
-          <FieldGrid>
-            <Field label="Team event">
-              <select
-                value={form.eventId}
-                onChange={(event) => setForm({ ...form, eventId: event.target.value })}
+      <div className="portal-columns team-columns">
+        <div className="team-action-card">
+          <div className="team-action-head">
+            <span>01 / SQUAD FORMATION</span>
+            <Users size={15} strokeWidth={1.8} />
+          </div>
+          <h3>Create a team</h3>
+          {!regs.loading && !teamEvents.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+              <p className="team-action-note">
+                Register for a team event in My Events first before creating a team.
+              </p>
+              <div style={{ marginTop: 'auto' }}>
+                <Link to="/portal/events" className="login-machined-btn is-gold">
+                  <span>Go to My Events</span>
+                  <ArrowRight size={14} strokeWidth={2} />
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <>
+              <FieldGrid>
+                <Field label="Registered team event">
+                  <select
+                    value={form.eventId}
+                    onChange={(event) => setForm({ ...form, eventId: event.target.value })}
+                  >
+                    {teamEvents.map((event) => (
+                      <option key={event.id} value={event.id} disabled={joinedEventIds.has(event.id)}>
+                        {event.title} ({event.teamMinSize}-{event.teamMaxSize})
+                        {joinedEventIds.has(event.id) ? ' — Already in a team' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedEvent ? (
+                    <small className="muted" style={{ display: 'block', marginTop: '6px' }}>
+                      {selectedEvent.addonPricePaise > 0
+                        ? selectedEvent.teamFeeBasis === 'per_team'
+                          ? `Fee: ${money(selectedEvent.addonPricePaise)} per team (paid once; teammates join free).`
+                          : `Fee: ${money(selectedEvent.addonPricePaise)} per participant (each member pays their own seat).`
+                        : 'Free team event (pass required).'}
+                    </small>
+                  ) : null}
+                </Field>
+                <Field label="Team name">
+                  <input
+                    value={form.name}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    placeholder="Vector Five"
+                    maxLength={100}
+                  />
+                </Field>
+              </FieldGrid>
+              <button
+                type="button"
+                className="login-machined-btn is-gold"
+                onClick={() =>
+                  run(
+                    'create',
+                    async () => {
+                      const body = await portalApi.createTeam(editionId, {
+                        eventId: form.eventId,
+                        name: form.name,
+                      });
+                      // A priced team seat is reserved, not confirmed: the team
+                      // exists but nobody is admitted until the seat is paid.
+                      const payment = body.data?.payment;
+                      if (payment) {
+                        const outcome = await payOrder(
+                          editionId,
+                          payment,
+                          user,
+                          `Team seat - ${body.data?.name || form.name}`,
+                        );
+                        if (outcome.status !== 'paid') {
+                          clearAsyncCache();
+                          throw new Error(
+                            outcome.status === 'cancelled'
+                              ? 'Team created, but the seat payment was cancelled. Pay it from the team card to confirm your place.'
+                              : outcome.message ||
+                                  'Team created, but the seat payment failed. Try paying again from the team card.',
+                          );
+                        }
+                      }
+                    },
+                    'Team created. Share the invite code.',
+                  ).then((ok) => {
+                    if (ok) setForm((f) => ({ ...f, name: '' }));
+                  })
+                }
+                disabled={busy === 'create' || !form.eventId || form.name.trim().length < 2}
               >
-                {teamEvents.map((event) => (
-                  <option key={event.id} value={event.id}>
-                    {event.title} ({event.teamMinSize}-{event.teamMaxSize})
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Team name">
-              <input
-                value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder="Vector Five"
-                maxLength={100}
-              />
-            </Field>
-          </FieldGrid>
-          <Button
-            onClick={() =>
-              run(
-                'create',
-                () => portalApi.createTeam(editionId, { eventId: form.eventId, name: form.name }),
-                'Team created. Share the invite code.',
-              ).then((ok) => {
-                if (ok) setForm((f) => ({ ...f, name: '' }));
-              })
-            }
-            disabled={busy === 'create' || !form.eventId || form.name.trim().length < 2}
-            icon={Users}
-          >
-            {busy === 'create' ? 'Creating' : 'Create team'}
-          </Button>
-        </Panel>
-        <Panel>
-          <Eyebrow>JOIN A TEAM</Eyebrow>
+                <Users size={14} strokeWidth={2} />
+                <span>{busy === 'create' ? 'Creating…' : 'Create team'}</span>
+              </button>
+            </>
+          )}
+        </div>
+        <div className="team-action-card">
+          <div className="team-action-head">
+            <span>02 / ROSTER ENTRY</span>
+            <ShieldCheck size={15} strokeWidth={1.8} />
+          </div>
+          <h3>Join a team</h3>
           <Field label="Invite code" hint="The leader shares an eight-character code.">
             <input
               value={joinCode}
@@ -1727,21 +1587,45 @@ export function PortalTeams() {
               maxLength={16}
             />
           </Field>
-          <Button
-            variant="ghost"
-            onClick={async () => {
-              const ok = await run(
-                'join',
-                () => portalApi.joinTeam(editionId, joinCode),
-                'You joined the team.',
-              );
-              if (ok) setJoinCode('');
-            }}
-            disabled={busy === 'join' || joinCode.trim().length < 4}
-          >
-            {busy === 'join' ? 'Joining' : 'Join with code'}
-          </Button>
-        </Panel>
+          <div style={{ marginTop: 'auto' }}>
+            <button
+              type="button"
+              className="login-machined-btn"
+              onClick={async () => {
+                const ok = await run(
+                  'join',
+                  async () => {
+                    const body = await portalApi.joinTeam(editionId, joinCode);
+                    const payment = body.data?.payment;
+                    if (payment) {
+                      const outcome = await payOrder(
+                        editionId,
+                        payment,
+                        user,
+                        `Team seat - ${body.data?.name || 'team'}`,
+                      );
+                      if (outcome.status !== 'paid') {
+                        clearAsyncCache();
+                        throw new Error(
+                          outcome.status === 'cancelled'
+                            ? 'You joined the team, but the seat payment was cancelled. Pay it from the team card to confirm your place.'
+                            : outcome.message ||
+                                'You joined the team, but the seat payment failed. Try paying again from the team card.',
+                        );
+                      }
+                    }
+                  },
+                  'You joined the team.',
+                );
+                if (ok) setJoinCode('');
+              }}
+              disabled={busy === 'join' || joinCode.trim().length < 4}
+            >
+              <span>{busy === 'join' ? 'Joining…' : 'Join with code'}</span>
+              <ArrowRight size={14} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {teams.loading ? <Loading label="Loading teams" rows={2} /> : null}
@@ -1784,6 +1668,13 @@ export function PortalTeams() {
                     <small>{member.collegeName || 'College not set'}</small>
                   </span>
                   {member.isLeader ? <Badge tone="muted">Leader</Badge> : null}
+                  {member.seatStatus === 'confirmed' ? (
+                    <Badge tone="positive">Entry confirmed</Badge>
+                  ) : member.seatStatus === 'reserved' ? (
+                    <Badge tone="warn">Fee due</Badge>
+                  ) : (
+                    <Badge tone="bad">No seat</Badge>
+                  )}
                 </li>
               ))}
             </ul>
@@ -1811,37 +1702,102 @@ export function PortalTeams() {
                 </small>
               </div>
             ) : null}
+            {team.isLeader && team.feeBasis === 'per_team' && team.feePaise > 0 && !team.leaderPaid ? (
+              <InlineMessage tone="info">
+                The team fee is not settled yet. Teammates can join now and ride this team's
+                payment; pay it to confirm every seat.
+              </InlineMessage>
+            ) : null}
+            {!team.isLeader && team.feeBasis === 'per_team' && team.feePaise > 0 ? (
+              <InlineMessage tone={team.leaderPaid ? 'info' : 'warn'}>
+                {team.leaderPaid
+                  ? 'Covered by your team leader — no separate team fee is due from you.'
+                  : 'Awaiting your team leader’s team payment — no separate fee is due from you.'}
+              </InlineMessage>
+            ) : null}
+            {team.payment ? (
+              <InlineMessage tone="warn">
+                This seat is not confirmed yet - the door will not admit it until it is paid.{' '}
+                <Button
+                  variant="primary"
+                  onClick={() =>
+                    run(
+                      `pay-${team.id}`,
+                      async () => {
+                        const outcome = await payOrder(
+                          editionId,
+                          team.payment,
+                          user,
+                          `Team seat - ${team.name}`,
+                        );
+                        if (outcome.status !== 'paid') {
+                          clearAsyncCache();
+                          throw new Error(
+                            outcome.status === 'cancelled'
+                              ? 'Payment cancelled. Your seat stays reserved until it is paid.'
+                              : outcome.message ||
+                                  'Payment failed. Your seat stays reserved until it is paid.',
+                          );
+                        }
+                      },
+                      'Seat paid. You are on the roster.',
+                    )
+                  }
+                  disabled={busy === `pay-${team.id}`}
+                >
+                  {busy === `pay-${team.id}` ? 'Paying' : `Pay ${money(team.payment.amountPaise)}`}
+                </Button>
+              </InlineMessage>
+            ) : null}
             {team.inviteCode && team.status !== 'locked' ? (
               <div className="invite-row">
                 <div>
                   <span>INVITE CODE</span>
                   <code>{team.inviteCode}</code>
                 </div>
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    run(
-                      `rotate-${team.id}`,
-                      () => portalApi.rotateInvite(editionId, team.id),
-                      'Invite code rotated.',
-                    )
-                  }
-                  disabled={busy === `rotate-${team.id}`}
-                >
-                  Rotate
-                </Button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <Button
+                    variant="ghost"
+                    icon={Copy}
+                    onClick={() => {
+                      navigator.clipboard?.writeText(team.inviteCode);
+                      setMessage({ tone: 'success', text: `Copied invite code ${team.inviteCode}.` });
+                    }}
+                  >
+                    Copy
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      run(
+                        `rotate-${team.id}`,
+                        () => portalApi.rotateInvite(editionId, team.id),
+                        'Invite code rotated.',
+                      )
+                    }
+                    disabled={busy === `rotate-${team.id}`}
+                  >
+                    Rotate
+                  </Button>
+                </div>
               </div>
             ) : null}
             {team.status !== 'locked' ? (
-              <Button
-                variant="ghost"
-                onClick={() =>
-                  run(`leave-${team.id}`, () => portalApi.leaveTeam(editionId, team.id), 'You left the team.')
-                }
-                disabled={busy === `leave-${team.id}`}
-              >
-                Leave team
-              </Button>
+              team.isLeader ? (
+                <Button variant="ghost" onClick={() => setConfirmLeave(team)} disabled={busy === `leave-${team.id}`}>
+                  {team.members.length > 1 ? 'Leave / Disband team' : 'Disband team'}
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    run(`leave-${team.id}`, () => portalApi.leaveTeam(editionId, team.id), 'You left the team.')
+                  }
+                  disabled={busy === `leave-${team.id}`}
+                >
+                  Leave team
+                </Button>
+              )
             ) : (
               <p className="muted" style={{ fontSize: '12px', fontStyle: 'italic', margin: '8px 0 0 0' }}>
                 Roster is locked. Members cannot leave or change teams.
@@ -1850,161 +1806,63 @@ export function PortalTeams() {
           </Panel>
         ))}
       </div>
-    </>
-  );
-}
 
-export function PortalVerification() {
-  const { editionId, config } = useSite();
-  const emailAvailable = Boolean(config?.emailAvailable);
-  const { user, reload } = useAuth();
-  const verification = useAsync(() => portalApi.verification(editionId), [editionId], {
-    enabled: Boolean(editionId),
-  });
-  const [method, setMethod] = useState('roster');
-  const [institutionEmail, setInstitutionEmail] = useState('');
-  const [file, setFile] = useState(null);
-  const [code, setCode] = useState('');
-  const [message, setMessage] = useState(null);
-  const [busy, setBusy] = useState('');
-
-  const status = verification.data?.data;
-
-  const submit = async () => {
-    setBusy('submit');
-    setMessage(null);
-    try {
-      const form = new FormData();
-      form.set('method', method);
-      if (method === 'college_email') form.set('institutionEmail', institutionEmail);
-      if (method === 'document' && file) form.set('file', file);
-      await portalApi.submitVerification(editionId, form);
-      await verification.reload();
-      await reload();
-      setMessage({
-        tone: 'success',
-        text:
-          method === 'college_email'
-            ? 'Verification submitted. Enter the code sent to your institutional email.'
-            : method === 'roster'
-              ? 'Roster check submitted.'
-              : 'Document submitted for review.',
-      });
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const confirm = async () => {
-    setBusy('confirm');
-    setMessage(null);
-    try {
-      await portalApi.confirmVerification(editionId, code);
-      await verification.reload();
-      await reload();
-      setMessage({ tone: 'success', text: 'Email confirmed. You are verified.' });
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  return (
-    <>
-      <SectionHead kicker="Student Status" title="Verification" />
-      {verification.loading ? <Loading label="Loading verification" rows={1} /> : null}
-      {verification.error ? <ErrorBox error={verification.error} onRetry={verification.reload} /> : null}
-      {status ? (
-        <Panel>
-          <div className="banner-top">
-            <Eyebrow>CURRENT STATUS</Eyebrow>
-            <StatusBadge status={status.status} />
-          </div>
-          <h3 className="panel-title">{status.status === 'verified' ? 'Verified student' : 'Verification open'}</h3>
-          <div className="detail-row">
-            <span>Method</span>
-            <b>{status.method || 'Not submitted'}</b>
-          </div>
-          <div className="detail-row">
-            <span>Submitted</span>
-            <b>{dateTime(status.submittedAt)}</b>
-          </div>
-          <div className="detail-row">
-            <span>Reviewed</span>
-            <b>{dateTime(status.reviewedAt)}</b>
-          </div>
-          {status.rejectionReason ? (
-            <InlineMessage tone="error">{status.rejectionReason}</InlineMessage>
-          ) : null}
-        </Panel>
-      ) : null}
-
-      {!user?.profileComplete ? (
-        <InlineMessage tone="info">
-          Complete your profile first: college, course, year of study and student ID are required
-          before verification.
-        </InlineMessage>
-      ) : null}
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-
-      {status?.status !== 'verified' && status?.canResubmit !== false ? (
-        <Panel>
-          <Eyebrow>SUBMIT VERIFICATION</Eyebrow>
-          <Field label="Method">
-            <select value={method} onChange={(event) => setMethod(event.target.value)}>
-              <option value="roster">Eligibility roster match</option>
-              {emailAvailable ? (
-                <option value="college_email">Institutional email</option>
-              ) : null}
-              <option value="document">Student document</option>
-            </select>
-          </Field>
-          {method === 'college_email' ? (
-            <Field label="Institutional email" hint="Must use an accepted college domain.">
-              <input
-                type="email"
-                value={institutionEmail}
-                onChange={(event) => setInstitutionEmail(event.target.value)}
-                placeholder="you@college.ac.in"
-              />
-            </Field>
-          ) : null}
-          {method === 'document' ? (
-            <Field label="Document" hint="JPEG, PNG or PDF up to 3 MB.">
-              <input
-                type="file"
-                accept="image/jpeg,image/png,application/pdf"
-                onChange={(event) => setFile(event.target.files?.[0] || null)}
-              />
-            </Field>
-          ) : null}
-          {method === 'roster' ? (
-            <p className="muted">
-              The roster check matches your student ID or email against the imported eligibility
-              list. If there is no match, the organisers review it manually.
-            </p>
-          ) : null}
-          <Button onClick={submit} disabled={busy === 'submit' || !user?.profileComplete} icon={ShieldCheck}>
-            {busy === 'submit' ? 'Submitting' : 'Submit verification'}
+      <Sheet
+        open={Boolean(confirmLeave)}
+        title={confirmLeave?.members?.length > 1 ? 'Leave or disband this team?' : 'Disband this team?'}
+        onClose={() => setConfirmLeave(null)}
+      >
+        <p className="muted">
+          {confirmLeave?.members?.length > 1 ? (
+            <>
+              You are the leader of <b>{confirmLeave?.name}</b>. Leaving will promote{' '}
+              <b>{confirmLeave.members.find((member) => !member.isLeader)?.fullName || 'the next member'}</b>{' '}
+              to team leader so your teammates keep their event registrations — or you can disband
+              the entire team.
+            </>
+          ) : (
+            <>
+              You are the only member of <b>{confirmLeave?.name}</b>. Leaving will disband the team
+              and cancel its event registration.
+            </>
+          )}
+        </p>
+        <div className="sheet-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <Button variant="ghost" onClick={() => setConfirmLeave(null)}>
+            Keep the team
           </Button>
-        </Panel>
-      ) : null}
-
-      {emailAvailable && status?.method === 'college_email' && status?.status === 'pending' ? (
-        <Panel>
-          <Eyebrow>EMAIL CONFIRMATION</Eyebrow>
-          <p className="muted">Enter the six-digit code sent to your institutional address.</p>
-          <Field label="Confirmation code">
-            <input value={code} onChange={(event) => setCode(event.target.value)} inputMode="numeric" maxLength={8} />
-          </Field>
-          <Button onClick={confirm} disabled={busy === 'confirm' || code.length < 4} icon={BadgeCheck}>
-            {busy === 'confirm' ? 'Confirming' : 'Confirm email'}
+          {confirmLeave?.members?.length > 1 ? (
+            <Button
+              variant="primary"
+              onClick={async () => {
+                const team = confirmLeave;
+                setConfirmLeave(null);
+                await run(
+                  `leave-${team.id}`,
+                  () => portalApi.leaveTeam(editionId, team.id, { disband: false }),
+                  'You left the team and leadership passed to the next member.',
+                );
+              }}
+            >
+              Leave &amp; hand over
+            </Button>
+          ) : null}
+          <Button
+            variant="danger"
+            onClick={async () => {
+              const team = confirmLeave;
+              setConfirmLeave(null);
+              await run(
+                `leave-${team.id}`,
+                () => portalApi.leaveTeam(editionId, team.id, { disband: true }),
+                'Team disbanded. Its event registration was cancelled.',
+              );
+            }}
+          >
+            Disband team
           </Button>
-        </Panel>
-      ) : null}
+        </div>
+      </Sheet>
     </>
   );
 }
@@ -2012,7 +1870,8 @@ export function PortalVerification() {
 export function PortalProfile() {
   const profile = useAsync(() => authApi.profile(), []);
   const sessions = useAsync(() => authApi.sessions(), []);
-  const { user, reload, logout } = useAuth();
+  const { user, isStaff, reload, logout } = useAuth();
+  const [activeGlyph, selectGlyph] = usePortalAvatar(user?.id, isStaff ? 'lisbon' : 'root');
   const navigate = useNavigate();
   const [form, setForm] = useState(null);
   const [message, setMessage] = useState(null);
@@ -2025,13 +1884,15 @@ export function PortalProfile() {
       setForm({
         fullName: data.fullName || '',
         phone: data.phone || '',
-        collegeName: data.collegeName || '',
-        universityName: data.universityName || '',
+        collegeName: data.collegeName || data.universityName || '',
         course: data.course || '',
         branch: data.branch || '',
         yearOfStudy: data.yearOfStudy || '',
-        studentIdentifier: '',
-        institutionEmail: data.institutionEmail || '',
+        city: data.city || '',
+        state: data.state || '',
+        gender: data.gender || '',
+        foodPreference: data.foodPreference || '',
+        needsAccommodation: Boolean(data.needsAccommodation),
       });
     }
   }, [profile.data]);
@@ -2067,14 +1928,18 @@ export function PortalProfile() {
       const payload = {
         fullName: form.fullName,
         phone: form.phone || null,
+        // One institution field: attendees of a standalone university just type
+        // the university here, so a separate "University" box is not needed.
         collegeName: form.collegeName,
-        universityName: form.universityName,
         course: form.course,
         branch: form.branch,
         yearOfStudy: form.yearOfStudy ? Number(form.yearOfStudy) : null,
-        institutionEmail: form.institutionEmail || null,
+        city: form.city?.trim() || null,
+        state: form.state?.trim() || null,
+        gender: form.gender || null,
+        foodPreference: form.foodPreference || null,
+        needsAccommodation: Boolean(form.needsAccommodation),
       };
-      if (form.studentIdentifier) payload.studentIdentifier = form.studentIdentifier;
       await authApi.updateProfile(payload);
       await Promise.all([profile.reload(), reload()]);
       setMessage({ tone: 'success', text: 'Profile saved.' });
@@ -2087,6 +1952,8 @@ export function PortalProfile() {
 
   if (profile.loading || !form) return <Loading label="Loading profile" rows={3} />;
   if (profile.error) return <ErrorBox error={profile.error} onRetry={profile.reload} />;
+
+  const isLocked = Boolean(profile.data?.data?.profileLocked);
 
   return (
     <>
@@ -2108,27 +1975,59 @@ export function PortalProfile() {
           </div>
         }
       />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-      <Panel>
+      <Feedback message={message} />
+      {isLocked ? (
+        <InlineMessage tone="info">
+          Your profile is locked because you have an active registration or pass. Ask the organiser
+          desk if any detail needs to be corrected.
+        </InlineMessage>
+      ) : null}
+      <div className="team-action-card" style={{ marginBottom: '18px' }}>
+        <div className="team-action-head">
+          <span>01 / ATTENDEE RECORD</span>
+          <ShieldCheck size={15} strokeWidth={1.8} />
+        </div>
         <form className="profile-form" onSubmit={save}>
           <FieldGrid>
             <Field label="Full name">
-              <input value={form.fullName} onChange={(event) => update('fullName', event.target.value)} required />
+              <input
+                value={form.fullName}
+                onChange={(event) => update('fullName', event.target.value)}
+                disabled={isLocked}
+                required
+              />
             </Field>
             <Field label="Phone" hint="International format, e.g. +919876543210">
-              <input value={form.phone} onChange={(event) => update('phone', event.target.value)} />
+              <input
+                value={form.phone}
+                onChange={(event) => update('phone', event.target.value)}
+                disabled={isLocked}
+              />
             </Field>
-            <Field label="College">
-              <input value={form.collegeName} onChange={(event) => update('collegeName', event.target.value)} />
-            </Field>
-            <Field label="University">
-              <input value={form.universityName} onChange={(event) => update('universityName', event.target.value)} />
+            <Field
+              label="College / University"
+              hint="Your college, or the university if you study directly under one"
+            >
+              <input
+                value={form.collegeName}
+                onChange={(event) => update('collegeName', event.target.value)}
+                disabled={isLocked}
+                required
+              />
             </Field>
             <Field label="Course">
-              <input value={form.course} onChange={(event) => update('course', event.target.value)} />
+              <input
+                value={form.course}
+                onChange={(event) => update('course', event.target.value)}
+                disabled={isLocked}
+              />
             </Field>
             <Field label="Branch">
-              <input value={form.branch} onChange={(event) => update('branch', event.target.value)} />
+              <input
+                value={form.branch}
+                onChange={(event) => update('branch', event.target.value)}
+                disabled={isLocked}
+              />
             </Field>
             <Field label="Year of study">
               <input
@@ -2137,35 +2036,135 @@ export function PortalProfile() {
                 max="6"
                 value={form.yearOfStudy}
                 onChange={(event) => update('yearOfStudy', event.target.value)}
+                disabled={isLocked}
               />
             </Field>
-            <Field
-              label="Student ID"
-              hint={profile.data?.data?.studentIdentifierLast4 ? `Saved ending ${profile.data.data.studentIdentifierLast4}` : 'Required for verification'}
-            >
+            <Field label="City">
               <input
-                value={form.studentIdentifier}
-                onChange={(event) => update('studentIdentifier', event.target.value)}
-                placeholder="Leave blank to keep the saved value"
+                value={form.city}
+                onChange={(event) => update('city', event.target.value)}
+                placeholder="e.g. Palakkad"
+                disabled={isLocked}
               />
             </Field>
-            <Field label="Institutional email">
+            <Field label="State">
               <input
-                type="email"
-                value={form.institutionEmail}
-                onChange={(event) => update('institutionEmail', event.target.value)}
+                value={form.state}
+                onChange={(event) => update('state', event.target.value)}
+                placeholder="e.g. Kerala"
+                disabled={isLocked}
               />
+            </Field>
+            <Field label="Gender">
+              <select
+                value={form.gender}
+                onChange={(event) => update('gender', event.target.value)}
+                disabled={isLocked}
+              >
+                <option value="">Select gender</option>
+                {GENDER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Meal preference">
+              <select
+                value={form.foodPreference}
+                onChange={(event) => update('foodPreference', event.target.value)}
+                disabled={isLocked}
+              >
+                <option value="">Select meal preference</option>
+                {FOOD_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </Field>
           </FieldGrid>
-          <p className="muted">Email {profile.data?.data?.email} is the signed-in identity and cannot be edited here.</p>
-          <Button busy={busy === 'save'} type="submit" disabled={busy === 'save'} icon={Check}>
-            {busy === 'save' ? 'Saving' : 'Save profile'}
-          </Button>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              marginTop: '14px',
+              marginBottom: '12px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              background: 'rgba(255, 255, 255, 0.03)',
+              cursor: isLocked ? 'default' : 'pointer',
+              fontSize: '13.5px',
+              opacity: isLocked ? 0.7 : 1,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(form.needsAccommodation)}
+              onChange={(event) => update('needsAccommodation', event.target.checked)}
+              disabled={isLocked}
+              style={{ marginTop: '2px' }}
+            />
+            <span>
+              I need hostel accommodation during the convention
+              <span className="muted" style={{ display: 'block', fontSize: '12px' }}>
+                Tick this and the accommodation desk will contact you. It is not charged here.
+              </span>
+            </span>
+          </label>
+          <p className="muted">
+            Email {profile.data?.data?.email} is the signed-in identity and cannot be edited here.
+          </p>
+          {!isLocked ? (
+            <button
+              type="submit"
+              className="login-machined-btn is-gold"
+              disabled={busy === 'save'}
+            >
+              <Check size={14} strokeWidth={2.2} />
+              <span>{busy === 'save' ? 'Saving…' : 'Save profile'}</span>
+            </button>
+          ) : null}
         </form>
-      </Panel>
+      </div>
 
-      <Panel>
-        <Eyebrow>ACTIVE SESSIONS</Eyebrow>
+      <div className="team-action-card" style={{ marginBottom: '18px' }}>
+        <div className="team-action-head">
+          <span>02 / PORTAL AVATAR</span>
+          <span className="muted" style={{ fontSize: '11px', letterSpacing: '0.08em' }}>
+            {isStaff ? 'STAFF CLEARANCE' : 'ATTENDEE'}
+          </span>
+        </div>
+        <div className="glyph-picker-grid">
+          {PORTAL_AVATARS.map((g) => {
+            const selected = activeGlyph.id === g.id;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                className={`glyph-picker-tile ${selected ? 'is-selected' : ''} ${isStaff ? 'is-staff' : ''}`}
+                onClick={() => selectGlyph(g.id)}
+                aria-pressed={selected}
+              >
+                <img
+                  src={g.src}
+                  alt={g.label}
+                  className={`glyph-picker-img ${g.kind === 'portrait' ? 'is-portrait' : ''}`}
+                />
+                <span className="glyph-picker-label">{g.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="team-action-card">
+        <div className="team-action-head">
+          <span>03 / ACTIVE SESSIONS</span>
+          <LogOut size={15} strokeWidth={1.8} />
+        </div>
         <div className="session-list">
           {(sessions.data?.data || []).map((session) => (
             <div className="session-row" key={session.id}>
@@ -2179,17 +2178,20 @@ export function PortalProfile() {
             </div>
           ))}
         </div>
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            await logout();
-            navigate('/');
-          }}
-          icon={LogOut}
-        >
-          Sign out of this device
-        </Button>
-      </Panel>
+        <div>
+          <button
+            type="button"
+            className="login-machined-btn"
+            onClick={async () => {
+              await logout();
+              navigate('/');
+            }}
+          >
+            <LogOut size={14} strokeWidth={2} />
+            <span>Sign out of this device</span>
+          </button>
+        </div>
+      </div>
     </>
   );
 }

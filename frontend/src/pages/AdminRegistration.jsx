@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   BadgeCheck,
   Check,
-  CreditCard,
   Download,
   FileImage,
   FileText,
-  IdCard,
   RefreshCw,
   Search,
   Settings,
-  ShieldCheck,
   Upload,
   Wallet,
   X,
@@ -20,9 +17,10 @@ import {
   ZoomOut,
 } from 'lucide-react';
 
-import { adminApi, registrationApi } from '../lib/api.js';
+import { adminApi } from '../lib/api.js';
 import { useSite } from '../lib/site.jsx';
 import {
+  date,
   dateTime,
   fileSize,
   fromLocalInput,
@@ -38,6 +36,7 @@ import {
   Empty,
   ErrorBox,
   Eyebrow,
+  Feedback,
   Field,
   FieldGrid,
   InlineMessage,
@@ -49,7 +48,7 @@ import {
   Toggle,
   useAsync,
   useDebounced,
-} from '../components/ui.jsx';
+} from '../components/admin-ui.jsx';
 
 const REJECTION_REASONS = [
   ['fake_id', 'Fake ID / Unverifiable Student Credentials'],
@@ -78,7 +77,9 @@ const STATE_LABELS = {
   resubmission_required: 'Resubmission required',
   refund_pending: 'Refund pending',
   refund_processing: 'Refund processing',
+  refund_failed: 'Refund failed',
   refunded: 'Refunded',
+  partially_refunded: 'Partially refunded',
 };
 
 const REFUND_LABELS = {
@@ -91,7 +92,8 @@ const REFUND_LABELS = {
 
 function tone(value) {
   if (['approved', 'paid', 'completed', 'refunded'].includes(value)) return 'good';
-  if (['rejected', 'failed', 'refund_pending'].includes(value)) return 'bad';
+  if (['rejected', 'failed', 'refund_pending', 'refund_failed'].includes(value)) return 'bad';
+  if (['partially_refunded'].includes(value)) return 'warn';
   if (
     [
       'pending_verification',
@@ -285,6 +287,20 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     initiateRefund: true,
   });
   const [docForm, setDocForm] = useState({ documents: ['college_id'], message: '' });
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    phone: '',
+    collegeName: '',
+    course: '',
+    branch: '',
+    yearOfStudy: '',
+    dateOfBirth: '',
+    city: '',
+    state: '',
+    gender: '',
+    foodPreference: '',
+    needsAccommodation: false,
+  });
   const [refundForm, setRefundForm] = useState({
     action: 'initiate',
     amount: '',
@@ -416,6 +432,45 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
       'Correction request sent. The participant can upload corrected documents.',
     );
 
+  const openEditDetails = () => {
+    setEditForm({
+      fullName: data.fullName || '',
+      phone: data.phone || '',
+      collegeName: data.collegeName || '',
+      course: data.course || '',
+      branch: data.branch || '',
+      yearOfStudy: data.yearOfStudy || '',
+      dateOfBirth: data.dateOfBirth ? String(data.dateOfBirth).slice(0, 10) : '',
+      city: data.city || '',
+      state: data.state || '',
+      gender: data.gender || '',
+      foodPreference: data.foodPreference || '',
+      needsAccommodation: Boolean(data.needsAccommodation),
+    });
+    setDialog('edit-details');
+  };
+
+  const saveEditDetails = () =>
+    run(
+      'edit-details',
+      () =>
+        adminApi.updateRegistrationDetails(editionId, registrationId, {
+          fullName: editForm.fullName.trim(),
+          phone: editForm.phone.trim() || null,
+          collegeName: editForm.collegeName.trim(),
+          course: editForm.course.trim() || null,
+          branch: editForm.branch.trim() || null,
+          yearOfStudy: editForm.yearOfStudy.trim() || null,
+          dateOfBirth: editForm.dateOfBirth || null,
+          city: editForm.city.trim() || null,
+          state: editForm.state.trim() || null,
+          gender: editForm.gender || null,
+          foodPreference: editForm.foodPreference || null,
+          needsAccommodation: Boolean(editForm.needsAccommodation),
+        }),
+      'Participant details updated.',
+    );
+
   const refundAction = () =>
     run(
       'refund',
@@ -474,11 +529,28 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         </div>
       </div>
 
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
       {isIste ? (
         <InlineMessage tone="warn">
-          ISTE tier (₹500). Payment is not proof of membership — manually verify the uploaded ISTE
-          membership card before approving this registration.
+          ISTE tier ({money(data.feePaise)}). Payment is not proof of membership — manually verify the
+          uploaded ISTE membership card before approving this registration.
+        </InlineMessage>
+      ) : null}
+      {data.compliance ? (
+        <InlineMessage tone={data.compliance.enforced ? 'error' : 'warn'}>
+          <b>{data.compliance.label}</b>
+          {data.compliance.deadlineAt ? (
+            <>
+              {' '}
+              · deadline {dateTime(data.compliance.deadlineAt)}
+            </>
+          ) : null}
+          {data.compliance.enforced
+            ? ' · enforcement applied'
+            : data.compliance.overdue
+              ? ' · deadline passed, waiting for the next sweep'
+              : ` · ${data.compliance.hoursRemaining} hour(s) left`}
+          <div style={{ marginTop: 4, fontSize: 13 }}>{data.compliance.message}</div>
         </InlineMessage>
       ) : null}
 
@@ -517,6 +589,10 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
             <b>{data.yearOfStudy || '-'}</b>
           </div>
           <div className="detail-row">
+            <span>Date of birth</span>
+            <b>{data.dateOfBirth ? date(data.dateOfBirth) : '-'}</b>
+          </div>
+          <div className="detail-row">
             <span>City / state</span>
             <b>{[data.city, data.stateName].filter(Boolean).join(', ') || '-'}</b>
           </div>
@@ -527,6 +603,20 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           <div className="detail-row">
             <span>Resubmissions</span>
             <b>{data.resubmissionCount || 0}</b>
+          </div>
+          <div className="detail-row">
+            <span>Desk deadline</span>
+            <b>
+              {data.compliance?.deadlineAt
+                ? `${dateTime(data.compliance.deadlineAt)}${
+                    data.compliance.enforced
+                      ? ' (enforced)'
+                      : data.compliance.overdue
+                        ? ' (passed)'
+                        : ''
+                  }`
+                : '-'}
+            </b>
           </div>
         </Panel>
         <Panel>
@@ -653,6 +743,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           </Field>
           <div className="banner-actions">
             <Button
+              variant="success"
               onClick={() => setDialog('approve')}
               disabled={!canApprove || Boolean(busy)}
               icon={BadgeCheck}
@@ -660,7 +751,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               Approve
             </Button>
             <Button
-              variant="ghost"
+              variant="danger"
               onClick={() => setDialog('reject')}
               disabled={Boolean(busy) || data.verificationStatus === 'approved'}
               icon={X}
@@ -668,12 +759,19 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               Reject
             </Button>
             <Button
-              variant="ghost"
+              variant="warning"
               onClick={() => setDialog('request-docs')}
               disabled={Boolean(busy)}
               icon={RefreshCw}
             >
               Request documents
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={openEditDetails}
+              disabled={Boolean(busy)}
+            >
+              Edit details
             </Button>
           </div>
         </Panel>
@@ -706,6 +804,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               </Field>
               <div className="banner-actions">
                 <Button
+                  variant="success"
                   onClick={() => decideChange('approved')}
                   disabled={busy === 'change'}
                   icon={Check}
@@ -713,7 +812,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
                   Approve change
                 </Button>
                 <Button
-                  variant="ghost"
+                  variant="danger"
                   onClick={() => decideChange('rejected')}
                   disabled={busy === 'change'}
                 >
@@ -764,7 +863,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         ) : null}
         {canRefund ? (
           <div className="banner-actions">
-            <Button variant="ghost" onClick={() => setDialog('refund')} icon={Wallet}>
+            <Button variant="warning" onClick={() => setDialog('refund')} icon={Wallet}>
               {data.refund ? 'Update refund' : 'Initiate refund'}
             </Button>
           </div>
@@ -792,8 +891,120 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
       </Panel>
 
       <Sheet
+        open={dialog === 'edit-details'}
+        title="Edit participant details"
+        message={message}
+        onClose={() => setDialog(null)}
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          Updates sync across the pass registration and participant profile. Email ({data.email}) is
+          tied to Google Sign-In and stays unchanged.
+        </p>
+        <div className="field-grid">
+          <Field label="Full Name *">
+            <input
+              value={editForm.fullName}
+              onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+              required
+            />
+          </Field>
+          <Field label="Phone">
+            <input
+              value={editForm.phone}
+              onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+            />
+          </Field>
+          <Field label="College / Institution *">
+            <input
+              value={editForm.collegeName}
+              onChange={(e) => setEditForm({ ...editForm, collegeName: e.target.value })}
+              required
+            />
+          </Field>
+          <Field label="Course">
+            <input
+              value={editForm.course}
+              onChange={(e) => setEditForm({ ...editForm, course: e.target.value })}
+            />
+          </Field>
+          <Field label="Branch / Department">
+            <input
+              value={editForm.branch}
+              onChange={(e) => setEditForm({ ...editForm, branch: e.target.value })}
+            />
+          </Field>
+          <Field label="Year of Study">
+            <input
+              value={editForm.yearOfStudy}
+              onChange={(e) => setEditForm({ ...editForm, yearOfStudy: e.target.value })}
+            />
+          </Field>
+          <Field label="Date of Birth">
+            <input
+              type="date"
+              value={editForm.dateOfBirth}
+              onChange={(e) => setEditForm({ ...editForm, dateOfBirth: e.target.value })}
+            />
+          </Field>
+          <Field label="City">
+            <input
+              value={editForm.city}
+              onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+            />
+          </Field>
+          <Field label="State">
+            <input
+              value={editForm.state}
+              onChange={(e) => setEditForm({ ...editForm, state: e.target.value })}
+            />
+          </Field>
+          <Field label="Gender">
+            <select
+              value={editForm.gender}
+              onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
+            >
+              <option value="">Unspecified</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </Field>
+          <Field label="Meal Preference">
+            <select
+              value={editForm.foodPreference}
+              onChange={(e) => setEditForm({ ...editForm, foodPreference: e.target.value })}
+            >
+              <option value="">Unspecified</option>
+              <option value="veg">Vegetarian</option>
+              <option value="non_veg">Non-Vegetarian</option>
+            </select>
+          </Field>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', fontSize: '13px' }}>
+          <input
+            type="checkbox"
+            checked={Boolean(editForm.needsAccommodation)}
+            onChange={(e) => setEditForm({ ...editForm, needsAccommodation: e.target.checked })}
+          />
+          <span>Needs hostel accommodation</span>
+        </label>
+        <div className="sheet-actions">
+          <Button variant="ghost" onClick={() => setDialog(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={saveEditDetails}
+            disabled={busy === 'edit-details' || editForm.fullName.trim().length < 2 || editForm.collegeName.trim().length < 2}
+          >
+            {busy === 'edit-details' ? 'Saving…' : 'Save details'}
+          </Button>
+        </div>
+      </Sheet>
+
+      <Sheet
         open={dialog === 'approve'}
         title="Approve registration"
+        message={message}
         onClose={() => setDialog(null)}
       >
         <p className="muted">
@@ -802,8 +1013,8 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         </p>
         {isIste ? (
           <InlineMessage tone="warn">
-            Confirm you have personally checked the ISTE membership card. Payment of ₹500 alone is
-            not proof.
+            Confirm you have personally checked the ISTE membership card. Payment of{' '}
+            {money(data.feePaise)} alone is not proof.
           </InlineMessage>
         ) : null}
         {verificationNote ? <p className="muted">Note: {verificationNote}</p> : null}
@@ -811,13 +1022,18 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           <Button variant="ghost" onClick={() => setDialog(null)}>
             Cancel
           </Button>
-          <Button onClick={approve} disabled={busy === 'approve'} icon={BadgeCheck}>
+          <Button variant="success" onClick={approve} disabled={busy === 'approve'} icon={BadgeCheck}>
             {busy === 'approve' ? 'Approving' : 'Approve registration'}
           </Button>
         </div>
       </Sheet>
 
-      <Sheet open={dialog === 'reject'} title="Reject registration" onClose={() => setDialog(null)}>
+      <Sheet
+        open={dialog === 'reject'}
+        title="Reject registration"
+        message={message}
+        onClose={() => setDialog(null)}
+      >
         <form
           className="admin-form"
           onSubmit={(event) => {
@@ -825,6 +1041,12 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
             reject();
           }}
         >
+          <InlineMessage tone="warn">
+            Rejecting cancels the convention pass, revokes its QR ticket, releases all booked event seats,
+            and queues refunds for any paid add-on bookings. If the participant leads any teams, leadership is
+            transferred to co-members. The portal shows your reason and keeps payment receipts visible.
+            If you only need better documents, use &ldquo;Request documents&rdquo; instead.
+          </InlineMessage>
           <Field label="Rejection reason">
             <select
               value={rejectForm.reasonCode}
@@ -890,6 +1112,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
       <Sheet
         open={dialog === 'request-docs'}
         title="Request corrected documents"
+        message={message}
         onClose={() => setDialog(null)}
       >
         <form
@@ -940,7 +1163,12 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         </form>
       </Sheet>
 
-      <Sheet open={dialog === 'refund'} title="Refund workflow" onClose={() => setDialog(null)}>
+      <Sheet
+        open={dialog === 'refund'}
+        title="Refund workflow"
+        message={message}
+        onClose={() => setDialog(null)}
+      >
         <form
           className="admin-form"
           onSubmit={(event) => {
@@ -1077,7 +1305,7 @@ export function AdminCollegeRegistrations() {
         kicker="REGISTRATION DESK"
         title="College registration verification"
         action={
-          <Button variant="ghost" onClick={rows.reload} icon={RefreshCw}>
+          <Button variant="info" onClick={rows.reload} icon={RefreshCw}>
             Refresh
           </Button>
         }
@@ -1087,6 +1315,8 @@ export function AdminCollegeRegistrations() {
         <Stat label="Approved" value={counts.approved ?? 0} />
         <Stat label="Rejected" value={counts.rejected ?? 0} tone="warn" />
         <Stat label="Refunds pending" value={counts.refundPending ?? 0} tone="warn" />
+        <Stat label="Compliance due" value={counts.complianceDue ?? 0} tone="warn" />
+        <Stat label="Deadline passed" value={counts.complianceOverdue ?? 0} tone="warn" />
         <Stat
           label="ISTE members"
           value={counts.isteMember ?? 0}
@@ -1131,8 +1361,13 @@ export function AdminCollegeRegistrations() {
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
             <option value="resubmission_required">Resubmission required</option>
+            <option value="compliance_due">Compliance window open</option>
+            <option value="compliance_overdue">Compliance deadline passed</option>
+            <option value="compliance_enforced">Enforcement applied</option>
             <option value="refund_pending">Refund pending</option>
             <option value="refund_processing">Refund processing</option>
+            <option value="refund_failed">Refund failed</option>
+            <option value="partially_refunded">Partially refunded</option>
             <option value="refunded">Refunded</option>
           </select>
         </Field>
@@ -1215,6 +1450,13 @@ export function AdminCollegeRegistrations() {
               {row.rejectionReason ? (
                 <div className="table-sub">{row.rejectionReason.slice(0, 60)}</div>
               ) : null}
+              {row.compliance ? (
+                <div className="table-sub" style={{ color: row.compliance.overdue ? '#ef4444' : '#f59e0b' }}>
+                  {row.compliance.enforced
+                    ? 'Deadline passed · enforced'
+                    : `Desk deadline ${row.compliance.hoursRemaining}h`}
+                </div>
+              ) : null}
             </td>
             <td>
               <Pill value={row.refundStatus} labels={REFUND_LABELS} />
@@ -1292,6 +1534,10 @@ export function AdminRegistrationSettings() {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const defaultHelpdesk =
+    typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}/contact`
+      : 'https://parallax-iste.vercel.app/contact';
 
   useEffect(() => {
     const config = query.data?.data;
@@ -1304,7 +1550,10 @@ export function AdminRegistrationSettings() {
       acceptedFormats: settings.acceptedFormats || ['pdf', 'jpg', 'jpeg', 'png'],
       maxUploadMb: String(Math.round((settings.maxUploadBytes || 5242880) / 1048576)),
       allowResubmission: Boolean(settings.allowResubmission),
-      helpdeskPhone: settings.helpdeskPhone || '+91 94460 00000',
+      helpdeskPhone:
+        settings.helpdeskPhone && !/00000/.test(settings.helpdeskPhone)
+          ? settings.helpdeskPhone
+          : defaultHelpdesk,
       paymentInstructions: settings.paymentInstructions || '',
       refundPolicy: settings.refundPolicy || '',
       approvalMessage: settings.approvalMessage || '',
@@ -1332,7 +1581,7 @@ export function AdminRegistrationSettings() {
       acceptedFormats: form.acceptedFormats,
       maxUploadBytes: Math.max(1024, Math.round(Number(form.maxUploadMb || 5) * 1048576)),
       allowResubmission: form.allowResubmission,
-      helpdeskPhone: form.helpdeskPhone || '+91 94460 00000',
+      helpdeskPhone: form.helpdeskPhone || defaultHelpdesk,
       paymentInstructions: form.paymentInstructions || null,
       refundPolicy: form.refundPolicy || null,
       approvalMessage: form.approvalMessage || null,
@@ -1389,7 +1638,7 @@ export function AdminRegistrationSettings() {
           </Badge>
         }
       />
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+      <Feedback message={message} />
 
       <Panel>
         <Eyebrow>REGISTRATION WINDOW</Eyebrow>
@@ -1593,12 +1842,12 @@ export function AdminRegistrationSettings() {
               onChange={(event) => set('rejectionMessage', event.target.value)}
             />
           </Field>
-          <Field label="Helpdesk / Emergency Phone (ID Card & Receipt)">
+          <Field label="Helpdesk URL / Contact (ID Card & Receipt)">
             <input
               type="text"
               value={form.helpdeskPhone || ''}
               onChange={(event) => set('helpdeskPhone', event.target.value)}
-              placeholder="+91 94460 00000"
+              placeholder={defaultHelpdesk}
             />
           </Field>
         </FieldGrid>

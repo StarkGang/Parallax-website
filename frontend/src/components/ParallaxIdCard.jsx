@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { BrandedQr } from './BrandedQr.jsx';
+import { logisticsLine } from '../lib/attendee.js';
 import './ParallaxIdCard.css';
 
 export const OFFICIAL_PARALLAX_PATH =
@@ -105,13 +106,43 @@ export const ROLE_CONFIGS = {
   },
 };
 
-/* Presets for Admin & Studio preview */
+/* Presets for the admin studio.
+   One demo card (Midhun) proves the design, and every other entry is a role
+   template with an empty name so the operator types the real holder's name
+   instead of inheriting somebody else's. Roles mirror the ones published on the
+   team page, plus generic guest/partner/attendee credentials. */
+const NSS_COLLEGE = 'NSS College of Engineering, Palakkad';
+
+const rolePreset = (key, group, label, role, tier, roleKey, extra = {}) => {
+  const paletteIdx = ROLE_CONFIGS[roleKey] ? ROLE_CONFIGS[roleKey].paletteIdx : 0;
+  const branch = extra.branch || 'Core Organising Team · ISTE SC NSSCE';
+  return {
+    key,
+    group,
+    label,
+    name: '',
+    role,
+    tier,
+    roleKey,
+    paletteIdx,
+    college: NSS_COLLEGE,
+    branch,
+    sub: `${branch} · ${NSS_COLLEGE}`,
+    id: '',
+    photo: '',
+    kind: 'waves',
+    ...extra,
+  };
+};
+
 export const ADMIN_PRESETS = [
   {
     key: 'midhun',
+    group: 'Sample',
+    label: 'Midhun · Demo Card',
     name: 'MIDHUN K M',
     role: 'College Student',
-    college: 'NSS College of Engineering, Palakkad',
+    college: NSS_COLLEGE,
     branch: 'Computer Science & Engineering · Yr 2',
     sub: 'Computer Science · NSS College of Engineering',
     tier: 'Convention Delegate',
@@ -121,88 +152,45 @@ export const ADMIN_PRESETS = [
     paletteIdx: 0,
     kind: 'waves',
   },
-  {
-    key: 'navnit',
-    name: 'NAVNIT JAYAPRAKASH',
-    role: 'Publicity Coordinator',
-    college: 'NSS College of Engineering, Palakkad',
-    branch: 'Mechanical Engineering · ISTE SC NSSCE',
-    sub: 'Mechanical Engineering · ISTE SC NSSCE',
-    tier: 'Core Organizer',
-    id: 'PX-27-OG7712',
-    photo: 'images/team/Navnit Jayaprakash .png',
-    roleKey: 'coordinator',
-    paletteIdx: 1,
-    kind: 'waves',
-  },
-  {
-    key: 'sreenath',
-    name: 'SREENATH K',
-    role: 'Events Coordinator',
-    college: 'NSS College of Engineering, Palakkad',
-    branch: 'Electrical Engineering · ISTE SC NSSCE',
-    sub: 'Electrical Engineering · ISTE SC NSSCE',
-    tier: 'Core Team',
-    id: 'PX-27-CR4920',
-    photo: 'images/team/Sreenath K_.png',
-    roleKey: 'coordinator',
-    paletteIdx: 1,
-    kind: 'waves',
-  },
-  {
-    key: 'shadiya',
-    name: 'SHADIYA SHERIN M',
-    role: 'Executive Committee',
-    college: 'NSS College of Engineering, Palakkad',
-    branch: 'Civil Engineering · ISTE SC NSSCE',
-    sub: 'Civil Engineering · ISTE SC NSSCE',
-    tier: 'Organizer',
-    id: 'PX-27-OG8831',
-    photo: 'images/team/Shadiya Sherin M_.jpg',
-    roleKey: 'organizer',
-    paletteIdx: 3,
-    kind: 'waves',
-  },
-  {
-    key: 'speaker',
-    name: 'DR. P. R. SURESH',
-    role: 'Keynote Speaker',
-    college: 'NSS College of Engineering, Palakkad',
-    branch: 'Principal & Patron · NSSCE Palakkad',
-    sub: 'Principal & Patron · NSSCE Palakkad',
-    tier: 'Distinguished Guest',
-    id: 'PX-27-SP001A',
-    photo: 'images/team/chairperson.jpg',
-    roleKey: 'speaker',
-    paletteIdx: 2,
-    kind: 'waves',
-  },
-  {
-    key: 'volunteer',
-    name: 'OPERATIONS CREW',
-    role: 'Operations Crew',
-    college: 'NSS College of Engineering, Palakkad',
+
+  /* Leadership */
+  rolePreset('chairperson', 'Leadership', 'Chairperson', 'Chairperson', 'Core Committee', 'organizer'),
+  rolePreset('secretary', 'Leadership', 'Secretary', 'Secretary', 'Core Committee', 'organizer'),
+  rolePreset('faculty-chair', 'Leadership', 'Faculty Chairperson', 'Faculty Chairperson', 'Chapter Leadership', 'faculty', {
+    branch: 'Faculty · ISTE Chapter NSSCE',
+  }),
+  rolePreset('faculty-secretary', 'Leadership', 'Faculty Secretary', 'Faculty Secretary', 'Chapter Leadership', 'faculty', {
+    branch: 'Faculty · ISTE Chapter NSSCE',
+  }),
+
+  /* Core team, matching the published team page */
+  rolePreset('events', 'Core Team', 'Events Coordinator', 'Events Coordinator', 'Core Team', 'coordinator'),
+  rolePreset('design', 'Core Team', 'Design Coordinator', 'Design Coordinator', 'Core Team', 'coordinator'),
+  rolePreset('publicity', 'Core Team', 'Publicity Coordinator', 'Publicity Coordinator', 'Core Team', 'coordinator'),
+  rolePreset('finance', 'Core Team', 'Finance Coordinator', 'Finance Coordinator', 'Core Team', 'coordinator'),
+  rolePreset('technical', 'Core Team', 'Technical Coordinator', 'Technical Coordinator', 'Core Team', 'coordinator'),
+  rolePreset('web', 'Core Team', 'Web Team', 'Web & Development', 'Core Team', 'coordinator', {
+    branch: 'Web & Systems · ISTE SC NSSCE',
+  }),
+  rolePreset('ops', 'Core Team', 'Operations Crew', 'Operations Crew', 'Operations Staff', 'volunteer', {
     branch: 'Stage & Logistics · ISTE SC NSSCE',
-    sub: 'Stage & Logistics · ISTE SC NSSCE',
-    tier: 'Operations Staff',
-    id: 'PX-27-ST9901',
-    photo: 'images/team/placeholder.svg',
-    roleKey: 'volunteer',
-    paletteIdx: 5,
-    kind: 'waves',
-  },
-  {
-    key: 'faculty',
-    name: 'FACULTY ADVISOR',
-    role: 'Faculty Advisor',
-    sub: 'Staff Patron · ISTE Chapter NSSCE',
-    tier: 'Chapter Leadership',
-    id: 'PX-27-FA002B',
-    photo: 'images/team/placeholder.svg',
-    roleKey: 'faculty',
-    paletteIdx: 4,
-    kind: 'waves',
-  },
+  }),
+
+  /* Guests and partners */
+  rolePreset('speaker', 'Guests & Partners', 'Keynote Speaker', 'Keynote Speaker', 'Distinguished Guest', 'speaker', {
+    branch: 'Distinguished Guest · Parallax 2027',
+  }),
+  rolePreset('sponsor', 'Guests & Partners', 'Sponsor / Partner', 'Sponsor / Partner', 'Title Partner', 'sponsor', {
+    branch: 'Partner Organisation',
+  }),
+  rolePreset('media', 'Guests & Partners', 'Press / Media', 'Press / Media', 'Press Credential', 'media', {
+    branch: 'Press & Media',
+  }),
+
+  /* Attendees */
+  rolePreset('delegate', 'Attendees', 'College Student', 'College Student', 'Convention Delegate', 'delegate', {
+    branch: 'Computer Science & Engineering · Yr 2',
+  }),
 ];
 
 /* Color conversion and smart harmonious tone generator */
@@ -420,6 +408,7 @@ export default function ParallaxIdCard({
   category,
   photoUrl,
   qrPayload,
+  qrPendingLabel = 'Issued after saving',
   roleKey = 'delegate',
   onRoleChange,
   kind = 'waves', // STANDARD DESIGN: waves for all posts
@@ -549,6 +538,14 @@ export default function ParallaxIdCard({
   const resolvedPhoto = customData?.photo || photoUrl || (registration?.photoUrl ? registration.photoUrl : null);
   const isVerified = customData?.isVerified !== undefined ? customData.isVerified : registration?.verificationStatus === 'approved';
 
+  // Gender / meal / bed. Printed on the back so the kitchen and the hostel desk
+  // can read a card without a terminal. Hidden when nothing is on record.
+  const attendeeLogistics = logisticsLine({
+    gender: customData?.gender ?? registration?.gender,
+    foodPreference: customData?.foodPreference ?? registration?.foodPreference,
+    needsAccommodation: customData?.needsAccommodation ?? registration?.needsAccommodation,
+  });
+
   const baseUrl = import.meta.env.BASE_URL || '/';
   const isteLogo = `${baseUrl}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png`;
   const nssceLogo = `${baseUrl}images/Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp`;
@@ -559,11 +556,12 @@ export default function ParallaxIdCard({
     '--light': p.light,
   };
 
+  // Hand the file over instead of a blob URL: the caller uploads it, so a saved
+  // card keeps its photo after the tab closes.
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    if (onPhotoUploaded) onPhotoUploaded(url);
+    if (onPhotoUploaded) onPhotoUploaded(file);
   };
 
   return (
@@ -635,7 +633,12 @@ export default function ParallaxIdCard({
                 {qrPayload ? (
                   <BrandedQr value={qrPayload} title="Parallax entry QR" />
                 ) : (
-                  <BrandedQr value={`PX27:${credentialId}|${fullName}`} title="Parallax entry QR" />
+                  // Never draw a made-up payload: a code that no server issued
+                  // fails at the desk. Show a placeholder until one exists.
+                  <div className="qr-pending">
+                    <small>QR</small>
+                    <span>{qrPendingLabel}</span>
+                  </div>
                 )}
               </div>
             </div>
@@ -713,13 +716,21 @@ export default function ParallaxIdCard({
                 <b title={branchCourse}>{branchCourse}</b>
               </div>
               <div>
-                <small>Helpdesk & Support</small>
-                <b>+91 94460 00000</b>
+                <small>Helpdesk &amp; Support</small>
+                <b title={`${typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://parallax-iste.vercel.app'}/contact`}>
+                  {`${typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://parallax-iste.vercel.app'}/contact`}
+                </b>
               </div>
               <div>
                 <small>Organizing Chapter</small>
                 <b>ISTE Students Chapter NSSCE</b>
               </div>
+              {attendeeLogistics ? (
+                <div>
+                  <small>Gender / Meal / Stay</small>
+                  <b>{attendeeLogistics}</b>
+                </div>
+              ) : null}
             </div>
             <div className="code">
               <svg viewBox="0 0 200 40" preserveAspectRatio="none" aria-label="Barcode">

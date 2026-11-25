@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  BadgeCheck,
-  Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
   CreditCard,
   Download,
   ExternalLink,
@@ -15,28 +13,27 @@ import {
   FileCheck2,
   FileText,
   IdCard,
-  MapPin,
   Printer,
   QrCode,
   RefreshCw,
   ShieldCheck,
   Sparkles,
-  Trash2,
   Upload,
-  Utensils,
+  Users,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 
-import { API_ORIGIN, portalApi, registrationApi } from '../lib/api.js';
+import { API_ORIGIN, authApi, portalApi, registrationApi } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { date, dateTime, fileSize, money } from '../lib/format.js';
 import { openCheckout } from '../lib/razorpay.js';
+import { FOOD_OPTIONS, GENDER_OPTIONS, foodLabel, genderLabel } from '../lib/attendee.js';
 import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { BrandedQr } from '../components/BrandedQr.jsx';
-import { BarcodeSvg } from '../components/BarcodeSvg.jsx';
 import ParallaxIdCard from '../components/ParallaxIdCard.jsx';
+import { PassTierCard } from '../components/PassTierCard.jsx';
 import { PaymentProgress } from '../components/PaymentProgress.jsx';
 import {
   Badge,
@@ -46,7 +43,7 @@ import {
   Eyebrow,
   Field,
   FieldGrid,
-  InlineMessage,
+  Feedback,
   Loading,
   Panel,
   SectionHead,
@@ -54,21 +51,332 @@ import {
   useAsync,
 } from '../components/ui.jsx';
 
+// Popular KTU engineering colleges and polytechnics. The fields stay free text
+// (native datalist suggestions), so an attendee whose institution is missing can
+// simply type it.
+const COLLEGE_SUGGESTIONS = [
+  'NSS College of Engineering, Palakkad',
+  'College of Engineering Trivandrum (CET)',
+  'Government Engineering College, Thrissur',
+  'Government Engineering College, Sreekrishnapuram',
+  'Government Engineering College, Barton Hill, Thiruvananthapuram',
+  'Government Engineering College, Palakkad',
+  'Government Engineering College, Kozhikode',
+  'Government Engineering College, Kannur',
+  'Government Engineering College, Idukki',
+  'Government Engineering College, Wayanad',
+  'TKM College of Engineering, Kollam',
+  'Sree Chitra Thirunal College of Engineering, Thiruvananthapuram',
+  'Mar Athanasius College of Engineering, Kothamangalam',
+  'Rajagiri School of Engineering & Technology, Kochi',
+  'Model Engineering College, Thrikkakara',
+  'Adi Shankara Institute of Engineering and Technology, Kalady',
+  'Federal Institute of Science and Technology (FISAT), Angamaly',
+  'Muthoot Institute of Technology and Science (MITS), Varapuzha',
+  'SCMS School of Engineering and Technology, Karukutty',
+  'Saintgits College of Engineering, Kottayam',
+  'Mangalam College of Engineering, Ettumanoor',
+  'Sree Narayana Gurukulam College of Engineering, Kolenchery',
+  'Jyothi Engineering College, Cheruthuruthy',
+  'Vidya Academy of Science and Technology, Thrissur',
+  'Amrita Vishwa Vidyapeetham, Amritapuri',
+  'Cochin University of Science and Technology (CUSAT)',
+  'Government Polytechnic College, Palakkad',
+  'Government Polytechnic College, Thrissur',
+  'Government Polytechnic College, Kothamangalam',
+  'Government Polytechnic College, Kozhikode',
+  'Government Polytechnic College, Kannur',
+  'Women\'s Polytechnic College, Thiruvananthapuram',
+  'Sree Narayana Polytechnic College, Kottiyam',
+  'Carmel Polytechnic College, Alappuzha',
+  'NSS Polytechnic College, Pandalam',
+];
+
+const BRANCH_SUGGESTIONS = [
+  'Computer Science and Engineering',
+  'Computer Science and Engineering (AI & ML)',
+  'Artificial Intelligence and Data Science',
+  'Information Technology',
+  'Electronics and Communication Engineering',
+  'Electrical and Electronics Engineering',
+  'Mechanical Engineering',
+  'Civil Engineering',
+  'Chemical Engineering',
+  'Instrumentation and Control Engineering',
+  'Robotics and Automation',
+  'Automobile Engineering',
+  'Aerospace Engineering',
+  'Biotechnology',
+  'Biomedical Engineering',
+  'Food Technology',
+  'Production Engineering',
+  'Safety and Fire Engineering',
+  'Naval Architecture and Ship Building',
+  'Computer Engineering (Diploma)',
+  'Mechanical Engineering (Diploma)',
+  'Civil Engineering (Diploma)',
+  'Electrical and Electronics Engineering (Diploma)',
+  'Electronics Engineering (Diploma)',
+  'Automobile Engineering (Diploma)',
+];
+
+const YEAR_SUGGESTIONS = [
+  '1st Year',
+  '2nd Year',
+  '3rd Year',
+  '4th Year',
+  '5th Year',
+  '6th Year',
+];
+
+const INDIAN_STATES = [
+  'Kerala',
+  'Tamil Nadu',
+  'Karnataka',
+  'Andhra Pradesh',
+  'Telangana',
+  'Maharashtra',
+  'Delhi',
+  'Goa',
+  'Gujarat',
+  'Rajasthan',
+  'Uttar Pradesh',
+  'West Bengal',
+  'Madhya Pradesh',
+  'Bihar',
+  'Odisha',
+  'Punjab',
+  'Haryana',
+  'Jharkhand',
+  'Chhattisgarh',
+  'Assam',
+  'Himachal Pradesh',
+  'Uttarakhand',
+  'Jammu and Kashmir',
+  'Puducherry',
+  'Chandigarh',
+  'Tripura',
+  'Meghalaya',
+  'Manipur',
+  'Nagaland',
+  'Mizoram',
+  'Arunachal Pradesh',
+  'Sikkim',
+  'Ladakh',
+  'Andaman and Nicobar Islands',
+  'Lakshadweep',
+  'Dadra and Nagar Haveli and Daman and Diu',
+];
+
+const KERALA_CITIES = [
+  'Palakkad',
+  'Thrissur',
+  'Thiruvananthapuram',
+  'Kochi',
+  'Kozhikode',
+  'Malappuram',
+  'Kannur',
+  'Kollam',
+  'Alappuzha',
+  'Kottayam',
+  'Pathanamthitta',
+  'Idukki',
+  'Wayanad',
+  'Kasaragod',
+  'Ernakulam',
+  'Ottapalam',
+  'Shoranur',
+  'Pattambi',
+  'Mannarkkad',
+  'Chalakudy',
+  'Irinjalakuda',
+  'Kunnamkulam',
+  'Guruvayur',
+  'Aluva',
+  'Angamaly',
+  'Kothamangalam',
+  'Muvattupuzha',
+  'Perinthalmanna',
+  'Manjeri',
+  'Tirur',
+  'Ponnani',
+  'Nilambur',
+  'Thalassery',
+  'Payyanur',
+  'Vatakara',
+  'Kanhangad',
+  'Kalpetta',
+  'Sulthan Bathery',
+  'Thodupuzha',
+  'Pala',
+  'Changanassery',
+  'Cherthala',
+  'Kayamkulam',
+  'Adoor',
+  'Karunagappally',
+  'Punalur',
+  'Nedumangad',
+  'Attingal',
+  'Neyyattinkara',
+];
+
+function normalizeYear(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (/^[1-6]$/.test(raw)) return YEAR_SUGGESTIONS[Number(raw) - 1];
+  return raw;
+}
+
+function ComboInput({
+  value,
+  onChange,
+  options,
+  placeholder,
+  required = false,
+  disabled = false,
+  maxLength,
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const query = String(value || '').trim().toLowerCase();
+  const filtered = query
+    ? options.filter((opt) => opt.toLowerCase().includes(query))
+    : options;
+
+  useEffect(() => {
+    const onDocDown = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, []);
+
+  return (
+    <div className="combo-field" ref={wrapRef}>
+      <input
+        type="text"
+        value={value}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false);
+        }}
+        placeholder={placeholder}
+        autoComplete="off"
+        required={required}
+        disabled={disabled}
+        maxLength={maxLength}
+      />
+      {open && !disabled && filtered.length > 0 ? (
+        <div
+          className="combo-menu"
+          role="listbox"
+          data-lenis-prevent
+          onWheel={(e) => e.stopPropagation()}
+        >
+          {filtered.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              className={`combo-option${opt === value ? ' is-active' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(opt);
+                setOpen(false);
+              }}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SelectInput({ value, onChange, options, placeholder, disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const selected = options.find((opt) => opt.value === value);
+
+  useEffect(() => {
+    const onDocDown = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, []);
+
+  return (
+    <div className="combo-field" ref={wrapRef}>
+      <button
+        type="button"
+        className={`combo-select-btn${selected ? '' : ' is-placeholder'}`}
+        onClick={() => !disabled && setOpen((v) => !v)}
+        disabled={disabled}
+        aria-expanded={open}
+      >
+        <span>{selected ? selected.label : placeholder}</span>
+        <ChevronDown size={15} strokeWidth={2} className={`combo-chevron${open ? ' is-open' : ''}`} />
+      </button>
+      {open && !disabled ? (
+        <div
+          className="combo-menu"
+          role="listbox"
+          data-lenis-prevent
+          onWheel={(e) => e.stopPropagation()}
+        >
+          {options.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={`combo-option${opt.value === value ? ' is-active' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(opt.value);
+                setOpen(false);
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const STATE_LABELS = {
   payment_pending: 'Payment Pending',
   pending_verification: 'Pending Desk Review',
   approved: 'Verified & Confirmed',
-  rejected: 'Needs Re-Upload',
-  resubmission_required: 'Resubmission Requested',
+  // A full rejection is final unless the desk explicitly asks for new
+  // documents (resubmission_required). Saying "Needs Re-Upload" here used to
+  // mislead participants into waiting for an upload box that never came.
+  rejected: 'Rejected',
+  resubmission_required: 'Documents Need Correction',
+  // Category-change request states
+  none: 'No Request',
+  awaiting_payment: 'Awaiting Top-up Payment',
   refund_pending: 'Refund Pending',
   refund_processing: 'Refund Processing',
+  refund_failed: 'Refund Failed',
   refunded: 'Refunded',
+  partially_refunded: 'Partially Refunded',
 };
 
 function statusTone(value) {
   if (['approved', 'paid', 'refunded', 'completed', 'active', 'verified'].includes(value))
     return 'good';
-  if (['rejected', 'failed', 'refund_pending'].includes(value)) return 'bad';
+  if (['rejected', 'failed', 'refund_pending', 'refund_failed'].includes(value)) return 'bad';
+  if (['partially_refunded'].includes(value)) return 'warn';
   if (
     [
       'pending_verification',
@@ -77,6 +385,8 @@ function statusTone(value) {
       'processing',
       'resubmission_required',
       'refund_processing',
+      'awaiting_payment',
+      'pending',
     ].includes(value)
   )
     return 'warn';
@@ -431,29 +741,25 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
   );
 }
 
-function formatEditionDates(edition) {
-  if (!edition?.startsAt) return '21–23 NOV 2026';
-  try {
-    const s = new Date(edition.startsAt);
-    const e = edition.endsAt ? new Date(edition.endsAt) : s;
-    const sM = s.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-    const eM = e.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-    const yr = s.getFullYear();
-    if (s.toDateString() === e.toDateString()) {
-      return `${s.getDate()} ${sM} ${yr}`;
-    }
-    if (sM === eM) {
-      return `${s.getDate()}–${e.getDate()} ${sM} ${yr}`;
-    }
-    return `${s.getDate()} ${sM} – ${e.getDate()} ${eM} ${yr}`;
-  } catch {
-    return '21–23 NOV 2026';
-  }
-}
-
 export function PortalRegistration() {
   const { editionId, edition } = useSite();
   const { user } = useAuth();
+
+  // Included-event allowance and value cap come from the edition policy, the
+  // same numbers the selection API enforces, so this copy cannot drift from it.
+  const policy = edition?.policy || {};
+  const includedCount = Number.isFinite(policy.includedEventCount) ? policy.includedEventCount : null;
+  const includedMode = policy.includedSelectionMode === 'exact' ? 'exactly' : 'up to';
+  const includedCapPaise = Number.isFinite(policy.includedValueCapPaise) ? policy.includedValueCapPaise : null;
+  const includedCapLabel = includedCapPaise != null ? money(includedCapPaise) : null;
+  const includedHeading = includedCount
+    ? `Pick your ${includedCount} Included Events & Competitions`
+    : 'Pick your Included Events & Competitions';
+  const includedSelectLabel = includedCount ? `Select Your ${includedCount} Events` : 'Select Your Events';
+  const includedCountStat = includedCount ? `${includedCount} Included Events with Pass` : 'Included Events with Pass';
+  const includedRule = includedCount
+    ? `Your pass includes ${includedMode} ${includedCount} technical events or workshops${includedCapLabel ? ` within a ${includedCapLabel} total value cap` : ''}.${includedCapLabel ? ` Pick any combination whose base values add up to ${includedCapLabel} or less.` : ''} Events beyond the pass are booked separately at their add-on price.`
+    : 'Your pass includes a set of technical events or workshops. Events beyond the pass are booked separately at their add-on price.';
   const [version, setVersion] = useState(0);
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(null);
@@ -471,6 +777,9 @@ export function PortalRegistration() {
   const [slowPayment, setSlowPayment] = useState(false);
   const [photoBlobUrl, setPhotoBlobUrl] = useState(null);
   const [badgeRoleOverride, setBadgeRoleOverride] = useState(null);
+  const [verifiedBeforePay, setVerifiedBeforePay] = useState(false);
+
+  const profileQuery = useAsync(() => authApi.profile(), [version]);
 
   // Reassure the attendee if the gateway takes longer than expected instead of
   // leaving a frozen screen with no explanation.
@@ -498,6 +807,11 @@ export function PortalRegistration() {
     [editionId, version],
     { enabled: Boolean(editionId) }
   );
+  const passQuery = useAsync(
+    () => (editionId ? portalApi.pass(editionId) : Promise.resolve({ data: null })),
+    [editionId, version],
+    { enabled: Boolean(editionId) }
+  );
   const confirmedEvents = (userRegs.data?.data || []).filter(
     (r) => r.status === 'confirmed' || r.status === 'reserved'
   );
@@ -507,12 +821,37 @@ export function PortalRegistration() {
 
   // Add-on events are charged on their own orders, so the pass receipt has to
   // include them as line items instead of only showing the category fee.
-  const extraPayments = (tickets.data?.data || []).filter(
-    (ticket) => ticket.kind === 'registration' && (ticket.amountPaise || 0) > 0,
-  );
+  // The lines come from the registrations list, NOT the ticket list: tickets
+  // are revoked when a pass is rejected or refunded, but the money the
+  // attendee paid must stay on the bill regardless of the pass state.
+  const extraPayments = (userRegs.data?.data || [])
+    .filter((r) => (r.feePaise || 0) > 0)
+    .map((r) => ({
+      id: r.id,
+      title: r.eventTitle,
+      registrationNumber: r.registrationNumber,
+      startsAt: r.eventStartsAt,
+      amountPaise: r.feePaise,
+      gatewayOrderId: r.gatewayOrderId || r.orderId || null,
+      paymentId: r.paymentId,
+      paidAt: r.paidAt,
+      status: r.status,
+      cancelledBy: r.cancelledBy,
+      paymentStatus: r.paymentStatus,
+    }));
   const extraPaymentsTotal = extraPayments.reduce((sum, t) => sum + (t.amountPaise || 0), 0);
   const passPaidPaise = registration?.totalPaidPaise ?? registration?.feePaise ?? 0;
   const receiptTotalPaise = passPaidPaise + extraPaymentsTotal;
+
+  const paidLineStatus = (t) => {
+    if (t.paymentStatus === 'refunded') return { label: 'REFUNDED', color: '#dc2626' };
+    if (t.status === 'cancelled') {
+      return t.cancelledBy === 'admin'
+        ? { label: 'REMOVED', color: '#d97706' }
+        : { label: 'CANCELLED', color: '#d97706' };
+    }
+    return { label: 'PAID', color: '#16a34a' };
+  };
 
   // Every charge is its own gateway order, so the receipt has to carry the
   // Razorpay references per line item, not just one overall payment id.
@@ -535,7 +874,7 @@ export function PortalRegistration() {
       label: ticket.title || 'Add-on event',
       sublabel: ticket.registrationNumber || null,
       amountPaise: ticket.amountPaise || 0,
-      gatewayOrderId: ticket.gatewayOrderId || ticket.orderId || null,
+      gatewayOrderId: ticket.gatewayOrderId || null,
       paymentId: ticket.paymentId || null,
       paidAt: ticket.paidAt || null,
       testMode: false,
@@ -552,7 +891,7 @@ export function PortalRegistration() {
     if (sysRole === 'event_coordinator' || catCode.includes('coordinator')) {
       return 'coordinator';
     }
-    if (sysRole === 'checkin_staff' || sysRole === 'eligibility_verifier' || catCode.includes('volunteer')) {
+    if (sysRole === 'checkin_staff' || catCode.includes('volunteer')) {
       return 'volunteer';
     }
     if (catCode.includes('speaker') || sysRole.includes('speaker')) {
@@ -628,6 +967,20 @@ export function PortalRegistration() {
   const passWordSize = `${Math.min(74, Math.round(302 / (passWord.length * 0.6)))}px`;
 
   const isPaid = Boolean(registration && registration.paymentStatus === 'paid');
+  // Perks read as confirmed only once the desk approved the pass.
+  const perksConfirmed = registration?.verificationStatus === 'approved';
+  const isRefundDone =
+    registration?.paymentStatus === 'refunded' || registration?.refundStatus === 'completed';
+  // A full rejection (or a completed refund) kills the pass: the backend has
+  // already cancelled it and revoked its ticket, so the portal must not render
+  // an entry card. The bill/receipt stays available either way.
+  const isRejected = registration?.verificationStatus === 'rejected' || isRefundDone;
+  const needsResubmission = registration?.verificationStatus === 'resubmission_required';
+  const compliance = registration?.compliance;
+  const passStatus = passQuery.data?.data?.status;
+  const isSuspended = user?.status === 'suspended' || passStatus === 'suspended';
+  const hasActivePass = isPaid && !isRejected && !isSuspended;
+  const canResubmitDocs = Boolean(registration?.canResubmit);
   const passTicket =
     (tickets.data?.data || []).find((ticket) => ticket.kind === 'pass') ||
     (tickets.data?.data || [])[0];
@@ -684,23 +1037,30 @@ export function PortalRegistration() {
   useEffect(() => {
     if (!config) return;
     const reg = config.registration;
+    const prof = profileQuery.data?.data;
     setForm((prev) => {
       // Don't overwrite if user has already started typing details
       if (prev && prev.fullName) return prev;
       return {
         categoryId: reg?.category?.id || categories.find((item) => item.enabled)?.id || categories[0]?.id || '',
-        fullName: reg?.fullName || config.profileDefaults?.fullName || user?.fullName || '',
-        email: reg?.email || config.profileDefaults?.email || user?.email || '',
-        phone: reg?.phone || config.profileDefaults?.phone || '',
-        collegeName: reg?.collegeName || '',
-        course: reg?.course || '',
-        branch: reg?.branch || '',
-        yearOfStudy: reg?.yearOfStudy || '',
-        city: reg?.city || '',
-        stateName: reg?.stateName || '',
+        fullName: reg?.fullName || prof?.fullName || config.profileDefaults?.fullName || user?.fullName || '',
+        email: reg?.email || prof?.email || config.profileDefaults?.email || user?.email || '',
+        phone: reg?.phone || prof?.phone || config.profileDefaults?.phone || '',
+        collegeName:
+          (reg?.collegeName && reg.collegeName !== 'College Student' ? reg.collegeName : '') ||
+          (prof?.collegeName && prof.collegeName !== 'College Student' ? prof.collegeName : ''),
+        course: reg?.course || prof?.course || '',
+        branch: reg?.branch || prof?.branch || '',
+        yearOfStudy: normalizeYear(reg?.yearOfStudy || prof?.yearOfStudy),
+        dateOfBirth: reg?.dateOfBirth || prof?.dateOfBirth || '',
+        city: reg?.city || prof?.city || '',
+        stateName: reg?.stateName || prof?.state || '',
+        gender: reg?.gender || prof?.gender || '',
+        foodPreference: reg?.foodPreference || prof?.foodPreference || '',
+        needsAccommodation: reg ? Boolean(reg.needsAccommodation) : Boolean(prof?.needsAccommodation),
       };
     });
-  }, [config, user?.fullName, user?.email]);
+  }, [config, profileQuery.data, user?.fullName, user?.email]);
 
   const refresh = (text) => {
     setMessage(text ? { tone: 'success', text } : null);
@@ -741,7 +1101,10 @@ export function PortalRegistration() {
     form.phone?.trim() &&
     form.collegeName?.trim() &&
     form.branch?.trim() &&
-    form.yearOfStudy?.trim()
+    form.yearOfStudy?.trim() &&
+    Boolean(form.dateOfBirth) &&
+    form.gender &&
+    form.foodPreference
   );
 
   // Auto-save draft profile before uploading file so upload never fails on empty fields
@@ -753,12 +1116,16 @@ export function PortalRegistration() {
       fullName: form.fullName?.trim() || user?.fullName || 'Convention Attendee',
       email: form.email?.trim() || user?.email || '',
       phone: form.phone?.trim() || null,
-      collegeName: form.collegeName?.trim() || 'College Student',
+      collegeName: form.collegeName?.trim() || '',
       course: form.course?.trim() || null,
       branch: form.branch?.trim() || null,
       yearOfStudy: form.yearOfStudy?.trim() || null,
+      dateOfBirth: form.dateOfBirth || null,
       city: form.city?.trim() || null,
       state: form.stateName?.trim() || null,
+      gender: form.gender || null,
+      foodPreference: form.foodPreference || null,
+      needsAccommodation: Boolean(form.needsAccommodation),
     });
     if (body?.data) {
       setLocalRegistration(body.data);
@@ -893,9 +1260,17 @@ export function PortalRegistration() {
         !form.phone?.trim() ||
         !form.collegeName?.trim() ||
         !form.branch?.trim() ||
-        !form.yearOfStudy?.trim()
+        !form.yearOfStudy?.trim() ||
+        !form.dateOfBirth
       ) {
-        throw new Error('All 6 attendee details (Full Name, Email, Phone, College, Branch, Year of Study) are mandatory.');
+        throw new Error(
+          'All attendee details (Full Name, Email, Phone, College, Branch, Year of Study, Date of Birth) are mandatory.',
+        );
+      }
+      if (!form.gender || !form.foodPreference) {
+        throw new Error(
+          'Please answer gender and meal preference: the kitchen and hostel count from them.',
+        );
       }
       await ensureProfileSaved();
       const body = await registrationApi.submit(editionId);
@@ -927,7 +1302,7 @@ export function PortalRegistration() {
       const response = await openCheckout(
         order,
         attendeeUser,
-        `${selectedCategory?.name || 'Convention Pass'} - Parallax 2027`
+        `${selectedCategory?.name || 'Convention Pass'} - ${edition?.name || 'Parallax 2027'}`
       );
       if (!response) {
         setBusy('');
@@ -970,7 +1345,7 @@ export function PortalRegistration() {
       // away instead of waiting for another full reload of the page data.
       setMessage({
         tone: 'success',
-        text: 'Payment verified successfully! Welcome to Parallax 2027.',
+        text: `Payment verified successfully! Welcome to ${edition?.name || 'Parallax 2027'}.`,
       });
     } catch (err) {
       setMessage({ tone: 'error', text: err.message || 'Checkout failed.' });
@@ -999,11 +1374,108 @@ export function PortalRegistration() {
     }
   };
 
+  // Shared re-upload desk: shown when the registration desk flagged documents
+  // (resubmission_required) or rejected the pass while resubmission is allowed.
+  // Reuses the same upload cards as the booking flow, then lets the participant
+  // explicitly ask the desk to look again (the backend never auto-approves).
+  const resubmissionPanel = !canResubmitDocs ? null : (
+    <Panel>
+      <Eyebrow>RE-UPLOAD DOCUMENTS</Eyebrow>
+      <h3 style={{ fontSize: '19px', margin: '6px 0 6px 0', color: '#f8fafc' }}>
+        Correct and re-upload your documents
+      </h3>
+      <p className="muted" style={{ fontSize: '13px', margin: '0 0 20px 0', color: '#94a3b8' }}>
+        Replace the documents the desk flagged, then request re-verification. Files: PDF, JPG or
+        PNG under 500 KB; passport photo under <b>100 KB</b>.
+      </p>
+      <div style={{ display: 'grid', gap: '16px' }}>
+        {requirements.map((req) => {
+          const serverDoc = documentFor(req.type);
+          const local = fileState[req.type];
+          return (
+            <DocumentUploadCard
+              key={req.type}
+              req={req}
+              serverDoc={serverDoc}
+              localFile={local}
+              onSelectFile={(file) => handleFileSelect(req.type, file)}
+              onRemoveFile={() => handleFileRemove(req.type)}
+              isRemoving={busy === `remove-${req.type}`}
+              onPreview={() => {
+                const isLocalPdf =
+                  local?.file?.type === 'application/pdf' || local?.name?.toLowerCase().endsWith('.pdf');
+                if (local?.previewUrl) {
+                  setPreview({
+                    label: req.label,
+                    originalName: local.name,
+                    sizeBytes: local.size,
+                    mime: local.file?.type || (isLocalPdf ? 'application/pdf' : 'image/jpeg'),
+                    uploadedAt: new Date().toISOString(),
+                    previewBlobUrl: local.previewUrl,
+                  });
+                } else if (serverDoc) {
+                  setPreview(serverDoc);
+                }
+              }}
+            />
+          );
+        })}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '16px',
+          marginTop: '24px',
+          flexWrap: 'wrap',
+        }}
+      >
+        {missingCount > 0 ? (
+          <span style={{ fontSize: '13px', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <AlertTriangle size={15} /> Upload {missingCount} required document{missingCount === 1 ? '' : 's'} first
+          </span>
+        ) : (
+          <span style={{ fontSize: '13px', color: '#5ee2a6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCircle2 size={15} /> All documents uploaded — ready for re-verification
+          </span>
+        )}
+        <Button
+          onClick={async () => {
+            setBusy('resubmit');
+            setMessage(null);
+            try {
+              await registrationApi.resubmit(editionId);
+              refresh('Re-verification requested. The registration desk will review your documents again.');
+            } catch (err) {
+              setMessage({ tone: 'error', text: err.message });
+            } finally {
+              setBusy('');
+            }
+          }}
+          disabled={missingCount > 0 || busy === 'resubmit'}
+          loading={busy === 'resubmit'}
+          icon={RefreshCw}
+        >
+          Request Re-verification
+        </Button>
+      </div>
+    </Panel>
+  );
+
   return (
     <>
       <SectionHead
         kicker="Parallax 2027"
-        title={isPaid ? 'Your Convention Pass' : 'Get Convention Pass'}
+        title={
+          isSuspended
+            ? 'Account & Pass Suspended'
+            : hasActivePass
+            ? 'Your Convention Pass'
+            : isPaid
+            ? 'Your Pass Status'
+            : 'Get Convention Pass'
+        }
         action={
           registration ? (
             <Badge tone={statusTone(registration.state)}>
@@ -1013,84 +1485,230 @@ export function PortalRegistration() {
         }
       />
 
-      {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
-
-      {/* ========================================================================= */}
-      {/* 1. CONFIRMED PAID VIEW (If Attendee Already Has Pass)                     */}
-      {/* ========================================================================= */}
-      {isPaid ? (
-        <div style={{ display: 'grid', gap: '20px' }}>
-          {/* Prominent Next Step Nudge: Select Included Events with Cap */}
-          <div
-            style={{
-              padding: '24px',
-              background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.16) 0%, rgba(15, 23, 42, 0.75) 100%)',
-              border: '1px solid rgba(56, 189, 248, 0.4)',
-              borderRadius: '16px',
-              boxShadow: '0 8px 32px rgba(2, 132, 199, 0.16)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '16px',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
-              <div>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: '700',
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: '#38bdf8',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  <Sparkles size={14} /> Next Step · Convention Programme
-                </span>
-                <h2 style={{ fontSize: '20px', fontWeight: '700', color: '#f8fafc', margin: '6px 0 6px 0' }}>
-                  Pick your 3 Included Events &amp; Competitions
-                </h2>
-                <p style={{ margin: 0, fontSize: '14px', color: '#cbd5e1', lineHeight: '1.6', maxWidth: '680px' }}>
-                  Your pass includes up to <b>3 technical events or workshops</b> within the <b>₹450 value cap</b>.
-                  If the 3 events you select cost less (e.g. ₹300 total), your remaining ₹150 credit automatically applies
-                  to discount any additional events you choose!
-                </p>
-              </div>
-
-              <Button
-                to="/portal/select-events"
-                size="medium"
-                icon={ArrowRight}
-                sx={{ flexShrink: 0 }}
-              >
-                Select Your 3 Events
-              </Button>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: '12px',
-                paddingTop: '12px',
-                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-                fontSize: '12.5px',
-                color: '#94a3b8',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> 3 Included Events with Pass
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> ₹450 Base Value Credit
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> Extra events at separate add-on rates
-              </div>
+      {hasActivePass ? (
+        <div
+          style={{
+            padding: '18px 22px',
+            marginBottom: '22px',
+            background: 'rgba(16, 185, 129, 0.08)',
+            border: '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '14px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', maxWidth: '720px' }}>
+            <Users size={20} style={{ color: '#34d399', flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <b style={{ color: '#f8fafc', fontSize: '15px' }}>Next step for team events</b>
+              <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: '#cbd5e1', lineHeight: 1.6 }}>
+                Planning to compete in a team event? Team events are entered by creating a team or
+                joining one with an invite code — every member needs their own event registration.
+                You can form a separate team for every team event you enter.
+              </p>
             </div>
           </div>
+          <Button to="/portal/teams" size="small" icon={Users}>
+            Create or join a team
+          </Button>
+        </div>
+      ) : null}
+
+      {isSuspended ? (
+        <div
+          style={{
+            padding: '20px 24px',
+            background: 'rgba(220, 38, 38, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.45)',
+            borderRadius: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '14px',
+            marginBottom: '24px',
+          }}
+        >
+          <AlertTriangle size={24} color="#ef4444" style={{ flexShrink: 0 }} />
+          <div>
+            <b style={{ color: '#ef4444', fontSize: '15px' }}>Account &amp; Pass Suspended</b>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: '#cbd5e1', lineHeight: '1.5' }}>
+              Your convention pass has been suspended by the organisers. Event selection, add-on
+              purchases, and entry credentials are restricted. Please contact the convention administration.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {compliance && !isSuspended ? (
+        <div
+          style={{
+            padding: '20px 24px',
+            background: compliance.enforced
+              ? 'rgba(220, 38, 38, 0.12)'
+              : 'rgba(245, 158, 11, 0.12)',
+            border: `1px solid ${
+              compliance.enforced ? 'rgba(239, 68, 68, 0.5)' : 'rgba(245, 158, 11, 0.5)'
+            }`,
+            borderRadius: '16px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '14px',
+            marginBottom: '20px',
+          }}
+        >
+          <AlertTriangle
+            size={24}
+            color={compliance.enforced ? '#ef4444' : '#fbbf24'}
+            style={{ flexShrink: 0, marginTop: 2 }}
+          />
+          <div style={{ display: 'grid', gap: '4px' }}>
+            <b style={{ color: compliance.enforced ? '#f87171' : '#fbbf24', fontSize: '15px' }}>
+              {compliance.enforced
+                ? '24-hour deadline passed'
+                : `Action required · ${compliance.label || 'Registration desk request'}`}
+            </b>
+            <p style={{ margin: 0, fontSize: '13.5px', color: '#cbd5e1', lineHeight: 1.55 }}>
+              {compliance.message}
+            </p>
+            {compliance.deadlineAt && !compliance.enforced ? (
+              <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8' }}>
+                Deadline: <b style={{ color: '#e2e8f0' }}>{dateTime(compliance.deadlineAt)}</b>
+              </p>
+            ) : null}
+            {compliance.enforced ? (
+              <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8' }}>
+                Your events and team slots are released. Fix the request above, then re-select your
+                events and team from this page.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <Feedback message={message} />
+
+      {/* ========================================================================= */}
+      {/* 1. CONFIRMED PAID VIEW (pass approved or still under review)              */}
+      {/* ========================================================================= */}
+      {hasActivePass ? (
+        <div style={{ display: 'grid', gap: '20px' }}>
+          {needsResubmission ? (
+            <div
+              style={{
+                padding: '20px 24px',
+                background: 'rgba(245, 158, 11, 0.12)',
+                border: '1px solid rgba(245, 158, 11, 0.45)',
+                borderRadius: '16px',
+                display: 'grid',
+                gap: '8px',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: '#fbbf24',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <AlertTriangle size={14} /> Action required · Documents need correction
+              </span>
+              <p style={{ margin: 0, fontSize: '14px', color: '#e2e8f0', lineHeight: 1.6 }}>
+                {canResubmitDocs
+                  ? 'The registration desk asked for corrections before your pass can be confirmed. Re-upload the highlighted documents below, then request re-verification.'
+                  : 'The registration desk asked for corrections, but re-uploads are closed for this edition. Contact the helpdesk for help.'}
+              </p>
+              {registration.rejectionReason ? (
+                <p style={{ margin: 0, fontSize: '13px', color: '#fbbf24' }}>
+                  Desk note: {registration.rejectionReason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {/* Prominent Next Step Nudge: Select Included Events with Cap (hidden once user visits Events portal) */}
+          {(() => {
+            try {
+              if (localStorage.getItem('px_visited_events_portal') === '1') return null;
+            } catch {}
+            return (
+              <div
+                style={{
+                  padding: '24px',
+                  background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.16) 0%, rgba(15, 23, 42, 0.75) 100%)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  borderRadius: '16px',
+                  boxShadow: '0 8px 32px rgba(2, 132, 199, 0.16)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                  <div>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: '#38bdf8',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      <Sparkles size={14} /> Next Step · Convention Programme
+                    </span>
+                    <h2 style={{ fontSize: '20px', fontWeight: '700', color: '#f8fafc', margin: '6px 0 6px 0' }}>
+                      {includedHeading}
+                    </h2>
+                    <p style={{ margin: 0, fontSize: '14px', color: '#cbd5e1', lineHeight: '1.6', maxWidth: '680px' }}>
+                      {includedRule}
+                    </p>
+                  </div>
+
+                  <Button
+                    to="/portal/select-events"
+                    size="medium"
+                    icon={ArrowRight}
+                    sx={{ flexShrink: 0 }}
+                  >
+                    {includedSelectLabel}
+                  </Button>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                    gap: '12px',
+                    paddingTop: '12px',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                    fontSize: '12.5px',
+                    color: '#94a3b8',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> {includedCountStat}
+                  </div>
+                  {includedCapLabel ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> {includedCapLabel} Total Included Value
+                    </div>
+                  ) : null}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: '#38bdf8', fontWeight: '700' }}>✓</span> Extra events booked at add-on price
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           <div
             className="panel bezel"
             style={{
@@ -1141,24 +1759,34 @@ export function PortalRegistration() {
 
             <hr style={{ border: 'none', borderTop: '1px solid rgba(255, 255, 255, 0.1)', margin: '24px 0' }} />
 
+            {/* Perk list reads as confirmed only after the desk approves the
+                pass. While verification is pending or documents were flagged,
+                the same items show as "activates after approval" instead of
+                promising benefits the pass cannot guarantee yet. */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <Check color="#38bdf8" size={18} strokeWidth={2.5} />
-                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Full 2-Day Access</span>
-              </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <Check color="#38bdf8" size={18} strokeWidth={2.5} />
-                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Lunch Included (Both Days)</span>
-              </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <Check color="#38bdf8" size={18} strokeWidth={2.5} />
-                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Competition Entry</span>
-              </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <Check color="#38bdf8" size={18} strokeWidth={2.5} />
-                <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Official ISTE Certificate</span>
-              </div>
+              {[
+                'Full 2-Day Access',
+                'Lunch Included (Both Days)',
+                'Competition Entry',
+                'Delegate Kit & Digital QR ID',
+              ].map((perk) => (
+                <div key={perk} style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  {perksConfirmed ? (
+                    <Check color="#38bdf8" size={18} strokeWidth={2.5} />
+                  ) : (
+                    <ShieldCheck color="#f59e0b" size={18} strokeWidth={2.2} />
+                  )}
+                  <span style={{ fontSize: '14px', color: perksConfirmed ? '#cbd5e1' : '#94a3b8' }}>
+                    {perk}
+                  </span>
+                </div>
+              ))}
             </div>
+            {!perksConfirmed ? (
+              <p style={{ margin: '14px 0 0 0', fontSize: '13px', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <ShieldCheck size={15} /> These perks activate once the registration desk approves your documents.
+              </p>
+            ) : null}
 
             <div className="portal-nav-actions" style={{ display: 'flex', gap: '12px', marginTop: '28px', flexWrap: 'wrap' }}>
               <Button to="/portal/select-events" icon={ArrowRight}>
@@ -1186,6 +1814,28 @@ export function PortalRegistration() {
             </div>
           </div>
 
+          {/* Category change decision: the desk's answer must be visible to
+              the participant, otherwise requests disappear into a void. */}
+          {registration.categoryChange ? (
+            <Panel>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                <div>
+                  <Eyebrow>CATEGORY CHANGE REQUEST</Eyebrow>
+                  <p className="muted" style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
+                    Requested move to <b style={{ color: '#e2e8f0' }}>{registration.categoryChange.toCategory?.name || 'selected category'}</b>
+                    {registration.categoryChange.requestedAt ? ` · ${date(registration.categoryChange.requestedAt)}` : ''}
+                  </p>
+                </div>
+                <StatusPill value={registration.categoryChange.status} />
+              </div>
+              {registration.categoryChange.adminNote ? (
+                <p style={{ margin: 0, fontSize: '13px', color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
+                  <b style={{ color: '#94a3b8' }}>Desk note:</b> {registration.categoryChange.adminNote}
+                </p>
+              ) : null}
+            </Panel>
+          ) : null}
+
           {/* Uploaded Documents Status */}
           <Panel>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
@@ -1195,12 +1845,21 @@ export function PortalRegistration() {
                   Uploaded documents are safely stored and verified by NSSCE registration staff.
                 </p>
               </div>
-              <Badge tone="good">All Uploaded</Badge>
+              {missingCount > 0 ? (
+                <Badge tone="bad">
+                  {missingCount} document{missingCount === 1 ? '' : 's'} need correction
+                </Badge>
+              ) : needsResubmission ? (
+                <Badge tone="warn">Corrections requested</Badge>
+              ) : (
+                <Badge tone="good">All Uploaded</Badge>
+              )}
             </div>
 
             <div style={{ display: 'grid', gap: '12px' }}>
               {requirements.map((req) => {
                 const doc = documentFor(req.type);
+                const flagged = (registration?.requestedDocuments || []).includes(req.type);
                 return (
                   <div
                     key={req.type}
@@ -1217,10 +1876,15 @@ export function PortalRegistration() {
                     }}
                   >
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <FileCheck2 color="#38bdf8" size={20} />
+                      <FileCheck2 color={flagged ? '#fbbf24' : '#38bdf8'} size={20} />
                       <div>
                         <b style={{ fontSize: '14px' }}>{req.label}</b>
-                        {doc ? (
+                        {flagged ? (
+                          <small style={{ display: 'block', color: '#fbbf24', fontSize: '12px' }}>
+                            The desk asked for a corrected version of this document
+                          </small>
+                        ) : null}
+                        {doc && !flagged ? (
                           <small style={{ display: 'block', color: '#94a3b8', fontSize: '12px' }}>
                             {doc.originalName} ({fileSize(doc.sizeBytes)})
                           </small>
@@ -1241,26 +1905,71 @@ export function PortalRegistration() {
                 );
               })}
             </div>
+
+              {resubmissionPanel}
           </Panel>
+        </div>
+      ) : isPaid ? (
+        /* ======================================================================= */
+        /* 1b. PAID BUT REJECTED / REFUNDED — the bill stays, the pass does not    */
+        /* ======================================================================= */
+        <div style={{ display: 'grid', gap: '20px' }}>
+          <Panel>
+            <Eyebrow>{isRefundDone ? 'REGISTRATION REFUNDED' : 'REGISTRATION REJECTED'}</Eyebrow>
+            <h2 style={{ fontSize: 'clamp(22px, 3.5vw, 28px)', margin: '4px 0 8px 0', color: '#fff' }}>
+              {isRefundDone
+                ? 'Your convention pass has been refunded'
+                : 'Your convention pass was not approved'}
+            </h2>
+            <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px', lineHeight: 1.6, maxWidth: '680px' }}>
+              {isRefundDone
+                ? 'The registration desk refunded this pass, so it no longer grants entry. Your payment receipt stays available.'
+                : 'The registration desk rejected this pass, so it no longer grants entry and its QR code has been deactivated. Your payment receipt stays available.'}
+            </p>
+            {registration.rejectionReason ? (
+              <div
+                style={{
+                  marginTop: '16px',
+                  padding: '14px 18px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  borderRadius: '10px',
+                  fontSize: '14px',
+                  color: '#fecaca',
+                  lineHeight: 1.6,
+                }}
+              >
+                <b style={{ color: '#f87171' }}>Reason:</b> {registration.rejectionReason}
+              </div>
+            ) : null}
+            {registration.refundStatus && registration.refundStatus !== 'not_initiated' ? (
+              <p style={{ margin: '12px 0 0 0', fontSize: '13px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                Refund status: <StatusPill value={registration.refundStatus} />
+              </p>
+            ) : null}
+            <div className="portal-nav-actions" style={{ display: 'flex', gap: '12px', marginTop: '20px', flexWrap: 'wrap' }}>
+              <Button
+                onClick={() => {
+                  setShowReceipt(true);
+                  tickets.reload();
+                  query.reload();
+                }}
+                variant="ghost"
+                icon={Printer}
+              >
+                View & Print Receipt
+              </Button>
+            </div>
+          </Panel>
+          {resubmissionPanel}
         </div>
       ) : (
         /* ========================================================================= */
         /* 2. UNIFIED 3-STEP TICKET BOOKING FLOW (When Unpaid)                       */
         /* ========================================================================= */
-        <div style={{ display: 'grid', gap: '24px' }}>
+        <div className="portal-reg-shell">
           {/* Stepper Progress Bar */}
-          <div
-            className="portal-stepper-grid"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '10px',
-              padding: '6px',
-              background: 'rgba(15, 23, 42, 0.6)',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-            }}
-          >
+          <div className="portal-stepper-grid">
             {[
               { num: 1, title: 'Choose Pass Tier' },
               { num: 2, title: 'Details & Mandatory IDs' },
@@ -1272,40 +1981,13 @@ export function PortalRegistration() {
                 <button
                   type="button"
                   key={s.num}
-                  className="portal-step-btn"
+                  className={`portal-step-btn${active ? ' is-active' : ''}${completed ? ' is-completed' : ''}`}
                   onClick={() => (completed ? setStep(s.num) : null)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    padding: '12px 14px',
-                    background: active ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
-                    border: active ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid transparent',
-                    borderRadius: '8px',
-                    color: active ? '#38bdf8' : completed ? '#94a3b8' : '#64748b',
-                    fontWeight: active ? '600' : '500',
-                    cursor: completed ? 'pointer' : 'default',
-                    transition: 'all 150ms ease',
-                  }}
                 >
-                  <span
-                    style={{
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '50%',
-                      background: active ? '#38bdf8' : completed ? '#334155' : '#1e293b',
-                      color: active ? '#0f172a' : '#cbd5e1',
-                      fontSize: '12px',
-                      display: 'grid',
-                      placeItems: 'center',
-                      fontWeight: '700',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {completed ? <Check size={14} strokeWidth={2.5} /> : s.num}
+                  <span className="portal-step-node">
+                    <span>{completed ? <Check size={12} strokeWidth={2.75} /> : s.num}</span>
                   </span>
-                  <span style={{ fontSize: '13px', whiteSpace: 'nowrap' }}>{s.title}</span>
+                  <span className="portal-step-title">{s.title}</span>
                 </button>
               );
             })}
@@ -1322,81 +2004,24 @@ export function PortalRegistration() {
                 All passes include full access to 2-day events, competitions, lunch on both convention days, certificates, and delegate kits.
               </p>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
-                {categories.map((cat) => {
-                  const isSelected = form.categoryId === cat.id;
-                  const isIste = cat.code === 'iste_member';
-                  return (
-                    <div
+              <div className="pass-tier-grid">
+                {[...categories]
+                  // Highest tier in the middle: the ₹499 ISTE tier sits between
+                  // the standard pass and the polytechnic pass.
+                  .sort((a, b) => (b.feePaise || 0) - (a.feePaise || 0))
+                  .map((cat) => (
+                    <PassTierCard
                       key={cat.id}
-                      onClick={() => handleCategorySelect(cat.id)}
-                      style={{
-                        padding: '24px',
-                        borderRadius: '14px',
-                        border: isSelected
-                          ? '1px solid rgba(255, 255, 255, 0.45)'
-                          : '1px solid rgba(255, 255, 255, 0.08)',
-                        background: isSelected
-                          ? 'rgba(255, 255, 255, 0.05)'
-                          : 'rgba(255, 255, 255, 0.02)',
-                        cursor: 'pointer',
-                        transition: 'all 180ms ease',
-                        position: 'relative',
-                        boxShadow: 'none',
-                      }}
-                    >
-                      {isIste ? (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: '-10px',
-                            right: '16px',
-                            background: isSelected ? '#f1f5f9' : 'rgba(255, 255, 255, 0.12)',
-                            color: isSelected ? '#0f172a' : '#cbd5e1',
-                            fontSize: '11px',
-                            fontWeight: '700',
-                            padding: '3px 10px',
-                            borderRadius: '999px',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.04em',
-                            border: isSelected ? 'none' : '1px solid rgba(255, 255, 255, 0.15)',
-                          }}
-                        >
-                          ISTE Discount
-                        </span>
-                      ) : null}
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <b style={{ fontSize: '17px', color: '#f8fafc' }}>{cat.name}</b>
-                        {isSelected ? <Check color="#f1f5f9" size={20} strokeWidth={2.5} /> : null}
-                      </div>
-
-                      <div style={{ margin: '14px 0 10px 0' }}>
-                        <span style={{ fontSize: '32px', fontWeight: '700', color: '#fff', letterSpacing: '-0.02em' }}>
-                          {money(cat.feePaise)}
-                        </span>
-                        <span style={{ color: '#94a3b8', fontSize: '13px', marginLeft: '6px' }}>/ person</span>
-                      </div>
-
-                      <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 16px 0', minHeight: '36px' }}>
-                        {cat.description || 'Full 2-day access with lunch, kits, and official certificates.'}
-                      </p>
-
-                      <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '14px', fontSize: '12px' }}>
-                        <b style={{ color: '#cbd5e1', display: 'block', marginBottom: '6px' }}>Required Verification:</b>
-                        {(cat.requiredDocuments || []).map((doc) => (
-                          <div key={doc.type} style={{ color: '#94a3b8', display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ color: '#38bdf8' }}>•</span> {doc.label}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+                      category={cat}
+                      selected={form.categoryId === cat.id}
+                      onSelect={() => handleCategorySelect(cat.id)}
+                    />
+                  ))}
               </div>
 
               <div className="portal-nav-actions" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '28px' }}>
                 <Button
+                  className="portal-reg-cta"
                   onClick={async () => {
                     setBusy('saving-tier');
                     try {
@@ -1410,7 +2035,6 @@ export function PortalRegistration() {
                   loading={busy === 'saving-tier'}
                   disabled={!form.categoryId || busy === 'saving-tier'}
                   icon={ArrowRight}
-                  style={{ padding: '12px 24px', fontSize: '15px' }}
                 >
                   {busy === 'saving-tier' ? 'Saving pass tier…' : 'Continue to Details & ID Upload'}
                 </Button>
@@ -1462,30 +2086,108 @@ export function PortalRegistration() {
                   />
                 </Field>
                 <Field label="College / Institution *">
-                  <input
+                  <ComboInput
                     value={form.collegeName}
-                    onChange={(e) => setForm({ ...form, collegeName: e.target.value })}
-                    placeholder="e.g. NSS College of Engineering"
+                    onChange={(val) => setForm({ ...form, collegeName: val })}
+                    options={COLLEGE_SUGGESTIONS}
+                    placeholder="Search your college, or type it"
                     required
+                    maxLength={200}
                   />
                 </Field>
                 <Field label="Branch / Department *">
-                  <input
+                  <ComboInput
                     value={form.branch}
-                    onChange={(e) => setForm({ ...form, branch: e.target.value })}
-                    placeholder="e.g. Computer Science, Mechanical..."
+                    onChange={(val) => setForm({ ...form, branch: val })}
+                    options={BRANCH_SUGGESTIONS}
+                    placeholder="Search your branch, or type it"
                     required
+                    maxLength={120}
                   />
                 </Field>
                 <Field label="Year of Study *">
-                  <input
+                  <ComboInput
                     value={form.yearOfStudy}
-                    onChange={(e) => setForm({ ...form, yearOfStudy: e.target.value })}
-                    placeholder="e.g. 1st Year, 3rd Year..."
+                    onChange={(val) => setForm({ ...form, yearOfStudy: val })}
+                    options={YEAR_SUGGESTIONS}
+                    placeholder="Select or type year"
+                    required
+                    maxLength={40}
+                  />
+                </Field>
+                <Field label="Date of Birth *">
+                  <input
+                    type="date"
+                    value={form.dateOfBirth}
+                    onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+                    max={new Date().toISOString().slice(0, 10)}
+                    min="1950-01-01"
                     required
                   />
                 </Field>
+                <Field label="Gender *">
+                  <SelectInput
+                    value={form.gender}
+                    onChange={(val) => setForm({ ...form, gender: val })}
+                    options={GENDER_OPTIONS}
+                    placeholder="Select gender"
+                  />
+                </Field>
+                <Field label="Meal Preference *">
+                  <SelectInput
+                    value={form.foodPreference}
+                    onChange={(val) => setForm({ ...form, foodPreference: val })}
+                    options={FOOD_OPTIONS}
+                    placeholder="Select meal preference"
+                  />
+                </Field>
+                <Field label="City">
+                  <ComboInput
+                    value={form.city}
+                    onChange={(val) => setForm({ ...form, city: val })}
+                    options={KERALA_CITIES}
+                    placeholder="Select or type city (e.g. Palakkad)"
+                    maxLength={120}
+                  />
+                </Field>
+                <Field label="State">
+                  <ComboInput
+                    value={form.stateName}
+                    onChange={(val) => setForm({ ...form, stateName: val })}
+                    options={INDIAN_STATES}
+                    placeholder="Select or type state (e.g. Kerala)"
+                    maxLength={120}
+                  />
+                </Field>
               </FieldGrid>
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  marginTop: '16px',
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  cursor: 'pointer',
+                  fontSize: '13.5px',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.needsAccommodation)}
+                  onChange={(e) => setForm({ ...form, needsAccommodation: e.target.checked })}
+                  style={{ marginTop: '2px' }}
+                />
+                <span>
+                  I need hostel accommodation during the convention
+                  <span className="muted" style={{ display: 'block', fontSize: '12px' }}>
+                    Tick this and the accommodation desk will contact you. It is not charged here.
+                  </span>
+                </span>
+              </label>
 
               {/* Mandatory Document Upload Section */}
               <div style={{ marginTop: '36px', paddingTop: '16px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
@@ -1542,7 +2244,7 @@ export function PortalRegistration() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                   {!isFormComplete ? (
                     <span style={{ fontSize: '13px', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <AlertTriangle size={15} /> All 6 attendee details are mandatory
+                      <AlertTriangle size={15} /> All attendee details, including date of birth, are mandatory
                     </span>
                   ) : missingCount > 0 ? (
                     <span style={{ fontSize: '13px', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1551,6 +2253,7 @@ export function PortalRegistration() {
                   ) : null}
 
                   <Button
+                    className="portal-reg-cta"
                     onClick={async () => {
                       setBusy('saving-details');
                       try {
@@ -1564,7 +2267,6 @@ export function PortalRegistration() {
                     loading={busy === 'saving-details'}
                     disabled={missingCount > 0 || !isFormComplete || busy === 'saving-details'}
                     icon={ArrowRight}
-                    style={{ padding: '12px 24px', fontSize: '15px' }}
                   >
                     {busy === 'saving-details' ? 'Saving details…' : `Proceed to Payment (${money(fee)})`}
                   </Button>
@@ -1581,68 +2283,69 @@ export function PortalRegistration() {
               <Eyebrow>STEP 3 OF 3</Eyebrow>
               <h2 style={{ fontSize: '22px', margin: '4px 0 8px 0' }}>Review & Instant Checkout</h2>
               <p className="muted" style={{ margin: '0 0 24px 0', fontSize: '14px' }}>
-                Complete your payment to instantly generate your official Parallax 2027 QR entry pass.
+                Complete your payment to instantly generate your official{' '}
+                {edition?.name || 'Parallax 2027'} QR entry pass.
               </p>
 
               {/* Summary Card */}
-              <div
-                style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: '14px',
-                  padding: '24px',
-                  marginBottom: '28px',
-                }}
-              >
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
+              <div className="portal-reg-summary">
+                <div className="portal-reg-summary-grid">
                   <div>
-                    <span style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <span className="portal-reg-meta-label">
                       Selected Pass Tier
                     </span>
-                    <h3 style={{ fontSize: '18px', margin: '4px 0 0 0', color: '#fff' }}>{selectedCategory?.name}</h3>
-                    <p style={{ margin: '4px 0 0 0', color: '#38bdf8', fontSize: '13px' }}>
+                    <h3 style={{ fontSize: '18px', margin: '6px 0 0 0', color: '#fff' }}>{selectedCategory?.name}</h3>
+                    <p style={{ margin: '4px 0 0 0', color: '#f5d061', fontSize: '13px', fontWeight: 500 }}>
                       Full 2-Day All-Access + Lunch Included
                     </p>
                   </div>
 
                   <div>
-                    <span style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <span className="portal-reg-meta-label">
                       Attendee Details
                     </span>
-                    <h4 style={{ fontSize: '16px', margin: '4px 0 0 0', color: '#fff' }}>{form.fullName}</h4>
-                    <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>{form.collegeName}</p>
-                    <p style={{ margin: '2px 0 0 0', color: '#64748b', fontSize: '12px' }}>
+                    <h4 style={{ fontSize: '16px', margin: '6px 0 0 0', color: '#fff' }}>{form.fullName}</h4>
+                    <p style={{ margin: '4px 0 0 0', color: '#cbd5e1', fontSize: '13px' }}>{form.collegeName}</p>
+                    <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '12px' }}>
                       {form.branch} · {form.yearOfStudy} · {form.phone}
+                      {form.city || form.stateName
+                        ? ` · ${[form.city, form.stateName].filter(Boolean).join(', ')}`
+                        : ''}
+                    </p>
+                    <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '12px' }}>
+                      {genderLabel(form.gender) || 'Gender not answered'} ·{' '}
+                      {foodLabel(form.foodPreference) || 'Meal not answered'} ·{' '}
+                      {form.needsAccommodation ? 'Needs accommodation' : 'No accommodation'}
                     </p>
                   </div>
 
                   <div>
-                    <span style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <span className="portal-reg-meta-label">
                       Verified Documents
                     </span>
-                    <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {requirements.map((req) => (
-                        <span key={req.type} style={{ fontSize: '13px', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <Check size={14} /> {req.label}
+                        <span key={req.type} style={{ fontSize: '13px', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                          <Check size={14} color="#f5d061" /> {req.label}
                         </span>
                       ))}
                     </div>
                   </div>
                 </div>
 
-                <hr style={{ border: 'none', borderTop: '1px solid rgba(255, 255, 255, 0.08)', margin: '20px 0' }} />
+                <hr className="portal-reg-divider" />
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                  <span style={{ fontSize: '16px', fontWeight: '500', color: '#cbd5e1' }}>Total Amount Payable</span>
-                  <span style={{ fontSize: '32px', fontWeight: '700', color: '#38bdf8', letterSpacing: '-0.02em' }}>
+                  <span style={{ fontSize: '15px', fontWeight: '500', color: '#cbd5e1' }}>Total Amount Payable</span>
+                  <span style={{ fontSize: '32px', fontWeight: '700', color: '#f5d061', letterSpacing: '-0.02em' }}>
                     {money(fee)}
                   </span>
                 </div>
 
                 {/* Cancellation, Refund Policy & Double-Payment Caution */}
-                <div style={{ marginTop: '20px', padding: '14px 16px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <div className="portal-reg-terms">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <ShieldCheck size={16} color="#38bdf8" />
+                    <ShieldCheck size={16} color="#f5d061" />
                     <b style={{ color: '#f8fafc', fontSize: '13px' }}>Cancellation, Refund &amp; Payment Safety Terms</b>
                   </div>
                   <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.45' }}>
@@ -1654,6 +2357,42 @@ export function PortalRegistration() {
                 </div>
               </div>
 
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  marginBottom: '20px',
+                  padding: '14px 16px',
+                  borderRadius: '12px',
+                  border: verifiedBeforePay
+                    ? '1px solid rgba(16, 185, 129, 0.45)'
+                    : '1px solid rgba(251, 191, 36, 0.35)',
+                  background: verifiedBeforePay
+                    ? 'rgba(16, 185, 129, 0.08)'
+                    : 'rgba(251, 191, 36, 0.07)',
+                  cursor: 'pointer',
+                  fontSize: '13.5px',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={verifiedBeforePay}
+                  onChange={(e) => setVerifiedBeforePay(e.target.checked)}
+                  style={{ marginTop: '3px' }}
+                />
+                <span>
+                  <b style={{ color: '#f8fafc' }}>
+                    I verify that all details above are accurate and match my college ID.
+                  </b>
+                  <span style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginTop: '3px' }}>
+                    Nothing can be edited after submitting and paying (including name, college,
+                    meal preference, and accommodation). Any correction must go through the
+                    organiser desk.
+                  </span>
+                </span>
+              </label>
+
               {/* Payment Actions */}
               <div className="portal-nav-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
                 <Button variant="ghost" onClick={() => setStep(2)} icon={ArrowLeft}>
@@ -1663,16 +2402,9 @@ export function PortalRegistration() {
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', maxWidth: '340px' }}>
                   <Button
                     onClick={startCheckout}
-                    disabled={Boolean(busy)}
+                    disabled={Boolean(busy) || !verifiedBeforePay}
                     icon={CreditCard}
-                    style={{
-                      width: '100%',
-                      padding: '14px 28px',
-                      fontSize: '16px',
-                      fontWeight: '600',
-                      background: 'linear-gradient(135deg, #0284c7, #0ea5e9)',
-                      boxShadow: '0 4px 20px rgba(14, 165, 233, 0.4)',
-                    }}
+                    className="portal-reg-pay-btn"
                   >
                     {busy !== 'checkout'
                       ? `Pay ${money(fee)} with Razorpay`
@@ -1757,7 +2489,7 @@ export function PortalRegistration() {
       {/* Interactive ID Card Sheet */}
       <Sheet
         open={showIdCard}
-        title="Parallax 2027 · Official Convention Pass & ID Card"
+        title={`${edition?.name || 'Parallax 2027'} · Official Convention Pass & ID Card`}
         onClose={() => setShowIdCard(false)}
         wide
         eyebrow="OFFICIAL CREDENTIAL · CR80 PORTRAIT"
@@ -1797,7 +2529,7 @@ export function PortalRegistration() {
       {/* Official Receipt Sheet */}
       <Sheet
         open={showReceipt}
-        title="Parallax 2027 · Official Payment Receipt"
+        title={`${edition?.name || 'Parallax 2027'} · Official Payment Receipt`}
         onClose={() => setShowReceipt(false)}
         wide
         eyebrow="RECEIPT &amp; CONFIRMATION"
@@ -1808,7 +2540,9 @@ export function PortalRegistration() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                 <img src={LOGO} alt="Parallax" style={{ height: '32px', width: 'auto', objectFit: 'contain' }} />
                 <div className="px-receipt-title">
-                  <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>PARALLAX 2027 · PAYMENT RECEIPT</h2>
+                  <h2 style={{ color: '#0f172a', margin: 0, fontSize: '18px', fontWeight: 800 }}>
+                    {(edition?.name || 'Parallax 2027').toUpperCase()} · PAYMENT RECEIPT
+                  </h2>
                   <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#475569' }}>25th Annual State Student Convention · ISTE Kerala Section &amp; NSSCE Palakkad</p>
                 </div>
               </div>
@@ -1817,8 +2551,11 @@ export function PortalRegistration() {
                   <img src={ISTE} alt="ISTE" style={{ height: '20px', width: 'auto' }} />
                   <img src={NSSCE} alt="NSSCE" style={{ height: '20px', width: 'auto' }} />
                 </div>
-                <span className="badge good" style={{ fontSize: '12px', fontWeight: '700' }}>
-                  ✓ PAID &amp; CONFIRMED
+                <span
+                  className={`badge ${isRefundDone ? 'bad' : 'good'}`}
+                  style={{ fontSize: '12px', fontWeight: '700' }}
+                >
+                  {isRefundDone ? '⟲ REFUNDED' : '✓ PAID & CONFIRMED'}
                 </span>
                 <p style={{ margin: 0, fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
                   {registration?.paidAt ? dateTime(registration.paidAt) : 'Confirmed'}
@@ -1867,7 +2604,7 @@ export function PortalRegistration() {
               <tbody>
                 <tr>
                   <td>
-                    <b>{registration?.category?.name || 'Parallax 2027 Convention Pass'}</b>
+                    <b>{registration?.category?.name || `${edition?.name || 'Parallax 2027'} Convention Pass`}</b>
                     <div style={{ fontSize: '11px', color: '#64748b' }}>
                       2-Day Access, Keynotes, Included Competitions, Lunch Voucher
                     </div>
@@ -1877,13 +2614,17 @@ export function PortalRegistration() {
                     <div style={{ fontSize: '11px', color: '#64748b' }}>{registration?.collegeName}</div>
                   </td>
                   <td>
-                    <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
+                    <span style={{ color: isRefundDone ? '#dc2626' : '#16a34a', fontWeight: '700' }}>
+                      {isRefundDone ? 'REFUNDED' : 'PAID'}
+                    </span>
                   </td>
                   <td style={{ textAlign: 'right', fontWeight: '700' }}>
                     {money(passPaidPaise)}
                   </td>
                 </tr>
-                {extraPayments.map((ticket) => (
+                {extraPayments.map((ticket) => {
+                  const lineStatus = paidLineStatus(ticket);
+                  return (
                   <tr key={ticket.id}>
                     <td>
                       <b>{ticket.title || 'Add-on event'}</b>
@@ -1902,13 +2643,14 @@ export function PortalRegistration() {
                       </div>
                     </td>
                     <td>
-                      <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
+                      <span style={{ color: lineStatus.color, fontWeight: '700' }}>{lineStatus.label}</span>
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: '700' }}>
                       {money(ticket.amountPaise || 0)}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 <tr className="px-receipt-total-row">
                   <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
                     Total Amount Paid
