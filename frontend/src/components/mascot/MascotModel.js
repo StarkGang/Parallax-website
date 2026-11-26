@@ -237,7 +237,6 @@ export function createMascotStage({
   }
 
   function clipKeyForState(stateName) {
-    if (stateName === 'walking' || stateName === 'returning') return 'walk';
     if (stateName === 'guiding') return 'point';
     return 'idle';
   }

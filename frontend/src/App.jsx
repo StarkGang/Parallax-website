@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowUpRight, LogIn, Menu, X } from 'lucide-react';
 import { useAuth } from './lib/auth.jsx';
 import { useSite } from './lib/site.jsx';
 import { AppErrorBoundary, Button, ErrorBox, Loading } from './components/ui.jsx';
-import { initSmoothScroll, gsap } from './lib/motion.js';
+import { initSmoothScroll } from './lib/motion.js';
 import { SamaritanBootLoader } from './components/SamaritanBootLoader.jsx';
+import { StatePage } from './components/StatePages.jsx';
 import MascotProvider from './components/mascot/MascotProvider.jsx';
+import { mascotSay } from './components/mascot/mascotSay.js';
+import { NotFoundPage } from './components/StatePages.jsx';
+import StarfieldBackdrop from './components/StarfieldBackdrop.jsx';
 import MfaGate, { StepUpGate } from './components/MfaGate.jsx';
 import {
   About,
@@ -25,10 +29,11 @@ import {
   PortalLayout,
   PortalProfile,
   PortalRegistrations,
-  PortalSelectEvents,
   PortalTeams,
-  PortalTickets,
 } from './pages/Portal.jsx';
+import { PortalWorklist } from './pages/Worklist.jsx';
+import { EventRoom } from './pages/EventRoom.jsx';
+import { TeamInvite } from './pages/TeamInvite.jsx';
 import { PortalRegistration } from './pages/PortalRegistration.jsx';
 import {
   AdminAnnouncements,
@@ -43,8 +48,8 @@ import {
   AdminPolicy,
   AdminRegistrations,
   AdminSettings,
+  AdminTeams,
   AdminUsers,
-  AdminVerifications,
 } from './pages/Admin.jsx';
 import {
   AdminCollegeRegistrations,
@@ -97,26 +102,13 @@ function RequireStaff({ children }) {
   return children;
 }
 
+function JoinRedirect() {
+  const { code } = useParams();
+  return <Navigate to={`/team/${code}`} replace />;
+}
+
 function NotFound() {
-  return (
-    <section className="section not-found">
-      <span className="mono-note">404 / OFF THE MAP</span>
-      <h1>
-        This page is not
-        <br />
-        <em>in the programme.</em>
-      </h1>
-      <p>The link may be old, or the event may have moved in the catalogue.</p>
-      <div className="hero-actions">
-        <Button to="/" icon={ArrowUpRight}>
-          Back to the convention
-        </Button>
-        <Button to="/events" variant="ghost">
-          Browse events
-        </Button>
-      </div>
-    </section>
-  );
+  return <NotFoundPage />;
 }
 
 /**
@@ -166,7 +158,7 @@ function GoogleCallback() {
 
   return (
     <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', textAlign: 'center' }}>
-      <Loading label="Completing Google sign in..." />
+      <Loading label="Completing Google sign in..." rows={0} fullPage />
     </div>
   );
 }
@@ -217,7 +209,8 @@ export default function App() {
     };
   }, [menu]);
 
-  const chromeHidden = location.pathname.startsWith('/manage') || location.pathname === '/login';
+  const chromeHidden = location.pathname.startsWith('/manage');
+  const isLoginRoute = location.pathname === '/login';
   const [booted, setBooted] = useState(() => {
     try {
       return Boolean(sessionStorage.getItem('px_booted'));
@@ -226,9 +219,51 @@ export default function App() {
     }
   });
 
-  const isReady = Boolean(!site.loading && site.edition);
+  const [assetsReady, setAssetsReady] = useState(false);
 
-  if (!booted && location.pathname === '/') {
+  useEffect(() => {
+    let cancelled = false;
+    const base = import.meta.env.BASE_URL;
+    const urls = [
+      `${base}images/ho-bg-cosmos.webp`,
+      `${base}images/ho-strip-top.webp`,
+      `${base}images/ho-strip-bottom.webp`,
+      LOGO,
+    ];
+
+    const decodeImg = (src) =>
+      new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => (img.decode ? img.decode().catch(() => {}).finally(resolve) : resolve());
+        img.onerror = resolve;
+        img.src = src;
+      });
+
+    const fontsReady =
+      typeof document !== 'undefined' && document.fonts?.ready
+        ? document.fonts.ready.catch(() => {})
+        : Promise.resolve();
+
+    const timeout = new Promise((resolve) => setTimeout(resolve, 2200));
+
+    Promise.race([
+      Promise.all([...urls.map(decodeImg), fontsReady]),
+      timeout,
+    ]).then(() => {
+      if (!cancelled) setAssetsReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isReady = Boolean(!site.loading && site.edition && assetsReady);
+
+  const showBootOverlay = !booted && location.pathname === '/';
+
+  // If the boot overlay is showing and site data hasn't arrived yet, render only the boot overlay.
+  if (showBootOverlay && !site.edition) {
     return (
       <SamaritanBootLoader
         isReady={isReady}
@@ -240,31 +275,40 @@ export default function App() {
     );
   }
 
-  // The boot animation already waits for isReady before completing.
-  // On inner-page navigations we still need to wait for the site data.
+  // On inner-page navigations (or before boot overlay has edition), show the clean loader.
   if (site.loading && !site.edition) {
-    return <Loading label="Connecting to Parallax convention…" rows={0} />;
+    return <Loading label="Connecting to Parallax convention…" rows={0} fullPage />;
   }
 
   if (site.error && !site.editionVerified) {
     return (
-      <div className="boot boot-error">
-        <img src={LOGO} alt="Parallax" />
-        <ErrorBox
-          error={site.error}
-          title="The convention service is not reachable"
-          onRetry={site.refresh}
-        />
-        <p className="muted">
-          Please check your connection and retry. The site needs the
-          edition record before it can render.
-        </p>
-      </div>
+      <StatePage
+        code="503"
+        italic="SIGNAL"
+        title="LOST."
+        tail="OFFLINE."
+        message={
+          site.error?.message
+            ? `${site.error.message} Check your connection and retry to load the convention.`
+            : 'The convention service is unreachable right now. Check your connection and retry.'
+        }
+      >
+        <div className="state-actions">
+          <button
+            type="button"
+            className="lusion-btn lusion-btn-primary"
+            onClick={site.refresh}
+          >
+            <span>Try again</span>
+          </button>
+        </div>
+      </StatePage>
     );
   }
 
   return (
     <>
+      {!chromeHidden ? <StarfieldBackdrop /> : null}
       <ScrollToTop />
       <a className="skip" href="#main">
         Skip to content
@@ -300,17 +344,24 @@ export default function App() {
             <NavStrip />
           </nav>
 
-          <Link
-            className="nav-cta nav-cta-signin"
-            to={user ? (isStaff ? '/manage' : '/portal/registration') : '/login'}
-          >
-            <LogIn size={16} strokeWidth={1.8} aria-hidden="true" />
-            <span>
-              {authLoading ? 'Portal' : user ? (isStaff ? 'Console' : 'My portal') : 'Sign in'}
-            </span>
-          </Link>
+          {!isLoginRoute ? (
+            <Link
+              className="nav-cta nav-cta-signin"
+              to={user ? (isStaff ? '/manage' : '/portal/registration') : '/login'}
+              onPointerEnter={() => mascotSay("Oh, I won't be there… go ahead!")}
+            >
+              <LogIn size={16} strokeWidth={1.8} aria-hidden="true" />
+              <span>
+                {authLoading ? 'Portal' : user ? (isStaff ? 'Console' : 'My portal') : 'Sign in'}
+              </span>
+            </Link>
+          ) : null}
 
-          <Link className="nav-cta nav-cta-pass" to="/pass">
+          <Link
+            className="nav-cta nav-cta-pass"
+            to="/pass"
+            onPointerEnter={() => mascotSay('Get it now, lunch included both days!')}
+          >
             <span>Get pass</span>
           </Link>
 
@@ -393,6 +444,8 @@ export default function App() {
           <Route path="/faq" element={<FAQPage />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/team" element={<TeamPage />} />
+          <Route path="/team/:code" element={<TeamInvite />} />
+          <Route path="/join/:code" element={<JoinRedirect />} />
 
           <Route path="/login" element={<Login />} />
           <Route path="/google/callback" element={<GoogleCallback />} />
@@ -409,7 +462,9 @@ export default function App() {
             <Route path="registration" element={<PortalRegistration />} />
             <Route path="pass" element={<Navigate to="/portal/registration" replace />} />
             <Route path="verification" element={<Navigate to="/portal/registration" replace />} />
-            <Route path="select-events" element={<PortalSelectEvents />} />
+            <Route path="events" element={<PortalWorklist />} />
+            <Route path="events/:eventSlug" element={<EventRoom />} />
+            <Route path="select-events" element={<Navigate to="/portal/events" replace />} />
             <Route path="registrations" element={<PortalRegistrations />} />
             <Route path="tickets" element={<Navigate to="/portal/registration" replace />} />
             <Route path="teams" element={<PortalTeams />} />
@@ -427,6 +482,7 @@ export default function App() {
             <Route index element={<AdminOverview />} />
             <Route path="events" element={<AdminEvents />} />
             <Route path="registrations" element={<AdminRegistrations />} />
+            <Route path="teams" element={<AdminTeams />} />
             <Route path="registration" element={<AdminCollegeRegistrations />} />
             <Route path="registration-settings" element={<AdminRegistrationSettings />} />
             <Route path="id-cards" element={<AdminIdCardStudio />} />
@@ -434,7 +490,6 @@ export default function App() {
             <Route path="check-in" element={<AdminCheckin />} />
             <Route path="policy" element={<AdminPolicy />} />
             <Route path="users" element={<AdminUsers />} />
-            <Route path="verifications" element={<AdminVerifications />} />
             <Route path="payments" element={<AdminPayments />} />
             <Route path="announcements" element={<AdminAnnouncements />} />
             <Route path="audit" element={<AdminAudit />} />
@@ -451,6 +506,15 @@ export default function App() {
 
       {!chromeHidden ? <Footer edition={site.edition} /> : null}
       <MascotProvider />
+      {showBootOverlay ? (
+        <SamaritanBootLoader
+          isReady={isReady}
+          onComplete={() => {
+            try { sessionStorage.setItem('px_booted', '1'); } catch {}
+            setBooted(true);
+          }}
+        />
+      ) : null}
     </>
   );
 }

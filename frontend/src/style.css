@@ -371,29 +371,29 @@ summary:focus-visible {
 }
 
 .button.primary {
-  background: #f1f5f9 !important;
-  color: #08090d !important;
+  background: #f59e0b !important;
+  color: #080d1a !important;
 }
 
 .button.primary:hover:not(:disabled) {
-  background: #ffffff !important;
-  color: #08090d !important;
+  background: #fbbf24 !important;
+  color: #080d1a !important;
 }
 
 .button.primary span,
 .button.primary:hover span {
-  color: #08090d !important;
+  color: #080d1a !important;
 }
 
 .button.ghost {
-  border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(226, 232, 240, 0.2);
+  background: rgba(15, 23, 42, 0.6);
   color: #f8fafc;
 }
 
 .button.ghost:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.5);
 }
 
 .button.light {
@@ -4256,8 +4256,22 @@ p, .prose-grid p, .intro-text p, .venue-copy p {
    APPLE PREMIUM CONTAINER SYSTEM - SPECULAR RIDGES & OPTICAL DEPTH
    ========================================================================== */
 
-/* Universal Container Hierarchy: Apple Pro Display Aesthetics */
+/* Universal Container Hierarchy */
 .lusion-event-card,
+.news-card,
+.detail-main,
+.detail-card,
+.detail-aside > article {
+  background: linear-gradient(180deg, rgba(16, 20, 30, 0.92) 0%, rgba(10, 12, 19, 0.96) 100%) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 22px !important;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.02), 0 24px 64px -16px rgba(0, 0, 0, 0.65) !important;
+  transition: border-color 0.25s cubic-bezier(0.32, 0.72, 0, 1), transform 0.25s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.25s cubic-bezier(0.32, 0.72, 0, 1) !important;
+  box-sizing: border-box;
+}
+
 .pro-pass-card,
 .day-card,
 .prose-grid article,
@@ -4266,18 +4280,14 @@ p, .prose-grid p, .intro-text p, .venue-copy p {
 .venue-card,
 .venue-copy,
 .contact-card,
-.news-card,
-.detail-main,
-.detail-card,
-.detail-aside > article,
 .apple-pass-page-card,
 .apple-pass-copy-card {
-  background: linear-gradient(180deg, rgba(16, 20, 30, 0.92) 0%, rgba(10, 12, 19, 0.96) 100%) !important;
-  backdrop-filter: blur(24px) !important;
-  -webkit-backdrop-filter: blur(24px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09) !important;
-  border-radius: 22px !important;
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.02), 0 24px 64px -16px rgba(0, 0, 0, 0.65) !important;
+  background: #0c0e14 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 18px 44px -20px rgba(0, 0, 0, 0.85) !important;
   transition: border-color 0.25s cubic-bezier(0.32, 0.72, 0, 1), transform 0.25s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.25s cubic-bezier(0.32, 0.72, 0, 1) !important;
   box-sizing: border-box;
 }
@@ -6430,9 +6440,9 @@ p {
 }
 
 .contact-channel-card {
-  background: rgba(255, 255, 255, 0.02) !important;
+  background: #0c0e14 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: 4px !important;
+  border-radius: 14px !important;
   box-shadow: none !important;
   padding: 32px 28px !important;
   display: flex;
@@ -6442,16 +6452,16 @@ p {
 }
 
 .contact-channel-card:hover {
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  border-color: rgba(250, 204, 21, 0.28) !important;
 }
 
 .contact-channel-icon-wrap {
   width: 46px;
   height: 46px;
-  border-radius: 4px;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.22);
-  color: #38bdf8;
+  border-radius: 10px;
+  background: rgba(250, 204, 21, 0.08);
+  border: 1px solid rgba(250, 204, 21, 0.22);
+  color: #facc15;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6469,7 +6479,7 @@ p {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
-  color: #38bdf8;
+  color: #facc15;
   margin-bottom: 8px;
 }
 
@@ -6505,15 +6515,15 @@ p {
 }
 
 .contact-channel-link:hover {
-  color: #38bdf8;
+  color: #facc15;
 }
 
 /* Dispatch Box / Transmission Form */
 .contact-dispatch-wrap {
-  background: linear-gradient(180deg, rgba(16, 20, 30, 0.92) 0%, rgba(10, 12, 19, 0.98) 100%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09) !important;
-  border-radius: 22px !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 24px 64px -16px rgba(0, 0, 0, 0.65) !important;
+  background: #0c0e14 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 64px -16px rgba(0, 0, 0, 0.75) !important;
   padding: 44px 40px !important;
 }
 
@@ -6531,7 +6541,7 @@ p {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
-  color: #38bdf8;
+  color: #facc15;
   letter-spacing: 0.08em;
   display: block;
   margin-bottom: 6px;
@@ -6569,7 +6579,7 @@ p {
 .contact-fast-stat b {
   font-family: var(--mono);
   font-size: 15px;
-  color: #38bdf8;
+  color: #facc15;
 }
 
 .contact-fast-stat span {
@@ -6621,10 +6631,10 @@ p {
 }
 
 .contact-topic-chip.is-active {
-  background: rgba(56, 189, 248, 0.16) !important;
-  border-color: rgba(56, 189, 248, 0.6) !important;
-  color: #38bdf8 !important;
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.22) !important;
+  background: rgba(250, 204, 21, 0.12) !important;
+  border-color: rgba(250, 204, 21, 0.5) !important;
+  color: #facc15 !important;
+  box-shadow: none !important;
 }
 
 .contact-input::placeholder,
@@ -6664,9 +6674,9 @@ p {
 .contact-input:focus,
 .contact-textarea:focus {
   outline: none;
-  border-color: #38bdf8;
+  border-color: #facc15;
   background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.14);
 }
 
 .contact-textarea {
@@ -6691,8 +6701,8 @@ p {
   gap: 10px;
   padding: 13px 26px;
   border-radius: 8px;
-  background: #38bdf8;
-  color: #080b11;
+  background: #f59e0b;
+  color: #080d1a;
   font-size: 14px;
   font-weight: 700;
   border: none;
@@ -6701,7 +6711,7 @@ p {
 }
 
 .contact-submit-btn:hover:not(:disabled) {
-  background: #7dd3fc;
+  background: #fbbf24;
   transform: translateY(-2px);
 }
 
@@ -6947,8 +6957,8 @@ iframe.razorpay-checkout-frame {
 
 .team-member-card {
   overflow: hidden;
-  background: var(--bg-surface);
-  border: 1px solid var(--line);
+  background: #0c0e14;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   transition:
     transform 0.25s ease,
@@ -6958,14 +6968,14 @@ iframe.razorpay-checkout-frame {
 
 .team-member-card:hover {
   transform: translateY(-6px);
-  border-color: rgba(56, 189, 248, 0.45);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+  border-color: rgba(250, 204, 21, 0.4);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 }
 
 .team-member-image {
   aspect-ratio: 4 / 4.5;
   overflow: hidden;
-  background: #171c29;
+  background: #12151f;
 }
 
 .team-member-image img {

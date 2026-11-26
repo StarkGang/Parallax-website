@@ -1,0 +1,48 @@
+User-agent: *
+Allow: /
+Allow: /about
+Allow: /events
+Allow: /pass
+Allow: /schedule
+Allow: /venue
+Allow: /faq
+Allow: /contact
+Allow: /team
+Allow: /llms.txt
+Disallow: /manage
+Disallow: /portal
+Disallow: /api/
+Disallow: /login
+
+# AI / LLM Crawlers
+User-agent: GPTBot
+Allow: /
+Allow: /llms.txt
+Disallow: /manage
+Disallow: /portal
+Disallow: /api/
+
+User-agent: ChatGPT-User
+Allow: /
+Allow: /llms.txt
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /llms.txt
+Disallow: /manage
+Disallow: /portal
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /llms.txt
+Disallow: /manage
+Disallow: /portal
+Disallow: /api/
+
+User-agent: Google-Extended
+Allow: /
+Allow: /llms.txt
+
+Sitemap: /sitemap.xml
+

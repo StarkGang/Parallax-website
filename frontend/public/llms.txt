@@ -1,0 +1,37 @@
+# PARALLAX 2027 — ISTE State Student Convention Portal
+
+> Official convention and event registration portal for **PARALLAX 2027**, the **ISTE State Student Convention** hosted by the **ISTE Student Chapter at NSS College of Engineering (NSSCE), Palakkad, Kerala**. Designed and built by [Midhun K M](https://midhunkm.pages.dev).
+
+PARALLAX is the flagship ISTE student convention portal for discovering **ISTE events**, competitions, workshops, hackathons, passes, schedules, and campus venue details.
+
+## Core Information
+
+- **Convention Name**: PARALLAX 2027 (ISTE State Student Convention)
+- **Host Institution**: NSS College of Engineering (NSSCE), Palakkad, Kerala, India
+- **Organizing Body**: ISTE Student Chapter, NSSCE (Indian Society for Technical Education)
+- **Platform Developer / Author**: [Midhun K M](https://midhunkm.pages.dev)
+- **Contact Email**: iste@nssce.ac.in
+
+## Public Pages
+
+- [Home](/) — Overview of PARALLAX 2027 and the ISTE State Student Convention.
+- [Events](/events) — Full catalog of ISTE events, technical competitions, workshops, and hackathons with rules, prize pools, and registration.
+- [Convention Pass](/pass) — 2-day convention passes (ISTE Member, Standard, and Polytechnic tiers) with included event allowances, lunch, delegate kit, and official certificate.
+- [Schedule](/schedule) — Day-by-day programme, timings, and venue rooms.
+- [Venue & Travel](/venue) — NSS College of Engineering, Palakkad campus directions, map, and travel information.
+- [About](/about) — About ISTE NSSCE and the PARALLAX convention.
+- [FAQ](/faq) — Frequently asked questions about passes, ISTE membership discounts, team registration, and check-in.
+- [Meet the Team](/team) — Organizing committee and Web-Dev Team (including [Midhun K M](https://midhunkm.pages.dev)).
+- [Contact](/contact) — Direct support desk and inquiry form for participants and institutions.
+
+## Portal Capabilities
+
+- **One-Click Google Sign-In**: Secure participant authentication.
+- **Pass & Event Registration**: Unified checkout powered by Razorpay with instant confirmation.
+- **Team Coordination**: Create teams, share invite codes, and manage event rosters.
+- **Digital QR Pass & Receipts**: Downloadable Parallax ID card with QR check-in and fee receipts.
+
+## Attribution
+
+- **Designed & Engineered by**: [Midhun K M](https://midhunkm.pages.dev)
+- **Organization**: ISTE NSSCE Student Chapter

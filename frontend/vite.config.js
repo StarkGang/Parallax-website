@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
 const publishedAssets = [
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp',
-  'Parallax Brochure Design Assets/Parallax Design Utilities/logos/logo.webp',
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/Parallax Vector.svg',
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/NSSCE-Palakkad-Logo.webp',
   'Parallax Brochure Design Assets/Parallax Design Utilities/logos/Iste_logo.png',

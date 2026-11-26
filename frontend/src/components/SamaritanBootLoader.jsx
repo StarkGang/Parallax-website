@@ -34,6 +34,13 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
   const [paneWidth, setPaneWidth] = useState('20%');
   const finishedRef = useRef(false);
 
+  useEffect(() => {
+    window.__pxBootPhase = 'booting';
+    return () => {
+      window.__pxBootPhase = 'revealed';
+    };
+  }, []);
+
   // Blinking cursor effect for LOADING _
   useEffect(() => {
     const curInterval = setInterval(() => {
@@ -110,15 +117,19 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
 
     setPhase('connected');
     const timers = [
-      setTimeout(() => setPhase('command'), 220),
+      setTimeout(() => setPhase('command'), 200),
       setTimeout(() => {
         setPhase('unveiling');
         setPaneWidth('0%');
-      }, 620),
+      }, 560),
+      setTimeout(() => {
+        window.__pxBootPhase = 'revealed';
+        window.dispatchEvent(new Event('parallax:boot-reveal'));
+      }, 720),
       setTimeout(() => {
         setPhase('done');
         onCompleteRef.current?.();
-      }, 840),
+      }, 1080),
     ];
 
     return () => timers.forEach((timer) => clearTimeout(timer));
@@ -130,10 +141,12 @@ export function SamaritanBootLoader({ onComplete, isReady = true }) {
     finishedRef.current = true;
     setPhase('unveiling');
     setPaneWidth('0%');
+    window.__pxBootPhase = 'revealed';
+    window.dispatchEvent(new Event('parallax:boot-reveal'));
     setTimeout(() => {
       setPhase('done');
       onCompleteRef.current?.();
-    }, 160);
+    }, 320);
   };
 
   if (phase === 'done') return null;

@@ -20,6 +20,7 @@ import ParallaxIdCard, {
   generateToneTriad,
 } from '../components/ParallaxIdCard.jsx';
 import { Button, Eyebrow, Feedback, Field, useAsync } from '../components/admin-ui.jsx';
+import { normalizeYear } from '../components/AttendeeInputs.jsx';
 
 const PRESET_GROUPS = [...new Set(ADMIN_PRESETS.map((preset) => preset.group))];
 
@@ -205,7 +206,7 @@ export default function AdminIdCardStudio() {
       return;
     }
     const college = att.collegeName || 'NSS College of Engineering, Palakkad';
-    const branch = [att.branch || att.course || 'Engineering', att.yearOfStudy ? `Yr ${att.yearOfStudy}` : null]
+    const branch = [att.branch || att.course || 'Engineering', att.yearOfStudy ? normalizeYear(att.yearOfStudy) : null]
       .filter(Boolean)
       .join(' · ');
     // The list only ships the passport-photo document id; the bytes are served

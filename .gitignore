@@ -125,3 +125,4 @@ render.html
 # Local audit notes (read-only reviews, not shipped)
 /docs/audits/
 AUDIT*.md
+frontend/public/x.html

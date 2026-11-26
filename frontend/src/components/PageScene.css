@@ -6,12 +6,7 @@
 
 .page-scene-page {
   position: relative;
-  background: radial-gradient(
-    ellipse 130% 90% at 50% 0%,
-    rgba(14, 23, 40, 0.95) 0%,
-    rgba(8, 13, 24, 0.98) 45%,
-    #06080e 100%
-  );
+  background: transparent;
 }
 
 .page-scene-page > .section:first-of-type {
@@ -24,8 +19,22 @@
   isolation: isolate;
   overflow: hidden;
   min-height: clamp(580px, 88svh, 920px);
-  background: #06080e;
+  background: transparent;
   border-bottom: 0 !important;
+}
+
+.page-scene-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 13, 26, 0.25) 0%,
+    rgba(8, 13, 26, 0.08) 45%,
+    rgba(8, 13, 26, 0.55) 82%,
+    transparent 100%
+  ) !important;
 }
 
 .page-scene {
@@ -143,7 +152,7 @@
 }
 
 .page-scene-title-layer .eyebrow {
-  color: #38bdf8 !important;
+  color: #f59e0b !important;
   font-size: 13px !important;
   font-weight: 700 !important;
   letter-spacing: 0.14em !important;
@@ -175,11 +184,11 @@
 }
 
 .page-scene-title-layer .contact-status-indicator {
-  background: rgba(10, 15, 26, 0.82) !important;
-  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+  background: #0c0e14 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
   color: #f8fafc !important;
-  backdrop-filter: blur(12px) !important;
-  -webkit-backdrop-filter: blur(12px) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
 }
 

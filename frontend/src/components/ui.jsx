@@ -1,4 +1,4 @@
-import React, { Component, useCallback, useEffect, useRef, useState } from 'react';
+import { Component, useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
@@ -20,6 +20,34 @@ import {
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { AlertTriangle, Inbox, X } from 'lucide-react';
+import { ErrorPage } from './StatePages.jsx';
+
+/** Pull a human message out of an API error, never surfacing raw JSON. */
+export function readableError(error) {
+  const fallback = 'The server could not complete that request.';
+  const raw = error?.message;
+  if (typeof raw !== 'string' || !raw.trim()) return fallback;
+
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const detail = parsed?.detail ?? parsed?.message ?? parsed?.error;
+      if (typeof detail === 'string' && detail.trim()) return detail;
+      if (Array.isArray(detail)) {
+        const joined = detail
+          .map((item) => (typeof item === 'string' ? item : item?.msg))
+          .filter(Boolean)
+          .join(', ');
+        if (joined) return joined;
+      }
+    } catch {
+      return fallback;
+    }
+    return fallback;
+  }
+  return raw;
+}
 
 export function Eyebrow({ children, className = '' }) {
   return (
@@ -53,12 +81,17 @@ export function PageTitle({ kicker, title, desc, aside }) {
 
 export function SectionHead({ kicker, title, subtitle, action }) {
   return (
-    <Stack
-      direction="row"
-      alignItems="flex-end"
-      justifyContent="space-between"
-      spacing={2}
-      sx={{ mb: 2, flexWrap: 'wrap', gap: 1.5 }}
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '12px 16px',
+        width: '100%',
+        marginBottom: '8px',
+      }}
     >
       <Box sx={{ minWidth: 0 }}>
         {kicker ? <Eyebrow>{kicker}</Eyebrow> : null}
@@ -71,8 +104,8 @@ export function SectionHead({ kicker, title, subtitle, action }) {
           </Typography>
         ) : null}
       </Box>
-      {action}
-    </Stack>
+      {action ? <Box sx={{ flexShrink: 0 }}>{action}</Box> : null}
+    </div>
   );
 }
 
@@ -248,36 +281,24 @@ export function StatusBadge({ status }) {
  * CSS so it stays at 60fps on low-end phones, and it settles to a static frame
  * when motion is reduced.
  */
-export function Loading({ label = 'Loading', rows = 2 }) {
+export function Loading({ label = 'Loading', fullPage = false }) {
   return (
     <Box
-      className="px-loader"
+      className={`px-loader${fullPage ? ' is-fullpage' : ''}`}
       role="status"
       aria-live="polite"
-      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.75, py: 3 }}
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}
     >
-      <div className="px-loader-stage" aria-hidden="true">
-        <span className="px-loader-plate is-a" />
-        <span className="px-loader-plate is-b" />
-        <span className="px-loader-plate is-c" />
-        <img className="px-loader-mark" src={PARALLAX_MARK} alt="" />
+      <img className="px-loader-logo" src={PARALLAX_MARK} alt="Parallax" />
+      <div className="px-win-spinner" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
       </div>
-      <div className="px-loader-copy">
-        <b>{label}</b>
-        <span className="px-loader-dots" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-      </div>
+      {label ? <span className="px-loader-label">{label}</span> : null}
       <span className="sr-only">Please wait</span>
-      {rows > 0 ? (
-        <div className="px-loader-rows" aria-hidden="true">
-          {Array.from({ length: rows }).map((_, index) => (
-            <div className="px-loader-row" key={index} />
-          ))}
-        </div>
-      ) : null}
     </Box>
   );
 }
@@ -299,7 +320,7 @@ export function ErrorBox({ error, onRetry, title = 'That did not load' }) {
     >
       <AlertTitle sx={{ fontWeight: 700, fontSize: '0.875rem', mb: 0.25 }}>{title}</AlertTitle>
       <Typography variant="body2" sx={{ color: 'rgba(254, 202, 202, 0.9)' }}>
-        {error?.message || 'The server could not complete that request.'}
+        {readableError(error)}
       </Typography>
       {error?.code ? (
         <Box
@@ -418,6 +439,54 @@ export function InlineMessage({ tone = 'info', children }) {
     >
       {children}
     </Alert>
+  );
+}
+
+/**
+ * Shows an action result and brings it into view.
+ *
+ * Admin actions sit at the bottom of long panels and inside modals, so a result
+ * rendered at the top of the page was often never seen: the operator waited,
+ * assumed the click failed, and scrolled up to find the error. Toasts solve
+ * this at the viewport edge; this keeps the message where the page already
+ * renders it and moves the user to it instead.
+ */
+export function Feedback({ message }) {
+  const anchor = useRef(null);
+
+  useEffect(() => {
+    const node = anchor.current;
+    if (!message || !node) return;
+    const viewport = window.innerHeight || document.documentElement.clientHeight;
+    const rect = node.getBoundingClientRect();
+    // Already readable: leave the page where the operator left it.
+    if (rect.top >= 0 && rect.bottom <= viewport) return;
+    const reduced =
+      window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+    const lenis = window.__lenis;
+    // While a dialog is open the page copy sits behind the backdrop: scrolling
+    // it would only move the page the operator returns to. The dialog renders
+    // its own copy, which is the one they can see.
+    const inDialog = Boolean(node.closest('[role="dialog"]'));
+    if (lenis?.isStopped && !inDialog) return;
+    if (lenis?.isStopped || typeof lenis?.scrollTo !== 'function') {
+      // A dialog owns the screen, so scroll its body rather than the page
+      // behind it (native scrolling works inside the sheet).
+      node.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+      return;
+    }
+    lenis.scrollTo(node, {
+      offset: -104,
+      duration: reduced ? 0 : 0.5,
+      immediate: reduced,
+    });
+  }, [message]);
+
+  if (!message) return null;
+  return (
+    <div ref={anchor} style={{ scrollMarginTop: 104 }}>
+      <InlineMessage tone={message.tone}>{message.text}</InlineMessage>
+    </div>
   );
 }
 
@@ -598,32 +667,7 @@ export class AppErrorBoundary extends Component {
 
   render() {
     if (!this.state.hasError) return this.props.children;
-    return (
-      <section className="section" role="alert">
-        <Box sx={{ maxWidth: 620, mx: 'auto' }}>
-          <Alert
-            severity="error"
-            variant="outlined"
-            icon={<AlertTriangle size={20} strokeWidth={1.6} />}
-            action={
-              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-                <Button variant="ghost" size="small" onClick={this.reset}>
-                  Try again
-                </Button>
-                <Button size="small" to="/">
-                  Back to home
-                </Button>
-              </Stack>
-            }
-          >
-            <AlertTitle>This page could not be displayed</AlertTitle>
-            <Typography variant="body2">
-              {this.state.error?.message || 'An unexpected error interrupted the page.'}
-            </Typography>
-          </Alert>
-        </Box>
-      </section>
-    );
+    return <ErrorPage onRetry={this.reset} />;
   }
 }
 
@@ -631,7 +675,15 @@ export class AppErrorBoundary extends Component {
  * Material dialog shell. Keeps the `.sheet` / `.sheet-body` hooks because the
  * ticket and ID-card print styles target them.
  */
-export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 'ADMIN ACTION' }) {
+export function Sheet({
+  open,
+  title,
+  onClose,
+  children,
+  wide = false,
+  eyebrow = 'ADMIN ACTION',
+  message = null,
+}) {
   useEffect(() => {
     if (!open) return undefined;
     // Lenis drives the page scroll, so stop it while the dialog owns the screen.
@@ -699,6 +751,10 @@ export function Sheet({ open, title, onClose, children, wide = false, eyebrow = 
         sx={{ px: 3, py: 2.5 }}
         dividers={false}
       >
+        {/* An action that fails with the dialog still open writes its error
+            into the page behind the backdrop. Showing the same message here
+            is what the operator actually sees. */}
+        <Feedback message={message} />
         <SheetErrorBoundary>{children}</SheetErrorBoundary>
       </DialogContent>
     </Dialog>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { BrandedQr } from './BrandedQr.jsx';
 import { logisticsLine } from '../lib/attendee.js';
+import { normalizeYear } from './AttendeeInputs.jsx';
 import './ParallaxIdCard.css';
 
 export const OFFICIAL_PARALLAX_PATH =
@@ -527,7 +528,7 @@ export default function ParallaxIdCard({
         ? customData.sub.split('·')[0].trim()
         : [
             registration?.branch || registration?.course || 'Computer Science & Engineering',
-            registration?.yearOfStudy ? `Yr ${registration.yearOfStudy}` : null,
+            registration?.yearOfStudy ? normalizeYear(registration.yearOfStudy) : null,
           ]
             .filter(Boolean)
             .join(' · '));

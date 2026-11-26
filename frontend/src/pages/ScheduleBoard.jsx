@@ -1,8 +1,22 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, CalendarDays, MapPin } from "lucide-react";
+import { ArrowUpRight, CalendarDays, MapPin } from 'lucide-react';
 import HudFrame from "../components/HudFrame.jsx";
+import { mascotSay } from "../components/mascot/mascotSay.js";
 import "./ScheduleBoard.css";
+
+function scheduleHoverLine(item) {
+  if (!item) return "";
+  if (item.start < 12 * 60) {
+    return `Morning slot: ${item.title}. Coffee first, obviously.`;
+  }
+  if (item.start < 16 * 60 + 30) {
+    return `${item.title} in the afternoon? Solid pick.`;
+  }
+  return `Late one: ${item.title}. Still running on fumes?`;
+}
+
+const BOOT_LOGO = `${import.meta.env.BASE_URL}images/parallax-logo.webp`;
 
 const MIN_BLOCK = 46;
 const HOUR_H = 84;
@@ -67,7 +81,10 @@ function layout(items) {
   return { placed, laneCount: Math.max(1, lanes.length) };
 }
 
-export default function ScheduleBoard({ days }) {
+export default function ScheduleBoard({ days, loading = false }) {
+  const [selectedDay, setSelectedDay] = useState("all");
+  const [selectedCat, setSelectedCat] = useState("all");
+
   const model = useMemo(() => {
     const parsedDays = (days || []).map((day, index) => {
       const items = (day.items || [])
@@ -86,26 +103,59 @@ export default function ScheduleBoard({ days }) {
       return { ...day, index, items };
     });
 
-    const starts = parsedDays.flatMap((d) => d.items.map((i) => i.start));
-    const ends = parsedDays.flatMap((d) => d.items.map((i) => i.end));
+    const categories = [
+      ...new Set(parsedDays.flatMap((d) => d.items.map((i) => i.category).filter(Boolean))),
+    ];
+
+    const filteredDays = parsedDays
+      .filter((d) => selectedDay === "all" || d.date === selectedDay)
+      .map((d) => ({
+        ...d,
+        items:
+          selectedCat === "all"
+            ? d.items
+            : d.items.filter((i) => i.category === selectedCat),
+      }));
+
+    const starts = filteredDays.flatMap((d) => d.items.map((i) => i.start));
+    const ends = filteredDays.flatMap((d) => d.items.map((i) => i.end));
     const from = starts.length ? Math.floor(Math.min(...starts) / 60) * 60 : 9 * 60;
     const to = ends.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 18 * 60;
     const hours = [];
     for (let m = from; m <= to; m += 60) hours.push(m);
 
-    return { parsedDays, from, to: Math.max(to, from + 60), hours };
-  }, [days]);
+    return {
+      allDays: parsedDays,
+      parsedDays: filteredDays,
+      categories,
+      from,
+      to: Math.max(to, from + 60),
+      hours,
+    };
+  }, [days, selectedDay, selectedCat]);
 
-  const { parsedDays, from, to, hours } = model;
+  const { allDays, parsedDays, categories, from, to, hours } = model;
   const height = ((to - from) / 60) * HOUR_H;
   const total = parsedDays.reduce((sum, d) => sum + d.items.length, 0);
   const rangeLabel =
-    parsedDays.length > 0
-      ? `${dayNumber(parsedDays[0].date)} — ${dayNumber(parsedDays[parsedDays.length - 1].date)}`
+    allDays.length > 0
+      ? `${dayNumber(allDays[0].date)} — ${dayNumber(allDays[allDays.length - 1].date)}`
       : "To be announced";
 
   return (
     <HudFrame as="section" className="sched-board" aria-label="Convention timetable">
+      {loading ? (
+        <div className="sched-boot-overlay" role="status" aria-label="Loading schedule">
+          <img src={BOOT_LOGO} alt="Parallax" className="px-loader-logo" />
+          <div className="px-win-spinner" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      ) : null}
       <header className="sched-head">
         <div className="sched-head-left">
           <span className="sched-head-icon" aria-hidden="true">
@@ -120,7 +170,33 @@ export default function ScheduleBoard({ days }) {
           </div>
         </div>
 
-        <span className="sched-range-pill">{rangeLabel}</span>
+        {allDays.length > 1 ? (
+          <div className="sched-day-tabs" role="tablist" aria-label="Filter by day">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={selectedDay === "all"}
+              className={`sched-day-tab${selectedDay === "all" ? " is-active" : ""}`}
+              onClick={() => setSelectedDay("all")}
+            >
+              All Days
+            </button>
+            {allDays.map((day) => (
+              <button
+                key={day.date}
+                type="button"
+                role="tab"
+                aria-selected={selectedDay === day.date}
+                className={`sched-day-tab${selectedDay === day.date ? " is-active" : ""}`}
+                onClick={() => setSelectedDay(day.date)}
+              >
+                {dayNumber(day.date) || `Day 0${day.index + 1}`}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="sched-range-pill">{rangeLabel}</span>
+        )}
       </header>
 
       <div
@@ -162,6 +238,7 @@ export default function ScheduleBoard({ days }) {
                         key={item.id}
                         to={`/events/${item.slug}`}
                         className={`sched-block tone-${toneFor(item.category || item.title)}`}
+                        onPointerEnter={() => mascotSay(scheduleHoverLine(item))}
                         style={{
                           top: `${top}px`,
                           height: `${blockHeight}px`,
@@ -213,6 +290,7 @@ export default function ScheduleBoard({ days }) {
                       <Link
                         to={`/events/${item.slug}`}
                         className={`sched-agenda-row tone-${toneFor(item.category || item.title)}`}
+                        onPointerEnter={() => mascotSay(scheduleHoverLine(item))}
                       >
                         <span className="sched-agenda-time">
                           <b>{clockLabel(item.start)}</b>
@@ -236,14 +314,26 @@ export default function ScheduleBoard({ days }) {
       </div>
 
       <footer className="sched-foot">
-        <span className="sched-legend">
-          {["Computing", "Electronics", "Robotics", "Design"].map((label) => (
-            <span key={label} className={`sched-legend-item tone-${toneFor(label)}`}>
+        <div className="sched-legend" role="group" aria-label="Filter by track">
+          <button
+            type="button"
+            className={`sched-legend-chip${selectedCat === "all" ? " is-active" : ""}`}
+            onClick={() => setSelectedCat("all")}
+          >
+            All tracks
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              className={`sched-legend-chip tone-${toneFor(cat)}${selectedCat === cat ? " is-active" : ""}`}
+              onClick={() => setSelectedCat((prev) => (prev === cat ? "all" : cat))}
+            >
               <i aria-hidden="true" />
-              {label}
-            </span>
+              <span>{cat}</span>
+            </button>
           ))}
-        </span>
+        </div>
         <span className="sched-foot-note">Times are live · tap any session for details</span>
       </footer>
     </HudFrame>

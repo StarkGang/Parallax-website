@@ -363,6 +363,7 @@ async def profile_payload(db: AsyncSession, user: User) -> dict[str, Any]:
         "gender": decode_gender(profile.gender) if profile else None,
         "foodPreference": decode_food(profile.food_preference) if profile else None,
         "needsAccommodation": bool(profile.needs_accommodation) if profile else False,
+        "dateOfBirth": profile.date_of_birth.isoformat() if profile and profile.date_of_birth else None,
         "studentIdentifierLast4": profile.student_identifier_last4 if profile else None,
         "institutionEmail": profile.institution_email if profile else None,
         "profileComplete": await profile_complete(db, user),
@@ -443,6 +444,8 @@ async def update_profile(
         profile.food_preference = encode_food(payload["foodPreference"])
     if "needsAccommodation" in payload and payload["needsAccommodation"] is not None:
         profile.needs_accommodation = bool(payload["needsAccommodation"])
+    if "dateOfBirth" in payload:
+        profile.date_of_birth = payload["dateOfBirth"]
     if "studentIdentifier" in payload and payload["studentIdentifier"]:
         raw_id = str(payload["studentIdentifier"]).strip()
         profile.student_identifier_enc = encrypt_pii(raw_id)

@@ -104,10 +104,9 @@ export default function MascotProvider() {
     };
   }, [supported, failed, settings.hidden, Overlay, routeEnabled]);
 
-  if (!supported || failed) return null;
+  if (!supported || failed || !routeEnabled) return null;
 
   if (settings.hidden) {
-    if (!routeEnabled) return null;
     return (
       <button
         type="button"

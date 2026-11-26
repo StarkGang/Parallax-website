@@ -133,7 +133,7 @@ export class MascotBrain {
 
     this.setState(MASCOT_STATES.IDLE);
     const rest = this.restSpot();
-    if (rest) this.applyPose(rest, initial ? 0 : 520, REST_YAW);
+    if (rest) this.applyPose(rest, 0, REST_YAW);
 
     this.later(() => this.evaluate(), MASCOT_TIMING.evaluateDelayMs);
     this.scheduleAmbient();
@@ -218,20 +218,14 @@ export class MascotBrain {
     this.setState(MASCOT_STATES.IDLE);
   }
 
-  walkTo(spot, facing, onArrive, durationOverride) {
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    const duration =
-      durationOverride ?? clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 360, 2600);
-
+  walkTo(_spot, facing, onArrive) {
     this.clearLater(this.moveTimer);
-    this.applyPose(spot, this.reducedMotion ? 0 : duration, facing);
-    this.moveTimer = this.later(
-      () => {
-        this.moveTimer = null;
-        onArrive?.();
-      },
-      this.reducedMotion ? 20 : duration + 70,
-    );
+    const rest = this.restSpot();
+    if (rest) this.applyPose(rest, 0, facing ?? REST_YAW);
+    this.moveTimer = this.later(() => {
+      this.moveTimer = null;
+      onArrive?.();
+    }, 20);
   }
 
   walkFacing(from, to) {
@@ -432,25 +426,9 @@ export class MascotBrain {
 
     const rect = entry.el?.getBoundingClientRect?.() || entry.rect;
     const facing = spot ? this.facingFor(spot, rect) : this.pose.facing;
-    const isMobile = viewport.w < 760;
-
-    // Mobile, reduced-motion and dense layouts never roam: a ring + bubble
-    // from the resting corner is used instead.
-    if (this.reducedMotion || isMobile || !spot) {
-      this.beginGuide(entry, message, null);
-      return true;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 8) {
-      this.applyPose(this.pose, 0, facing);
-      this.beginGuide(entry, message, spot);
-      return true;
-    }
-
-    const duration = clamp((distance / WALK_SPEED_PX_PER_SEC) * 1000, 380, 2600);
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, facing, () => this.beginGuide(entry, message, spot), duration);
+    // Stand calmly in the resting corner and explain from there without walking across content.
+    this.applyPose(this.pose, 0, facing);
+    this.beginGuide(entry, message, null);
     return true;
   }
 
@@ -543,7 +521,7 @@ export class MascotBrain {
         this.guidedId = entry.id;
         this.onHighlight?.(entry);
         this.say(
-          entry.label ? `This one — ${entry.label}.` : cfg.message || this.nextTip(),
+          entry.label ? `This one, ${entry.label}.` : cfg.message || this.nextTip(),
           'user',
         );
         this.userHighlightTimer = this.later(() => {
@@ -576,10 +554,8 @@ export class MascotBrain {
     this.lastRepositionAt = Date.now();
     const rest = this.restSpot();
     if (rest && Math.hypot(rest.x - this.pose.x, rest.y - this.pose.y) > 2) {
-      this.walkTo(rest, REST_YAW, () => {
-        this.setState(MASCOT_STATES.IDLE);
-        this.sync();
-      });
+      this.applyPose(rest, 0, REST_YAW);
+      this.setState(MASCOT_STATES.IDLE);
     }
   }
 
@@ -597,20 +573,6 @@ export class MascotBrain {
       }
 
       this.onHighlight?.(entry);
-
-      if (this.state === MASCOT_STATES.GUIDING && !this.reducedMotion) {
-        const { size, viewport } = this.getLayout();
-        if (viewport.w < 760) return;
-        const spot = this.registry.findSafeSpot(entry, size, viewport);
-        if (!spot) return;
-        const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-        if (distance > 70) {
-          this.setState(MASCOT_STATES.WALKING);
-          this.walkTo(spot, this.facingFor(spot, entry.el.getBoundingClientRect()), () =>
-            this.beginGuide(entry, this.guidingMessage, spot),
-          );
-        }
-      }
       return;
     }
 
@@ -705,7 +667,7 @@ export class MascotBrain {
         this.tourHintedAt = Date.now();
         this.say(
           this.route?.tour?.scrollHint ||
-            'The next one is further down — keep scrolling and I will carry on.',
+            'The next one is further down, keep scrolling and I will carry on.',
           'tour',
         );
       }
@@ -739,17 +701,8 @@ export class MascotBrain {
     };
 
     this.clearLater(this.tourTimer);
-    if (!spot || this.reducedMotion) {
-      this.applyPose(this.pose, 0, this.facingFor(null, rect));
-      speak();
-      return;
-    }
-
-    // Tours walk slower than ordinary guidance: the reader is following a story.
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    const duration = clamp((distance / (WALK_SPEED_PX_PER_SEC * 0.7)) * 1000, 520, 3200);
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.facingFor(spot, rect), speak, duration);
+    this.applyPose(this.pose, 0, this.facingFor(null, rect));
+    speak();
   }
 
   endTour() {
@@ -819,26 +772,13 @@ export class MascotBrain {
       const text =
         entry.hover ||
         entry.message ||
-        (entry.label ? `${entry.label} — worth a closer look.` : '');
+        (entry.label ? `${entry.label}, worth a closer look.` : '');
       if (text) this.say(text, 'hover', 16000);
     };
 
-    if (!spot) {
-      speak();
-      return;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 24) {
-      this.applyPose(this.pose, 0, this.facingFor(spot, rect));
-      speak();
-      return;
-    }
-
-    // Walk over to the card, then point at it while the reader reads.
     this.clearLater(this.moveTimer);
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.facingFor(spot, rect), speak);
+    this.applyPose(this.pose, 0, this.facingFor(null, rect));
+    speak();
   }
 
   unhoverTarget(id) {
@@ -943,7 +883,7 @@ export class MascotBrain {
       const pick = visible[Math.floor(Math.random() * visible.length)];
       const text = pick.hover || pick.message;
       if (text) return text;
-      if (pick.label) return `${pick.label} — right there.`;
+      if (pick.label) return `${pick.label}, right there.`;
     }
 
     return contextLine(context, this.route?.ambient || this.nextTip());
@@ -962,7 +902,7 @@ export class MascotBrain {
       this.say(
         entry.hover ||
           entry.message ||
-          (entry.label ? `${entry.label} — this one.` : this.narrate()),
+          (entry.label ? `${entry.label}, this one.` : this.narrate()),
         'ambient',
       );
       this.clearLater(this.pointRelease);
@@ -975,26 +915,14 @@ export class MascotBrain {
       }, 3200);
     };
 
-    if (!spot) {
-      speak();
-      return;
-    }
-
-    const distance = Math.hypot(spot.x - this.pose.x, spot.y - this.pose.y);
-    if (distance < 40) {
-      this.applyPose(this.pose, 0, this.facingFor(spot, rect));
-      speak();
-      return;
-    }
-
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.facingFor(spot, rect), speak);
+    this.clearLater(this.moveTimer);
+    this.applyPose(this.pose, 0, this.facingFor(null, rect));
+    speak();
   }
 
   /**
-   * Crossing the layout is the only way the Walk clip reads as walking, and the
-   * arrival beat is what puts Wave, Point and Jump on screen without the reader
-   * having to click the mascot.
+   * Subtle in-place animation (wave, point, or hop) while standing in one spot,
+   * keeping the guide expressive without walking across the page.
    */
   stroll() {
     if (!this.active || !this.route || this.paused || this.destroyed) return false;
@@ -1002,47 +930,22 @@ export class MascotBrain {
     if (this.state !== MASCOT_STATES.IDLE || this.bubbleOpen) return false;
     if (typeof document !== 'undefined' && document.hidden) return false;
 
-    const { size, viewport } = this.getLayout();
-    if (viewport.w < 760) return false;
-
-    const spot = this.pickStrollSpot(size, viewport);
-    if (!spot) return false;
-
-    const target = this.nearestVisibleTarget(spot);
     this.strollIndex += 1;
+    const roll = Math.random();
 
-    this.setState(MASCOT_STATES.WALKING);
-    this.walkTo(spot, this.walkFacing(this.pose, spot), () => {
-      const roll = Math.random();
+    if (roll < 0.45) {
+      this.setState(MASCOT_STATES.IDLE);
+      this.onGesture?.('wave');
+      this.say(this.narrate(), 'ambient');
+    } else if (roll < 0.78) {
+      this.setState(MASCOT_STATES.IDLE);
+      this.onGesture?.('point');
+    } else {
+      this.setState(MASCOT_STATES.IDLE);
+      this.onGesture?.('jump');
+    }
 
-      // Every arrival ends in an action, weighted so Wave and Jump actually
-      // appear instead of the mascot settling into a stand.
-      if (target && roll < 0.45) {
-        this.onHighlight?.(target);
-        this.setState(MASCOT_STATES.GUIDING);
-        this.say(
-          target.hover || target.message || `${target.label || 'This one'} — right there.`,
-          'ambient',
-        );
-        this.clearLater(this.pointRelease);
-        this.pointRelease = this.later(() => {
-          this.pointRelease = null;
-          if (this.state === MASCOT_STATES.GUIDING && !this.hoverId) {
-            this.onHighlight?.(null);
-            this.setState(MASCOT_STATES.IDLE);
-          }
-        }, MASCOT_TIMING.pointHighlightMs || 2600);
-      } else if (roll < 0.78) {
-        this.setState(MASCOT_STATES.IDLE);
-        this.onGesture?.('wave');
-        this.say(this.narrate(), 'ambient');
-      } else {
-        this.setState(MASCOT_STATES.IDLE);
-        this.onGesture?.('jump');
-      }
-
-      this.scheduleAmbient();
-    });
+    this.scheduleAmbient();
     return true;
   }
 

@@ -23,9 +23,9 @@ export function readPageContext() {
 
   const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
 
-  // Keep track of whether a heading is on screen right now: the guide talks
-  // about what the reader can see, not about the top of a long page.
+  // Keep track of whether a heading is on screen right now, excluding the footer.
   const headings = [...main.querySelectorAll('h2, h3')]
+    .filter((node) => !node.closest('footer'))
     .map((node) => {
       const rect = node.getBoundingClientRect();
       return {
@@ -62,17 +62,17 @@ export function contextLine(context, routeLine = '') {
   const { title, headings, counts } = context;
 
   if (counts.events > 1) {
-    return `${counts.events} competitions are listed here — I can point at any of them.`;
+    return `${counts.events} events on the board, hover any card and I will spill the details.`;
   }
 
   if (headings.length) {
     const onScreen = headings.filter((heading) => heading.visible);
     const pool = onScreen.length ? onScreen : headings;
     const heading = pool[Math.floor(Math.random() * pool.length)].text;
-    const short = heading.length > 46 ? `${heading.slice(0, 44)}…` : heading;
-    return `${short} — that is what this part of the page covers.`;
+    const short = heading.length > 42 ? `${heading.slice(0, 40)}…` : heading;
+    return `Eyeing "${short}"? Good pick.`;
   }
 
-  if (title) return `${title} — that is what this page is about.`;
+  if (title) return `${title}, give me a shout if you get stuck.`;
   return routeLine;
 }

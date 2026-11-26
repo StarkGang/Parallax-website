@@ -6,8 +6,8 @@
 
 .nav {
   /* Palette + geometry tokens (site colours, no hardcoded accents) */
-  --nav-tint: 13 26 46; /* dominant dark-navy of the hero art (--bg family) */
-  --nav-fill-opacity: 0.6;
+  --nav-tint: 11 20 38; /* crisp solid dark-navy matching #080d1a theme */
+  --nav-fill-opacity: 0.98;
   --nav-strip: #b8b8bc;
   --nav-tag: #ffd24a;
   --nav-accent: var(--cyan);
@@ -38,21 +38,7 @@
   pointer-events: none;
 }
 
-/* Soft top-down shade behind the nav so white labels hold on bright art. */
-.nav::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto;
-  height: clamp(96px, 7.5vw, 140px);
-  z-index: -1;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(4, 6, 11, 0.62) 0%,
-    rgba(4, 6, 11, 0.3) 45%,
-    rgba(4, 6, 11, 0) 100%
-  );
-}
+/* No full-width top-down shade bar; logo, center plate, and CTA sit cleanly. */
 
 .nav > * {
   pointer-events: auto;
@@ -101,7 +87,7 @@
 }
 
 .nav.is-scrolled .nav-fill {
-  background: rgb(var(--nav-tint) / 0.86);
+  background: rgb(var(--nav-tint) / 1);
 }
 
 /* c) hairline wings extending past the top corners */
@@ -244,9 +230,9 @@
   width: clamp(124px, 8.2vw, 156px);
   height: var(--nav-h);
   padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 7px;
-  background: rgba(30, 35, 55, 0.85);
+  background: #131b2e;
   color: #ffffff !important;
   font-family: var(--display) !important;
   font-size: clamp(11px, 0.79vw, 15px) !important;
@@ -272,6 +258,91 @@
 
 .nav-cta-pass {
   display: none;
+}
+
+/* Gold pass CTA. Only shown in the mobile header, where it is the single
+   conversion target: a brushed-metal gold plate rather than a flat fill, with
+   a pressed-only sheen so it reads premium without moving on its own. */
+.nav-cta-pass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid #8a6524;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      180deg,
+      #fdf4d6 0%,
+      #f0d69b 18%,
+      #dcb264 52%,
+      #c39a49 78%,
+      #a97f2c 100%
+    );
+  color: #241a06 !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.085em !important;
+  text-shadow: 0 1px 0 rgba(255, 248, 224, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 0 rgba(92, 60, 8, 0.42),
+    inset 0 0 0 1px rgba(255, 236, 190, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 8px 18px -10px rgba(196, 146, 46, 0.85);
+  transition:
+    box-shadow 200ms ease,
+    filter 200ms ease,
+    transform 120ms ease;
+}
+
+/* Sheen: parked off-canvas until the plate is pressed or hovered. */
+.nav-cta-pass::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  background: linear-gradient(
+    104deg,
+    transparent 34%,
+    rgba(255, 255, 255, 0.62) 47%,
+    rgba(255, 255, 255, 0.18) 54%,
+    transparent 66%
+  );
+  translate: -130% 0;
+  transition: translate 560ms cubic-bezier(0.22, 0.68, 0.24, 1);
+  pointer-events: none;
+}
+
+.nav-cta-pass:hover,
+.nav-cta-pass:active {
+  border-color: #9c7330;
+  background:
+    linear-gradient(
+      180deg,
+      #fffaea 0%,
+      #f6dfa8 18%,
+      #e5bd71 52%,
+      #cca252 78%,
+      #b38937 100%
+    );
+}
+
+.nav-cta-pass:hover::after,
+.nav-cta-pass:active::after {
+  translate: 130% 0;
+}
+
+.nav-cta-pass:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(92, 60, 8, 0.45),
+    inset 0 0 0 1px rgba(255, 236, 190, 0.3),
+    0 6px 14px -10px rgba(196, 146, 46, 0.7);
+}
+
+.nav-cta-pass:focus-visible {
+  outline: 2px solid #ffe9b0;
+  outline-offset: 3px;
 }
 
 /* ---------------------------------------------------------------- burger -- */
@@ -445,9 +516,10 @@
   .nav-cta-pass {
     display: inline-flex;
     width: auto;
-    padding: 0 14px;
+    min-height: 40px;
+    padding: 0 16px;
     font-size: 10.5px !important;
-    letter-spacing: 0.09em !important;
+    letter-spacing: 0.085em !important;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -472,6 +544,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .nav-cta-pass::after {
+    display: none;
+  }
+
   .nav,
   .nav-fill,
   .nav-cta,

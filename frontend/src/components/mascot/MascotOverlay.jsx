@@ -9,6 +9,7 @@ import {
   formatEggText,
   pickEasterEgg,
 } from '../MascotEasterEgg.jsx';
+import { MASCOT_SAY_EVENT } from './mascotSay.js';
 import { resolveRouteBehavior } from './config/behaviors.js';
 
 function computeLayout() {
@@ -25,8 +26,8 @@ function computeLayout() {
 
 function fallbackRest(layout) {
   return {
-    x: 20,
-    y: Math.max(96, layout.viewport.h - layout.size.h - 16),
+    x: layout.viewport.w >= 1100 ? -24 : -10,
+    y: Math.max(96, layout.viewport.h - layout.size.h - 10),
   };
 }
 
@@ -170,18 +171,44 @@ export default function MascotOverlay({ pathname, settings, onFail }) {
 
   // Keyboard ("midhun", arrows) and swipe triggers from the provider.
   useEffect(() => {
+    const onSay = (event) => {
+      const text = event?.detail?.text;
+      if (!text) return;
+      const ttl = event?.detail?.ttl || 5200;
+      if (event?.detail?.gesture) {
+        setGesture(`${event.detail.gesture}-${Date.now()}`);
+      }
+      if (brainRef.current) {
+        brainRef.current.say(text, 'user', ttl);
+        return;
+      }
+      setBubble({ text });
+      if (eggTimerRef.current) clearTimeout(eggTimerRef.current);
+      eggTimerRef.current = setTimeout(() => setBubble(null), ttl);
+    };
     window.addEventListener(MASCOT_EGG_EVENT, speakEgg);
-    return () => window.removeEventListener(MASCOT_EGG_EVENT, speakEgg);
+    window.addEventListener(MASCOT_SAY_EVENT, onSay);
+    return () => {
+      window.removeEventListener(MASCOT_EGG_EVENT, speakEgg);
+      window.removeEventListener(MASCOT_SAY_EVENT, onSay);
+    };
   }, [speakEgg]);
 
-  // Four taps on the guide turn the usual reaction into an easter egg.
+  // Two clicks/taps on the guide open Midhun K M's site.
   const handleMascotTap = () => {
     brainRef.current?.interact();
     tapCountRef.current += 1;
-    if (tapCountRef.current < 4) return;
+    if (eggTimerRef.current) clearTimeout(eggTimerRef.current);
 
-    tapCountRef.current = 0;
-    speakEgg();
+    if (tapCountRef.current >= 2) {
+      tapCountRef.current = 0;
+      window.open('https://midhunkm.pages.dev/', '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    eggTimerRef.current = setTimeout(() => {
+      tapCountRef.current = 0;
+    }, 700);
   };
 
   const handleFail = () => {

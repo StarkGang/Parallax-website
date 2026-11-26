@@ -276,28 +276,11 @@ export class TargetRegistry {
   }
 
   findRestSpot(size, viewport) {
-    const obstacles = this.getObstacles(viewport);
-    const candidates = [
-      { x: EDGE, y: viewport.h - size.h - 16 },
-      { x: viewport.w - size.w - EDGE, y: viewport.h - size.h - 16 },
-      { x: 20, y: viewport.h - size.h - 16 },
-      { x: viewport.w - size.w - 20, y: viewport.h - size.h - 16 },
-      { x: 20, y: Math.max(SAFE_TOP, viewport.h - size.h - 108) },
-      { x: viewport.w - size.w - 20, y: Math.max(SAFE_TOP, viewport.h - size.h - 108) },
-      { x: 20, y: Math.max(SAFE_TOP, viewport.h * 0.52 - size.h / 2) },
-    ];
-
-    for (const candidate of candidates) {
-      const x = clamp(candidate.x, EDGE, viewport.w - size.w - EDGE);
-      const y = clamp(candidate.y, SAFE_TOP, viewport.h - size.h - EDGE);
-      const box = { left: x, top: y, right: x + size.w, bottom: y + size.h };
-      if (obstacles.some((obstacle) => overlaps(box, obstacle, 6))) continue;
-      return { x, y };
-    }
-
+    // Tuck cleanly into the far-left margin so the mascot stays clear of left-column text.
+    const x = viewport.w >= 1100 ? -24 : -10;
     return {
-      x: clamp(candidates[0].x, EDGE, viewport.w - size.w - EDGE),
-      y: clamp(candidates[0].y, SAFE_TOP, viewport.h - size.h - EDGE),
+      x,
+      y: clamp(viewport.h - size.h - 10, SAFE_TOP, viewport.h - size.h),
     };
   }
 

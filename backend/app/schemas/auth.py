@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import EmailStr, Field, field_validator
@@ -66,6 +66,7 @@ class ProfilePatch(StrictCamelModel):
     gender: Literal["male", "female"] | None = None
     food_preference: Literal["veg", "non_veg"] | None = None
     needs_accommodation: bool | None = None
+    date_of_birth: date | None = None
     student_identifier: str | None = Field(default=None, max_length=60)
     institution_email: str | None = Field(default=None, max_length=320)
 
@@ -94,6 +95,7 @@ class ProfileResponse(CamelModel):
     gender: Literal["male", "female"] | None = None
     food_preference: Literal["veg", "non_veg"] | None = None
     needs_accommodation: bool = False
+    date_of_birth: date | None = None
     student_identifier_last4: str | None = None
     institution_email: str | None = None
     profile_complete: bool

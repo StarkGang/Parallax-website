@@ -25,6 +25,17 @@ import './Worklist.css';
 import './EventCard.css';
 
 import { PORTAL_AVATARS, usePortalAvatar } from '../lib/portalAvatar.js';
+import {
+  BRANCH_SUGGESTIONS,
+  COLLEGE_SUGGESTIONS,
+  ComboInput,
+  INDIAN_STATES,
+  KERALA_CITIES,
+  SelectInput,
+  YEAR_SUGGESTIONS,
+  normalizeYear,
+  parseYearNumber,
+} from '../components/AttendeeInputs.jsx';
 
 const REG_EVENT_FRAME = `${import.meta.env.BASE_URL}images/event_frame.png`;
 const REG_BG_CORE = `${import.meta.env.BASE_URL}images/parallax-bg-core.webp`;
@@ -108,7 +119,7 @@ export function PortalLayout() {
   const { user, logout, isStaff, reload: reloadUser } = useAuth();
   const { edition, refresh: refreshSite } = useSite();
   const navigate = useNavigate();
-  const [activeGlyph] = usePortalAvatar(user?.id, isStaff ? 'lisbon' : 'root');
+  const [activeGlyph] = usePortalAvatar(user?.id, isStaff ? 'root' : 'parallax');
   const [pageKey, setPageKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState('');
@@ -1871,7 +1882,7 @@ export function PortalProfile() {
   const profile = useAsync(() => authApi.profile(), []);
   const sessions = useAsync(() => authApi.sessions(), []);
   const { user, isStaff, reload, logout } = useAuth();
-  const [activeGlyph, selectGlyph] = usePortalAvatar(user?.id, isStaff ? 'lisbon' : 'root');
+  const [activeGlyph, selectGlyph] = usePortalAvatar(user?.id, isStaff ? 'root' : 'parallax');
   const navigate = useNavigate();
   const [form, setForm] = useState(null);
   const [message, setMessage] = useState(null);
@@ -1887,7 +1898,8 @@ export function PortalProfile() {
         collegeName: data.collegeName || data.universityName || '',
         course: data.course || '',
         branch: data.branch || '',
-        yearOfStudy: data.yearOfStudy || '',
+        yearOfStudy: normalizeYear(data.yearOfStudy),
+        dateOfBirth: data.dateOfBirth || '',
         city: data.city || '',
         state: data.state || '',
         gender: data.gender || '',
@@ -1933,7 +1945,8 @@ export function PortalProfile() {
         collegeName: form.collegeName,
         course: form.course,
         branch: form.branch,
-        yearOfStudy: form.yearOfStudy ? Number(form.yearOfStudy) : null,
+        yearOfStudy: parseYearNumber(form.yearOfStudy),
+        dateOfBirth: form.dateOfBirth || null,
         city: form.city?.trim() || null,
         state: form.state?.trim() || null,
         gender: form.gender || null,
@@ -2008,11 +2021,14 @@ export function PortalProfile() {
               label="College / University"
               hint="Your college, or the university if you study directly under one"
             >
-              <input
+              <ComboInput
                 value={form.collegeName}
-                onChange={(event) => update('collegeName', event.target.value)}
+                onChange={(val) => update('collegeName', val)}
+                options={COLLEGE_SUGGESTIONS}
+                placeholder="Search your college, or type it"
                 disabled={isLocked}
                 required
+                maxLength={200}
               />
             </Field>
             <Field label="Course">
@@ -2022,66 +2038,73 @@ export function PortalProfile() {
                 disabled={isLocked}
               />
             </Field>
-            <Field label="Branch">
-              <input
+            <Field label="Branch / Department">
+              <ComboInput
                 value={form.branch}
-                onChange={(event) => update('branch', event.target.value)}
+                onChange={(val) => update('branch', val)}
+                options={BRANCH_SUGGESTIONS}
+                placeholder="Search your branch, or type it"
                 disabled={isLocked}
+                maxLength={120}
               />
             </Field>
             <Field label="Year of study">
-              <input
-                type="number"
-                min="1"
-                max="6"
+              <ComboInput
                 value={form.yearOfStudy}
-                onChange={(event) => update('yearOfStudy', event.target.value)}
+                onChange={(val) => update('yearOfStudy', val)}
+                options={YEAR_SUGGESTIONS}
+                placeholder="Select or type year"
+                disabled={isLocked}
+                maxLength={40}
+              />
+            </Field>
+            <Field label="Date of birth">
+              <input
+                type="date"
+                value={form.dateOfBirth}
+                onChange={(event) => update('dateOfBirth', event.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+                min="1950-01-01"
                 disabled={isLocked}
               />
             </Field>
             <Field label="City">
-              <input
+              <ComboInput
                 value={form.city}
-                onChange={(event) => update('city', event.target.value)}
-                placeholder="e.g. Palakkad"
+                onChange={(val) => update('city', val)}
+                options={KERALA_CITIES}
+                placeholder="Select or type city (e.g. Palakkad)"
                 disabled={isLocked}
+                maxLength={120}
               />
             </Field>
             <Field label="State">
-              <input
+              <ComboInput
                 value={form.state}
-                onChange={(event) => update('state', event.target.value)}
-                placeholder="e.g. Kerala"
+                onChange={(val) => update('state', val)}
+                options={INDIAN_STATES}
+                placeholder="Select or type state (e.g. Kerala)"
                 disabled={isLocked}
+                maxLength={120}
               />
             </Field>
             <Field label="Gender">
-              <select
+              <SelectInput
                 value={form.gender}
-                onChange={(event) => update('gender', event.target.value)}
+                onChange={(val) => update('gender', val)}
+                options={GENDER_OPTIONS}
+                placeholder="Select gender"
                 disabled={isLocked}
-              >
-                <option value="">Select gender</option>
-                {GENDER_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              />
             </Field>
             <Field label="Meal preference">
-              <select
+              <SelectInput
                 value={form.foodPreference}
-                onChange={(event) => update('foodPreference', event.target.value)}
+                onChange={(val) => update('foodPreference', val)}
+                options={FOOD_OPTIONS}
+                placeholder="Select meal preference"
                 disabled={isLocked}
-              >
-                <option value="">Select meal preference</option>
-                {FOOD_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              />
             </Field>
           </FieldGrid>
           <label

@@ -1,0 +1,31 @@
+.state-page .ho-container {
+  justify-content: center;
+}
+
+.state-page .ho-editorial {
+  gap: clamp(4px, 0.8vw, 10px);
+}
+
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.state-actions .lusion-btn {
+  margin-left: 0;
+}
+
+@media (max-width: 720px) {
+  .state-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .state-actions .lusion-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
