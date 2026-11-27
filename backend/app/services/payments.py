@@ -76,6 +76,25 @@ async def create_gateway_order(order: PaymentOrder) -> str | None:
         return data["id"]
 
 
+def calculate_platform_fee(subtotal_paise: int, policy: Any | None) -> tuple[int, int]:
+    """Return ``(platform_fee_paise, total_paise)`` for a given subtotal.
+
+    When ``platform_fee_bps`` is 0, returns ``(0, subtotal)``. When
+    ``platform_fee_exempt_under_paise`` > 0 and ``subtotal < exempt_under``,
+    the fee is waived. When ``exempt_under`` == 0 and ``bps > 0``, the fee
+    applies to every positive transaction.
+    """
+    subtotal = max(0, int(subtotal_paise or 0))
+    if subtotal <= 0 or policy is None:
+        return 0, subtotal
+    bps = int(getattr(policy, "platform_fee_bps", 0) or 0)
+    exempt_under = int(getattr(policy, "platform_fee_exempt_under_paise", 0) or 0)
+    if bps <= 0 or (exempt_under > 0 and subtotal < exempt_under):
+        return 0, subtotal
+    fee = round(subtotal * bps / 10_000)
+    return fee, subtotal + fee
+
+
 async def attach_gateway_order(db: AsyncSession, order: PaymentOrder) -> PaymentOrder:
     """Create the provider order exactly once so checkout can actually open."""
     settings = get_settings()
@@ -292,15 +311,29 @@ async def mark_order_paid(
         # pass with no refund path, so any money on such a row is parked for
         # finance instead of buying an entitlement nobody approved.
         logger.warning("legacy_pass_order_paid order=%s user=%s", order.id, order.user_id)
-        db.add(
-            Refund(
-                order_id=order.id,
-                amount_paise=int(order.amount_paise),
-                reason_code="legacy_order",
-                reason_note="Payment on a retired pass order; no entitlement issued.",
-                status="pending",
+        already_committed = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status.in_(("pending", "processing", "processed")),
+                    )
+                )
             )
-        )
+            .scalars()
+            .one()
+        ) or 0
+        available = max(0, int(order.amount_paise) - int(already_committed))
+        if available > 0:
+            db.add(
+                Refund(
+                    order_id=order.id,
+                    amount_paise=available,
+                    reason_code="legacy_order",
+                    reason_note="Payment on a retired pass order; no entitlement issued.",
+                    status="pending",
+                )
+            )
 
     elif order.purpose == "registration":
         regs = list(
@@ -387,15 +420,30 @@ async def mark_order_paid(
                 r.status = "confirmed"
                 await issue_for_registration(db, r)
         if stranded_paise > 0:
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=stranded_paise,
-                    reason_code="booking_cancelled",
-                    reason_note="Paid for a booking that was already cancelled or replaced",
-                    status="pending",
+            already_committed = (
+                (
+                    await db.execute(
+                        select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                            Refund.order_id == order.id,
+                            Refund.status.in_(("pending", "processing", "processed")),
+                        )
+                    )
                 )
-            )
+                .scalars()
+                .one()
+            ) or 0
+            available = max(0, int(order.amount_paise) - int(already_committed))
+            refund_amt = min(int(stranded_paise), available)
+            if refund_amt > 0:
+                db.add(
+                    Refund(
+                        order_id=order.id,
+                        amount_paise=refund_amt,
+                        reason_code="booking_cancelled",
+                        reason_note="Paid for a booking that was already cancelled or replaced",
+                        status="pending",
+                    )
+                )
 
     elif order.purpose == "college_registration":
         from app.services.college_registrations import finalize_paid
@@ -666,15 +714,17 @@ async def refund_order(
     if amount_paise <= 0:
         raise ValidationFailed("The refund amount must be greater than zero.")
 
-    # The cap counts money that is committed (accepted by the gateway or
-    # already settled). Counting only "processed" let a second refund of the
-    # same money start while the first was still in flight.
+    # The cap counts money that is committed or queued. Including "pending"
+    # prevents the Finance form from opening a second refund while a
+    # cancellation-auto-queued pending row is waiting for confirmation.
+    # "processing" is counted because a gateway refund in flight is as
+    # committed as a settled one; a failure will flip it to "failed" later.
     already = (
         (
             await db.execute(
                 select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                     Refund.order_id == order.id,
-                    Refund.status.in_(("processing", "processed")),
+                    Refund.status.in_(("pending", "processing", "processed")),
                 )
             )
         )
@@ -715,7 +765,7 @@ async def refund_order(
                 await db.execute(
                     select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                         Refund.order_id.in_(order_ids),
-                        Refund.status.in_(("processing", "processed")),
+                        Refund.status.in_(("pending", "processing", "processed")),
                     )
                 )
             )
@@ -823,11 +873,14 @@ async def refund_order(
         )
         db.add(refund)
     await db.flush()
+    # Count both processing and processed so the refunded total is accurate
+    # even when the gateway has not yet settled (live payments_enabled mode).
     refunded_total = (
         (
             await db.execute(
                 select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
-                    Refund.order_id == order.id, Refund.status == "processed"
+                    Refund.order_id == order.id,
+                    Refund.status.in_(("processing", "processed")),
                 )
             )
         )

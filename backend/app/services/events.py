@@ -534,6 +534,11 @@ async def close_event(
         team.formation_state = "disbanded"
         await db.execute(delete(TeamMember).where(TeamMember.team_id == team.id))
 
+    order_reg_fees: dict[uuid.UUID, int] = {}
+    for r in regs:
+        if r.order_id is not None and int(r.fee_paise or 0) > 0:
+            order_reg_fees[r.order_id] = order_reg_fees.get(r.order_id, 0) + int(r.fee_paise or 0)
+
     refunds_queued = 0
     for order_id in dict.fromkeys(order_ids):
         order = await db.get(PaymentOrder, order_id)
@@ -544,35 +549,28 @@ async def close_event(
                 await db.execute(
                     select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                         Refund.order_id == order.id,
-                        Refund.status == "processed",
+                        Refund.status.in_(("pending", "processing", "processed")),
                     )
                 )
             )
             .scalars()
             .one()
         ) or 0
-        remaining = int(order.amount_paise) - int(already)
+        seat_total = order_reg_fees.get(order.id, int(order.amount_paise))
+        remaining = min(seat_total, max(0, int(order.amount_paise) - int(already)))
         if remaining <= 0:
             continue
-        existing = (
-            await db.execute(
-                select(Refund).where(
-                    Refund.order_id == order.id, Refund.status == "pending"
-                )
+        db.add(
+            Refund(
+                order_id=order.id,
+                amount_paise=remaining,
+                reason_code="event_cancelled",
+                reason_note=with_reason,
+                status="pending",
+                requested_by=actor_id,
             )
-        ).scalars().first()
-        if existing is None:
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=remaining,
-                    reason_code="event_cancelled",
-                    reason_note=with_reason,
-                    status="pending",
-                    requested_by=actor_id,
-                )
-            )
-            refunds_queued += 1
+        )
+        refunds_queued += 1
 
     await _notify_closed_event(db, event, regs, reason=with_reason)
 

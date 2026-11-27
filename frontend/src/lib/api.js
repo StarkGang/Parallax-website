@@ -289,6 +289,8 @@ export const portalApi = {
     api(`/editions/${editionId}/payments/${orderId}/mock`, { method: 'POST' }),
   verifyPayment: (editionId, payload) =>
     api(`/editions/${editionId}/payments/verify`, { method: 'POST', body: payload }),
+  releaseOrder: (editionId, orderId) =>
+    api(`/editions/${editionId}/orders/${orderId}/release`, { method: 'POST' }),
 };
 
 export const registrationApi = {
@@ -299,6 +301,11 @@ export const registrationApi = {
     api(`/editions/${editionId}/registration/documents/${docType}`, {
       method: 'POST',
       form,
+    }),
+  uploadDocumentLink: (editionId, docType, url) =>
+    api(`/editions/${editionId}/registration/documents/${docType}/link`, {
+      method: 'POST',
+      body: { url },
     }),
   deleteDocument: (editionId, docType) =>
     api(`/editions/${editionId}/registration/documents/${docType}`, {
@@ -363,6 +370,8 @@ export const adminApi = {
     api(`${adminBase(editionId)}/policies/check`, { method: 'POST', body: payload }),
   createPolicy: (editionId, payload) =>
     api(`${adminBase(editionId)}/policies`, { method: 'POST', body: payload }),
+  deletePolicy: (editionId, policyId) =>
+    api(`${adminBase(editionId)}/policies/${policyId}`, { method: 'DELETE' }),
   customCredentials: (editionId) => api(`${adminBase(editionId)}/custom-credentials`),
   createCustomCredential: (editionId, payload) =>
     api(`${adminBase(editionId)}/custom-credentials`, { method: 'POST', body: payload }),
@@ -408,6 +417,8 @@ export const adminApi = {
   refunds: (editionId) => api(`${adminBase(editionId)}/refunds`),
   createRefund: (editionId, payload) =>
     api(`${adminBase(editionId)}/refunds`, { method: 'POST', body: payload }),
+  processRefund: (editionId, refundId) =>
+    api(`${adminBase(editionId)}/refunds/${refundId}/process`, { method: 'POST' }),
   registrations: (editionId, params = {}) =>
     api(`${adminBase(editionId)}/registrations${query(params)}`),
   teams: (editionId, params = {}) =>

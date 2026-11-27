@@ -223,10 +223,7 @@ const PortalPlanCard = memo(function PortalPlanCard({
         <b>
           {row.price?.basis === 'included' ? (
             listPaise > 0 ? (
-              <>
-                <s className="exc-was">{money(listPaise)}</s>
-                ₹0
-              </>
+              `${money(listPaise)} · Included`
             ) : (
               'Included with pass'
             )
@@ -669,12 +666,18 @@ export function PortalWorklist() {
           `Event basket (${selectedRows.length} events)`,
         );
         if (outcome.status !== 'paid') {
+          delete quoteKeys.current[quote.quoteId];
+          try {
+            await portalApi.releaseOrder(editionId, order.orderId);
+          } catch {
+            // Hold expiry sweep still cleans up if release fails
+          }
           setMessage({
             tone: outcome.status === 'cancelled' ? 'info' : 'error',
             text:
               outcome.status === 'cancelled'
-                ? 'Payment cancelled. Your places are held until the hold expires.'
-                : outcome.message || 'Payment failed.',
+                ? 'Payment cancelled. Your reserved seats have been released.'
+                : `${outcome.message || 'Payment failed.'} Your reserved seats have been released.`,
           });
           await reloadAll();
           return;
@@ -712,7 +715,12 @@ export function PortalWorklist() {
       if (body.refundedPaise > 0) {
         setMessage({
           tone: 'success',
-          text: `${money(body.refundedPaise)} refund started to your original payment method.`,
+          text: `Event cancelled and seat released. Your refund of ${money(body.refundedPaise)} will be processed once confirmed by the admin/finance desk.`,
+        });
+      } else if (removeRow.seat?.feePaise > 0) {
+        setMessage({
+          tone: 'success',
+          text: 'Event cancelled and seat released. Any eligible refund will be processed once confirmed by the admin/finance desk.',
         });
       } else {
         setMessage({ tone: 'success', text: 'Event removed. Your pass allowance is free again.' });
@@ -912,15 +920,16 @@ export function PortalWorklist() {
           check the total and pay once at the end.
         </div>
         <div>
-          <b>Your pass includes {allowance.required ?? 0} events.</b>
+          <b>Your pass covers {allowance.unlimited || (allowance.required ?? 0) < 0 ? 'unlimited' : (allowance.required ?? 0)} events</b>
           {allowance.capPaise != null
-            ? ` That covers up to ${money(allowance.capPaise)} of event value.`
-            : ''}{' '}
-          Any extra event is charged on its own row, so adding one never fails.
+            ? ` up to ${money(allowance.capPaise)} total base value.`
+            : '.'}{' '}
+          Only events that fit strictly within your remaining limit are free; any extra event is
+          charged at its full discounted add-on price (no partial difference payment).
         </div>
         <div>
-          <b>Free events don't use your pass allowance.</b> For team events you can enter on your
-          own now and create or join a team later — the price never changes.
+          <b>One Pass QR for everything.</b> Your single Convention Pass QR code is used at the
+          main gate, all registered events, and lunch. Free events don't use your pass allowance.
         </div>
       </div>
 
@@ -947,10 +956,17 @@ export function PortalWorklist() {
             <div className="wl-meter-top">
               <span>
                 Events included with your pass
-                {allowance.mode === 'exact' ? ' (exactly)' : ' (up to)'}
+                {allowance.unlimited || (allowance.required ?? 0) < 0
+                  ? ' (unlimited under cap)'
+                  : allowance.mode === 'exact'
+                    ? ' (exactly)'
+                    : ' (up to)'}
               </span>
               <b>
-                {allowance.count ?? 0} / {allowance.required ?? 0}{' '}
+                {allowance.count ?? 0} /{' '}
+                {allowance.unlimited || (allowance.required ?? 0) < 0
+                  ? '∞'
+                  : (allowance.required ?? 0)}{' '}
                 <small style={{ fontWeight: 400, color: 'var(--dim)' }}>events</small>
               </b>
             </div>
@@ -960,7 +976,7 @@ export function PortalWorklist() {
                   width: `${
                     allowance.capPaise
                       ? Math.min(100, ((allowance.valuePaise || 0) / allowance.capPaise) * 100)
-                      : allowance.required
+                      : !allowance.unlimited && allowance.required > 0
                         ? Math.min(100, ((allowance.count || 0) / allowance.required) * 100)
                         : 0
                   }%`,
@@ -974,17 +990,18 @@ export function PortalWorklist() {
                   <> of <b>{money(allowance.capPaise)}</b> covered by your pass</>
                 ) : null}
               </span>
-              {allowance.capPaise != null ? (
+              {allowance.capPaise != null &&
+              (allowance.unlimited ||
+                (allowance.required ?? 0) < 0 ||
+                (allowance.count ?? 0) < (allowance.required ?? 0)) ? (
                 <span>
                   Still covered <b>{money(allowance.remainingPaise || 0)}</b>
                 </span>
               ) : null}
-              {allowance.capPaise != null &&
-              (allowance.valuePaise || 0) > allowance.capPaise ? (
-                <span style={{ color: '#f2c46d' }}>
-                  Extra value beyond your pass{' '}
-                  <b>{money((allowance.valuePaise || 0) - allowance.capPaise)}</b>
-                </span>
+              {!allowance.unlimited &&
+              (allowance.required ?? 0) >= 0 &&
+              (allowance.count ?? 0) >= (allowance.required ?? 0) ? (
+                <span>All included event slots used</span>
               ) : null}
               {quote && due > 0 ? (
                 <span style={{ color: '#f2c46d' }}>
@@ -1096,6 +1113,68 @@ export function PortalWorklist() {
           </div>
         </div>
 
+        {payload?.cancelledEvents?.length ? (
+          <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--dim)', marginBottom: 10 }}>
+              CANCELLED EVENTS &amp; REFUND STATUS
+            </div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {payload.cancelledEvents.map((ce) => {
+                const rf = ce.refund || { status: 'none', amountPaise: 0 };
+                const statusLabel =
+                  rf.status === 'processed'
+                    ? `✓ Refunded ${money(rf.amountPaise)}`
+                    : rf.status === 'processing'
+                      ? `⏳ Refund Processing (${money(rf.amountPaise)})`
+                      : rf.status === 'pending'
+                        ? `🕒 Refund Requested (${money(rf.amountPaise)}) — awaiting confirmation`
+                        : rf.status === 'failed'
+                          ? `⚠️ Refund Failed — finance desk reviewing`
+                          : ce.feePaise > 0
+                            ? 'Cancelled without refund'
+                            : 'Cancelled (₹0)';
+                const statusColor =
+                  rf.status === 'processed'
+                    ? '#4ade80'
+                    : rf.status === 'processing'
+                      ? '#38bdf8'
+                      : rf.status === 'pending'
+                        ? '#fbbf24'
+                        : rf.status === 'failed'
+                          ? '#f87171'
+                          : 'var(--dim)';
+                return (
+                  <div
+                    key={ce.registrationId}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 12,
+                      flexWrap: 'wrap',
+                      padding: '10px 14px',
+                      borderRadius: 10,
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.07)',
+                    }}
+                  >
+                    <div>
+                      <b>{ce.title}</b>
+                      <div style={{ fontSize: 12, color: 'var(--dim)', marginTop: 2 }}>
+                        {ce.cancelledBy === 'admin' ? 'Cancelled by admin' : 'Cancelled by you'}
+                        {ce.cancellationReason ? ` · ${ce.cancellationReason}` : ''}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: statusColor }}>
+                      {statusLabel}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
         {selected.length ? (
           <div className="wl-basket">
             <div className="wl-basket-sum">
@@ -1166,44 +1245,77 @@ export function PortalWorklist() {
                         ? 'Covered by your pass'
                         : line.basis === 'free'
                           ? 'Free event'
-                          : 'Extra event — pay the difference'}
+                          : 'Extra event — full add-on price'}
                       {line.format === 'team' ? ' · team entry' : ''}
                     </small>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     {line.duePaise > 0 ? (
-                      <b>{money(line.duePaise)}</b>
+                      <>
+                        {line.listPaise > line.duePaise ? (
+                          <s className="exc-was" style={{ marginRight: 6 }}>{money(line.listPaise)}</s>
+                        ) : null}
+                        <b>{money(line.duePaise)}</b>
+                      </>
                     ) : (
-                      <span className="wl-pill included">₹0</span>
+                      <span className="wl-pill included">
+                        {line.listPaise > 0 ? `${money(line.listPaise)} · Pass` : 'Included'}
+                      </span>
                     )}
                   </div>
                 </div>
               ))}
-            <div className="wl-quote-total">
-              <span>Total to pay now</span>
-              <span>{money(quote.duePaise)}</span>
-            </div>
-            <p className="wl-note" style={{ marginTop: 12 }}>
-              Once you pay, that place is confirmed and its price won't change, even if you pick
-              more events later. If you remove a paid event before the 24-hour deadline, the money
-              goes back to your original payment method.
-            </p>
-            <div className="sheet-actions" style={{ marginTop: 16 }}>
-              <Button variant="ghost" onClick={() => setReviewOpen(false)}>
-                Back
-              </Button>
-              <Button
-                icon={CreditCard}
-                onClick={checkout}
-                disabled={busy === 'checkout'}
-              >
-                {busy === 'checkout'
-                  ? 'Confirming'
-                  : quote.duePaise > 0
-                    ? `Pay ${money(quote.duePaise)}`
-                    : 'Confirm seats'}
-              </Button>
-            </div>
+            {(() => {
+              const bps = Number(allowance.platformFeeBps || 0);
+              const exemptUnder = Number(allowance.platformFeeExemptUnderPaise || 0);
+              const sub = Number(quote.duePaise || 0);
+              const pFee =
+                sub > 0 && bps > 0 && !(exemptUnder > 0 && sub < exemptUnder)
+                  ? Math.round((sub * bps) / 10000)
+                  : 0;
+              const grandTotal = sub + pFee;
+              return (
+                <>
+                  {pFee > 0 ? (
+                    <div className="wl-quote-line">
+                      <div>
+                        Platform fee ({(bps / 100).toFixed(bps % 100 ? 2 : 0)}%)
+                        <small>Applied to online checkout</small>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <b>{money(pFee)}</b>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="wl-quote-total">
+                    <span>Total to pay now</span>
+                    <span>{money(grandTotal)}</span>
+                  </div>
+                  <p className="wl-note" style={{ marginTop: 12 }}>
+                    Once you pay, that place is confirmed and its price won&apos;t change, even if you pick
+                    more events later. Standard Razorpay payment gateway or convenience charges may apply
+                    separately at checkout depending on your payment method. If you remove a paid event
+                    before the 24-hour deadline, the money goes back to your original payment method.
+                  </p>
+                  <div className="sheet-actions" style={{ marginTop: 16 }}>
+                    <Button variant="ghost" onClick={() => setReviewOpen(false)}>
+                      Back
+                    </Button>
+                    <Button
+                      icon={CreditCard}
+                      onClick={checkout}
+                      disabled={busy === 'checkout'}
+                    >
+                      {busy === 'checkout'
+                        ? 'Confirming'
+                        : grandTotal > 0
+                          ? `Pay ${money(grandTotal)}`
+                          : 'Confirm seats'}
+                    </Button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         ) : (
           <p className="muted">Pricing your basket…</p>

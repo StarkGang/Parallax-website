@@ -1013,20 +1013,34 @@ export function Home() {
         >
           <div className="px-about-container px-about-visual-grid">
             <div className="px-about-visual-media">
-              <img
-                src={resolveImageUrl(item.bannerUrl, 1200) || ABOUT_VISUAL}
-                alt={item.title}
-                referrerPolicy="no-referrer"
-                loading="lazy"
-                onError={(e) => {
-                  e.currentTarget.onerror = null;
-                  e.currentTarget.src = ABOUT_VISUAL;
-                }}
-              />
+              {resolveImageUrl(item.bannerUrl, 1200) ? (
+                <img
+                  src={resolveImageUrl(item.bannerUrl, 1200)}
+                  alt={item.title}
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = ABOUT_VISUAL;
+                  }}
+                />
+              ) : (
+                <EventGeneratedPoster
+                  event={{
+                    id: item.id,
+                    slug: item.id || item.title,
+                    title: item.title,
+                    categoryName: 'ANNOUNCEMENT',
+                    startsAt: item.publishedAt,
+                    venueRoom: 'Organising Desk',
+                    isAnnouncement: true,
+                  }}
+                />
+              )}
             </div>
             <div className="px-about-visual-copy">
               <div className="px-about-visual-brand">
-                <img src={NSSCE} alt="" />
+                <img src={PARALLAX_MARK} alt="" />
                 <div>
                   <span className="px-about-acid-tag">
                     ANNOUNCEMENT &middot; {date(item.publishedAt)}
@@ -1041,6 +1055,31 @@ export function Home() {
                   __html: item.bodyHtml || item.bodyMd,
                 }}
               />
+              {item.ctaUrl ? (
+                <div style={{ marginTop: '14px' }}>
+                  {item.ctaUrl.startsWith('/') ? (
+                    <Link
+                      to={item.ctaUrl}
+                      className="btn-machined"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', fontSize: '13px' }}
+                    >
+                      <span>{item.ctaLabel || 'View details'}</span>
+                      <ArrowRight size={14} />
+                    </Link>
+                  ) : (
+                    <a
+                      href={item.ctaUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-machined"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', fontSize: '13px' }}
+                    >
+                      <span>{item.ctaLabel || 'Open link'}</span>
+                      <ArrowRight size={14} />
+                    </a>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -1048,29 +1087,103 @@ export function Home() {
 
       {announcements.some((item) => !item.showOnHome) ? (
         <section
-          className="section news-section"
+          className="px-about-visual-band"
+          aria-label="Announcements from the organisers"
           onPointerEnter={() => mascotSay('Fresh from the organisers, worth a skim.')}
         >
-          <SectionHead kicker="Bulletin" title="From the organisers" />
-          <div className="news-grid">
-            {announcements
-              .filter((item) => !item.showOnHome)
-              .map((item, index) => (
-                <Panel
-                  key={item.id}
-                  className="news-card rise"
-                  style={{ animationDelay: `${index * 80}ms` }}
-                >
-                  <span className="mono-note">{date(item.publishedAt)}</span>
-                  <h3>{item.title}</h3>
-                  <div
-                    className="rich-text"
-                    dangerouslySetInnerHTML={{
-                      __html: item.bodyHtml || item.bodyMd,
+          <div className="px-about-container">
+            <div style={{ marginBottom: 24 }}>
+              <span className="px-about-acid-tag">BULLETIN &amp; UPDATES</span>
+              <h2 style={{ margin: '10px 0 0 0', fontSize: 'clamp(24px, 3vw, 34px)' }}>
+                From the organisers
+              </h2>
+            </div>
+            <div style={{ display: 'grid', gap: 28 }}>
+              {announcements
+                .filter((item) => !item.showOnHome)
+                .map((item) => (
+                  <article
+                    key={item.id}
+                    className="px-about-visual-grid"
+                    style={{
+                      padding: 20,
+                      borderRadius: 16,
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      background: 'rgba(255, 255, 255, 0.02)',
                     }}
-                  />
-                </Panel>
-              ))}
+                  >
+                    <div className="px-about-visual-media">
+                      {resolveImageUrl(item.bannerUrl, 1200) ? (
+                        <img
+                          src={resolveImageUrl(item.bannerUrl, 1200)}
+                          alt={item.title}
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = ABOUT_VISUAL;
+                          }}
+                        />
+                      ) : (
+                        <EventGeneratedPoster
+                          event={{
+                            id: item.id,
+                            slug: item.id || item.title,
+                            title: item.title,
+                            categoryName: 'ANNOUNCEMENT',
+                            startsAt: item.publishedAt,
+                            venueRoom: 'Organising Desk',
+                            isAnnouncement: true,
+                          }}
+                        />
+                      )}
+                    </div>
+                    <div className="px-about-visual-copy">
+                      <div className="px-about-visual-brand">
+                        <img src={PARALLAX_MARK} alt="" />
+                        <div>
+                          <span className="px-about-acid-tag">
+                            ANNOUNCEMENT &middot; {date(item.publishedAt)}
+                          </span>
+                          <h3>{item.title}</h3>
+                        </div>
+                      </div>
+                      <div
+                        className="rich-text"
+                        style={{ color: 'rgba(246, 244, 239, 0.78)', lineHeight: 1.65 }}
+                        dangerouslySetInnerHTML={{
+                          __html: item.bodyHtml || item.bodyMd,
+                        }}
+                      />
+                      {item.ctaUrl ? (
+                        <div style={{ marginTop: '14px' }}>
+                          {item.ctaUrl.startsWith('/') ? (
+                            <Link
+                              to={item.ctaUrl}
+                              className="btn-machined"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', fontSize: '13px' }}
+                            >
+                              <span>{item.ctaLabel || 'View details'}</span>
+                              <ArrowRight size={14} />
+                            </Link>
+                          ) : (
+                            <a
+                              href={item.ctaUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn-machined"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', fontSize: '13px' }}
+                            >
+                              <span>{item.ctaLabel || 'Open link'}</span>
+                              <ArrowRight size={14} />
+                            </a>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+            </div>
           </div>
         </section>
       ) : null}
@@ -2429,60 +2542,62 @@ export function FAQPage() {
   const rows = [
     {
       group: 'passes',
-      q: 'Is the convention pass mandatory?',
+      q: 'Is a Convention Pass mandatory to participate?',
       a: passPriceAnswer,
     },
     {
       group: 'passes',
-      q: 'What does the pass include?',
-      a: `Lunch on ${(policy?.lunchIncludedDays || []).map(dayLabel).join(' and ') || 'both convention days'}, full floor access, and an included event allowance.`,
-    },
-    {
-      group: 'events',
-      q: 'How many included events can I select?',
-      a:
-        policy?.includedValueCapPaise != null
-          ? `${mode} ${policy?.includedEventCount ?? 3} eligible events, with a base-value cap of ${money(policy.includedValueCapPaise)}.`
-          : `${mode} ${policy?.includedEventCount ?? 3} eligible events, with no base-value cap.`,
-    },
-    {
-      group: 'events',
-      q: 'Can I change my included selections?',
-      a: `Until ${date(policy?.selectionChangeDeadline)}. After that the selection locks and the portal disables edits.`,
-    },
-    {
-      group: 'events',
-      q: 'Can I register for more events?',
-      a: policy?.addonRequiresPass
-        ? 'Yes, after the pass. Extra events use their published add-on fee.'
-        : 'Yes. Add-on events can be reserved separately.',
-    },
-    {
-      group: 'events',
-      q: 'How does the team rule work?',
-      a: policy?.teamMembersRequirePass
-        ? 'Each team member must hold an active pass before the team entry can be confirmed.'
-        : 'Team entry is available without a separate pass for each member in this edition.',
-    },
-    {
-      group: 'support',
-      q: 'How is student eligibility verified?',
-      a: 'Upload your college ID card and passport photo with your registration. The registration desk reviews them and approves your pass tier before your pass activates.',
+      q: 'What does the Convention Pass include?',
+      a: `Full convention floor access, lunch on ${(policy?.lunchIncludedDays || []).map(dayLabel).join(' and ') || 'both convention days'}, an included event allowance, and a single scannable Pass QR used for main gate entry, event check-ins, and lunch.`,
     },
     {
       group: 'passes',
-      q: 'What happens after payment?',
-      a: 'The pass activates immediately, included registrations are created, and an entry ticket with a scannable token is issued.',
+      q: 'What happens after I pay for my pass?',
+      a: 'Your pass enters verification with the registration desk and your consolidated receipt is immediately available in the portal. Applicable Razorpay or platform fees may apply where configured by the edition policy. Your single Pass QR is used for gate entry, registered events, and lunch.',
     },
     {
       group: 'support',
-      q: 'Can I get a refund?',
-      a: 'Refunds are handled by the finance team against a paid order. Ask the organisers through the contact page.',
+      q: 'How does document verification and the 24-hour resubmission window work?',
+      a: 'Upload your college ID card and passport photo (or a public Google Drive link when enabled by the organisers) during registration. All passes are subject to verification by the registration desk. If the desk requests corrected documents, you have 24 hours to resubmit; failing to submit within 24 hours may result in pass revocation and release of event seats and team placements in accordance with convention policy. Even if a pass is rejected or revoked, your payment receipt remains available.',
+    },
+    {
+      group: 'events',
+      q: 'How does the included event allowance work?',
+      a: (() => {
+        const cnt = policy?.includedEventCount ?? 3;
+        const countText = cnt < 0 ? 'unlimited eligible events' : `${mode.toLowerCase()} ${cnt} eligible events`;
+        return policy?.includedValueCapPaise != null
+          ? `Your pass covers ${countText} within a strict base-value cap of ${money(policy.includedValueCapPaise)}. Only events that fit completely within your remaining count and value limit are covered at ₹0; any additional event is billed at its full discounted add-on fee (no partial difference payment).`
+          : `Your pass covers ${countText} with no base-value cap. Any additional event is billed at its full discounted add-on fee.`;
+      })(),
+    },
+    {
+      group: 'events',
+      q: 'Can I change my event selections later, and how do seat holds work?',
+      a: `You can update your selections until ${date(policy?.selectionChangeDeadline)}, after which selections lock. During online checkout, seats are temporarily reserved while payment is in progress and are released immediately if payment is cancelled, closed, or fails.`,
+    },
+    {
+      group: 'events',
+      q: 'How do team events and team leadership handover work?',
+      a: `${
+        policy?.teamMembersRequirePass
+          ? 'Every team member must hold an active pass and register for the event before creating or joining a team with an invite code.'
+          : 'Team entry is open to registered participants for that event.'
+      } If a team leader cancels their registration or is removed, leadership is automatically transferred to the earliest remaining member on the roster.`,
     },
     {
       group: 'support',
-      q: 'Where do I get help?',
-      a: `Write to ${edition?.contactEmail || 'iste@nssce.ac.in'} or visit the Main Auditorium desk at NSS College of Engineering.`,
+      q: 'How do event cancellations and refunds work?',
+      a: 'Cancellations before the cutoff release your seat immediately. For eligible paid events, a refund request is queued for finance-desk confirmation, and you can track its live status (Requested, Processing, or Refunded) directly in your portal.',
+    },
+    {
+      group: 'support',
+      q: 'Where can I view my complete bill or contact support?',
+      a: `View or print your consolidated bill anytime from "My Pass & Ticket" or "View complete receipt" in "My Events & Bills". For assistance, email ${edition?.contactEmail || 'iste@nssce.ac.in'}${
+        edition?.helpdeskPhone && !/00000/.test(edition.helpdeskPhone)
+          ? `, call or WhatsApp ${edition.helpdeskPhone},`
+          : ''
+      } or visit the Main Auditorium desk at NSS College of Engineering.`,
     },
   ];
 
@@ -2973,7 +3088,7 @@ export function ContactPage() {
       });
       setFeedback({
         tone: 'good',
-        text: `Thank you ${name.trim()}! Your message was dispatched directly to the organizing desk via Telegram. We will email you at ${senderEmail.trim()} shortly.`,
+        text: `Thank you ${name.trim()}! Your message was dispatched directly to the organizing desk. We will reach out to you at ${senderEmail.trim()} shortly.`,
       });
       setMessage('');
       setSent(true);
@@ -3036,16 +3151,17 @@ export function ContactPage() {
                 <span>{email}</span>
                 <ArrowUpRight size={14} strokeWidth={2} />
               </a>
-              {hasHelpdeskPhone ? (
-                <a
-                  href={`tel:${rawHelpdeskPhone.replace(/[^\d+]/g, '')}`}
-                  className="px-contact-channel-link"
-                  style={{ marginTop: 8 }}
-                >
-                  <Phone size={13} strokeWidth={2} />
-                  <span>{rawHelpdeskPhone}</span>
-                  <ArrowUpRight size={14} strokeWidth={2} />
-                </a>
+              {hasHelpdeskPhone && !/^https?:\/\//i.test(rawHelpdeskPhone) ? (
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                  <a
+                    href={`tel:${rawHelpdeskPhone.replace(/[^\d+]/g, '')}`}
+                    className="px-contact-channel-link"
+                  >
+                    <Phone size={13} strokeWidth={2} />
+                    <span>Call Desk: {rawHelpdeskPhone}</span>
+                    <ArrowUpRight size={14} strokeWidth={2} />
+                  </a>
+                </div>
               ) : null}
             </article>
 
@@ -3088,6 +3204,42 @@ export function ContactPage() {
                 <span>Open Student Portal</span>
                 <ArrowRight size={14} strokeWidth={2} />
               </Link>
+            </article>
+
+            <article className="px-contact-channel-col">
+              <div className="px-contact-channel-top">
+                <span className="px-about-acid-tag">04 / CONNECT WITH US</span>
+              </div>
+              <h3>Socials &amp; Updates</h3>
+              <p>Follow live convention announcements, speaker reveals, and quick community updates.</p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: 'auto' }}>
+                <a
+                  href="https://www.instagram.com/parallax.iste/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-contact-channel-link"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+                    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+                    <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+                  </svg>
+                  <span>Instagram</span>
+                </a>
+                <a
+                  href="https://whatsapp.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-contact-channel-link"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
+                    <path d="M12.04 2a10 10 0 0 0-8.57 15.16L2 22l4.97-1.3A10 10 0 1 0 12.04 2zm5.82 14.21c-.25.7-1.44 1.34-1.99 1.42-.51.08-1.15.11-1.85-.11-.43-.14-.98-.32-1.69-.63-2.97-1.28-4.91-4.27-5.06-4.47-.15-.2-1.21-1.61-1.21-3.07 0-1.46.76-2.18 1.03-2.48.27-.3.59-.37.79-.37h.57c.18 0 .43-.07.67.51.25.6.85 2.07.92 2.22.07.15.12.33.02.53-.1.2-.15.33-.3.5-.15.17-.31.38-.45.51-.15.15-.31.31-.13.61.18.3.79 1.3 1.7 2.11 1.17 1.04 2.15 1.37 2.45 1.52.3.15.48.13.66-.08.18-.2.76-.88.96-1.18.2-.3.41-.25.68-.15.28.1 1.75.82 2.05.97.3.15.5.22.57.35.08.12.08.73-.17 1.43z" />
+                  </svg>
+                  <span>WhatsApp</span>
+                </a>
+              </div>
             </article>
           </div>
         </div>
@@ -3166,17 +3318,17 @@ export function ContactPage() {
 
                 <div className="contact-form-group">
                   <label className="px-contact-field-label" htmlFor="contact-email">
-                    Your Email Address
+                    Email or Phone Number (WhatsApp)
                   </label>
                   <input
                     id="contact-email"
-                    type="email"
+                    type="text"
                     className="px-contact-input"
-                    placeholder="e.g. warner@college.ac.in"
+                    placeholder="e.g. warner@college.ac.in or +91 98765 43210"
                     value={senderEmail}
                     onChange={(e) => setSenderEmail(e.target.value)}
                     onBlur={() => {
-                      if (senderEmail.trim()) mascotSay("Ohh, surely didn't see that one coming…");
+                      if (senderEmail.trim()) mascotSay("Got your contact details, we'll reach out!");
                     }}
                     required
                   />
@@ -3404,6 +3556,39 @@ export function Footer() {
               <div>
                 <span>Convention Support</span>
                 <Link to="/faq">Rules, Refunds &amp; Check-in</Link>
+              </div>
+              <div>
+                <span>Connect</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginTop: '4px' }}>
+                  <a
+                    href="https://www.instagram.com/parallax.iste/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Parallax Instagram"
+                    title="Instagram (@parallax.iste)"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+                      <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+                      <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+                    </svg>
+                    <span>Instagram</span>
+                  </a>
+                  <a
+                    href="https://whatsapp.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Parallax WhatsApp"
+                    title="WhatsApp"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                      <path d="M12.04 2a10 10 0 0 0-8.57 15.16L2 22l4.97-1.3A10 10 0 1 0 12.04 2zm5.82 14.21c-.25.7-1.44 1.34-1.99 1.42-.51.08-1.15.11-1.85-.11-.43-.14-.98-.32-1.69-.63-2.97-1.28-4.91-4.27-5.06-4.47-.15-.2-1.21-1.61-1.21-3.07 0-1.46.76-2.18 1.03-2.48.27-.3.59-.37.79-.37h.57c.18 0 .43-.07.67.51.25.6.85 2.07.92 2.22.07.15.12.33.02.53-.1.2-.15.33-.3.5-.15.17-.31.38-.45.51-.15.15-.31.31-.13.61.18.3.79 1.3 1.7 2.11 1.17 1.04 2.15 1.37 2.45 1.52.3.15.48.13.66-.08.18-.2.76-.88.96-1.18.2-.3.41-.25.68-.15.28.1 1.75.82 2.05.97.3.15.5.22.57.35.08.12.08.73-.17 1.43z" />
+                    </svg>
+                    <span>WhatsApp</span>
+                  </a>
+                </div>
               </div>
             </div>
           </div>

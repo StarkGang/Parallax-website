@@ -71,28 +71,34 @@ def allowance_pack(
     cap_inclusive: bool,
     frozen_count: int = 0,
     frozen_value: int = 0,
+    pack_order: int = 0,
 ) -> list[uuid.UUID]:
     """Which of ``events`` the pass covers.
 
-    Cheapest base value first (then start time, then id) so the same basket
-    always produces the same answer regardless of click order. ``frozen_*`` are
-    the already-confirmed included seats: they are never repacked, so a
-    confirmed seat can only lose coverage if the policy itself changes, which
-    checkout refuses as a stale quote.
+    ``count == -1`` means unlimited event count (only ``cap_paise`` limits
+    coverage). ``pack_order``: ``0`` = cheapest first (default), ``1`` = most
+    expensive first. ``frozen_*`` are already-confirmed included seats.
     """
-    remaining_count = max(0, int(count) - int(frozen_count))
-    if remaining_count <= 0 or not events:
+    unlimited_count = int(count) < 0
+    remaining_count = None if unlimited_count else max(0, int(count) - int(frozen_count))
+    if (remaining_count is not None and remaining_count <= 0) or not events:
         return []
     remaining_value = None
     if cap_paise is not None:
         remaining_value = max(0, int(cap_paise) - int(frozen_value))
+    reverse_value = int(pack_order or 0) == 1
     ordered = sorted(
-        events, key=lambda e: (base_value(e), aware(e.starts_at) or datetime.min, str(e.id))
+        events,
+        key=lambda e: (
+            -base_value(e) if reverse_value else base_value(e),
+            aware(e.starts_at) or datetime.min,
+            str(e.id),
+        ),
     )
     covered: list[uuid.UUID] = []
     used = 0
     for event in ordered:
-        if len(covered) >= remaining_count:
+        if remaining_count is not None and len(covered) >= remaining_count:
             break
         value = base_value(event)
         if not event.included_eligible:
@@ -260,6 +266,7 @@ async def build_quote(
             cap_inclusive=bool(policy.cap_inclusive),
             frozen_count=frozen_count,
             frozen_value=frozen_value,
+            pack_order=int(getattr(policy, "allowance_pack_order", 0) or 0),
         )
     )
 
@@ -427,13 +434,17 @@ async def consume_quote(
 
     order = None
     seat_total = sum(int(r.fee_paise) for r in regs)
-    payable = seat_total
     if seat_total > 0:
+        from app.services.payments import calculate_platform_fee
+
+        policy = await current_policy(db, quote.edition_id)
+        platform_fee, payable = calculate_platform_fee(seat_total, policy)
         order = PaymentOrder(
             edition_id=quote.edition_id,
             user_id=user_id,
             purpose="registration",
             amount_paise=payable,
+            platform_fee_paise=platform_fee,
             status="created",
             notes={
                 "quoteId": str(quote.id),
@@ -585,19 +596,21 @@ async def create_seat_now(
 
     order = None
     if due > 0:
+        from app.services.payments import attach_gateway_order, calculate_platform_fee
+
+        platform_fee, total_due = calculate_platform_fee(due, policy)
         order = PaymentOrder(
             edition_id=edition.id,
             user_id=user_id,
             purpose="registration",
-            amount_paise=due,
+            amount_paise=total_due,
+            platform_fee_paise=platform_fee,
             status="created",
             notes={"eventIds": [str(event.id)], "kind": "single_seat"},
         )
         db.add(order)
         await db.flush()
         seat.order_id = order.id
-        from app.services.payments import attach_gateway_order
-
         await attach_gateway_order(db, order)
     else:
         await issue_for_registration(db, seat)
@@ -678,7 +691,7 @@ async def _refund_seat(
         await db.execute(
             select(Refund).where(
                 Refund.order_id == order.id,
-                Refund.status.in_(("processing", "processed")),
+                Refund.status.in_(("pending", "processing", "processed")),
             )
         )
     ).scalars().all()
@@ -956,6 +969,7 @@ async def build_worklist(
                     cap_inclusive=bool(policy.cap_inclusive),
                     frozen_count=frozen_count,
                     frozen_value=frozen_value,
+                    pack_order=int(getattr(policy, "allowance_pack_order", 0) or 0),
                 )
                 covered = event.id in trial
             kind, price_basis, due = _kind_for(event, price, covered)
@@ -1072,6 +1086,53 @@ async def build_worklist(
         for r in live.values()
         if r.status == "confirmed" and r.kind == ADDON
     )
+    cancelled_regs = list(
+        (
+            await db.execute(
+                select(Registration, Event)
+                .join(Event, Registration.event_id == Event.id)
+                .where(
+                    Registration.user_id == user_id,
+                    Registration.edition_id == edition.id,
+                    Registration.status == "cancelled",
+                )
+                .order_by(Registration.cancelled_at.desc())
+                .limit(20)
+            )
+        ).all()
+    )
+    cancelled_events: list[dict] = []
+    for c_reg, c_ev in cancelled_regs:
+        refund_info = {"status": "none", "amountPaise": 0, "requestedAt": None, "processedAt": None}
+        if c_reg.order_id is not None and int(c_reg.fee_paise or 0) > 0:
+            rf = (
+                await db.execute(
+                    select(Refund)
+                    .where(Refund.order_id == c_reg.order_id)
+                    .order_by(Refund.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            if rf is not None:
+                refund_info = {
+                    "status": rf.status,
+                    "amountPaise": int(rf.amount_paise),
+                    "requestedAt": aware(rf.created_at).isoformat() if rf.created_at else None,
+                    "processedAt": aware(rf.processed_at).isoformat() if rf.processed_at else None,
+                }
+        cancelled_events.append(
+            {
+                "registrationId": str(c_reg.id),
+                "eventId": str(c_ev.id),
+                "title": c_ev.title,
+                "feePaise": int(c_reg.fee_paise or 0),
+                "cancelledAt": aware(c_reg.cancelled_at).isoformat() if c_reg.cancelled_at else None,
+                "cancelledBy": c_reg.cancelled_by or "user",
+                "cancellationReason": c_reg.cancellation_reason,
+                "refund": refund_info,
+            }
+        )
+
     return {
         "edition": {
             "id": str(edition.id),
@@ -1081,7 +1142,9 @@ async def build_worklist(
         "allowance": {
             "count": len(covered_ids),
             "required": policy.included_event_count,
+            "unlimited": int(policy.included_event_count) < 0,
             "mode": policy.included_selection_mode or "up_to",
+            "packOrder": int(getattr(policy, "allowance_pack_order", 0) or 0),
             "capPaise": policy.included_value_cap_paise,
             "valuePaise": frozen_value,
             "remainingPaise": (
@@ -1090,6 +1153,10 @@ async def build_worklist(
                 else None
             ),
             "capInclusive": bool(policy.cap_inclusive),
+            "platformFeeBps": int(getattr(policy, "platform_fee_bps", 0) or 0),
+            "platformFeeExemptUnderPaise": int(
+                getattr(policy, "platform_fee_exempt_under_paise", 0) or 0
+            ),
             "locked": bool(
                 policy.selection_change_deadline
                 and aware(policy.selection_change_deadline) <= datetime.now(UTC)
@@ -1098,6 +1165,7 @@ async def build_worklist(
         "totals": {"paidSeatsPaise": seats_paid},
         "basket": basket_payload(await open_basket(db, user_id, edition.id)),
         "rows": rows,
+        "cancelledEvents": cancelled_events,
     }
 
 
@@ -1125,6 +1193,40 @@ def _actions_for(
         actions.append("open_team")
         actions.append("leave_team")
     return actions
+
+
+async def release_unpaid_order(
+    db: AsyncSession, *, user_id: uuid.UUID, order_id: uuid.UUID
+) -> dict:
+    """Release reserved seats immediately when checkout is closed or fails."""
+    order = await db.get(PaymentOrder, order_id)
+    if order is None or order.user_id != user_id:
+        raise NotFound("Order not found.")
+    if order.status == "paid":
+        return {"released": 0, "orderStatus": "paid"}
+    if order.status == "created":
+        order.status = "expired"
+    reserved = list(
+        (
+            await db.execute(
+                select(Registration).where(
+                    Registration.order_id == order.id,
+                    Registration.user_id == user_id,
+                    Registration.status == "reserved",
+                )
+            )
+        ).scalars()
+    )
+    for seat in reserved:
+        seat.status = "cancelled"
+        seat.cancelled_at = datetime.now(UTC)
+        seat.cancelled_by = "user"
+        seat.cancellation_reason = "Payment cancelled or failed before completion"
+    if reserved:
+        cache_delete_pattern("public:*")
+        cache_delete_pattern("admin:dashboard:*")
+    await db.flush()
+    return {"released": len(reserved), "orderStatus": order.status}
 
 
 __all__ = [

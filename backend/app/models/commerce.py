@@ -182,6 +182,9 @@ class PaymentOrder(Base, UUIDPrimaryKey, Timestamps):
     )
     purpose: Mapped[str] = mapped_column(String(40), nullable=False)
     amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_fee_paise: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     currency: Mapped[str] = mapped_column(String(8), default="INR", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="created", nullable=False)
     gateway_order_id: Mapped[str | None] = mapped_column(String(80), unique=True)
@@ -267,6 +270,9 @@ class AttendanceRecord(Base, UUIDPrimaryKey):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
+    scope: Mapped[str] = mapped_column(
+        String(24), default="pass", server_default=text("'pass'"), nullable=False
+    )
     day: Mapped[str] = mapped_column(String(20), default="1", nullable=False)
     checked_in_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     checked_in_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -275,14 +281,15 @@ class AttendanceRecord(Base, UUIDPrimaryKey):
 
     __table_args__ = (
         UniqueConstraint("user_id", "event_id", "day", name="uq_attendance"),
-        # A pass-level scan has no event, and SQL treats NULLs as distinct, so
-        # the constraint above cannot dedupe it at all: two scanners on one pass
-        # both inserted. A partial unique index covers that case.
+        # Pass-level and lunch-level scans have event_id=NULL, and SQL treats
+        # NULLs as distinct, so a partial unique index keyed by scope prevents
+        # duplicate gate or lunch scans per day.
         Index(
             "uq_attendance_pass_day",
             "user_id",
             "edition_id",
             "day",
+            "scope",
             unique=True,
             postgresql_where=text("event_id IS NULL"),
             sqlite_where=text("event_id IS NULL"),

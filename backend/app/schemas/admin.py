@@ -45,6 +45,9 @@ class DashboardStats(CamelModel):
     revenue_paise: int = 0
     refunded_paise: int = 0
     net_revenue_paise: int = 0
+    pending_refunds_paise: int = 0
+    pending_refunds_count: int = 0
+    recent_refunds: list[dict] = []
     registrations_confirmed: int = 0
     registrations_pending: int = 0
     registrations_cancelled: int = 0
@@ -78,6 +81,10 @@ class PolicyView(CamelModel):
     included_selection_mode: str
     included_value_cap_paise: int | None = None
     cap_inclusive: bool = True
+    # 0 = cheapest first, 1 = expensive first
+    allowance_pack_order: int = Field(default=0, ge=0, le=1)
+    # 0 = cheapest first, 1 = expensive first
+    allowance_pack_order: int = Field(default=0, ge=0, le=1)
     selection_change_deadline: datetime | None = None
     addon_requires_pass: bool = True
     team_members_require_pass: bool = True
@@ -85,6 +92,8 @@ class PolicyView(CamelModel):
     hold_minutes: int = 15
     refund_rules: dict = {}
     gst_note: str | None = None
+    platform_fee_bps: int = 0
+    platform_fee_exempt_under_paise: int = 0
     reason: str | None = None
     created_at: datetime
     created_by_name: str | None = None
@@ -97,6 +106,8 @@ class PolicyUpdate(StrictCamelModel):
     included_selection_mode: str = Field(default="exact", pattern="^(exact|up_to)$")
     included_value_cap_paise: int | None = None
     cap_inclusive: bool = True
+    # 0 = cheapest first, 1 = expensive first
+    allowance_pack_order: int = Field(default=0, ge=0, le=1)
     selection_change_deadline: datetime | None = None
     addon_requires_pass: bool = True
     team_members_require_pass: bool = True
@@ -104,6 +115,8 @@ class PolicyUpdate(StrictCamelModel):
     hold_minutes: int = 15
     refund_rules: dict = {}
     gst_note: str | None = None
+    platform_fee_bps: int = Field(default=0, ge=0, le=2500)
+    platform_fee_exempt_under_paise: int = Field(default=0, ge=0)
     reason: str | None = None
     override_price_lock: bool = False
 
@@ -289,6 +302,8 @@ class AnnouncementUpsert(StrictCamelModel):
     body_md: str
     audience: str = Field(default="public", pattern="^(public|participants|staff)$")
     banner_url: str | None = None
+    cta_label: str | None = Field(default=None, max_length=80)
+    cta_url: str | None = Field(default=None, max_length=500)
     show_on_home: bool = False
     event_id: uuid.UUID | None = None
     status: str = Field(default="draft", pattern="^(draft|published)$")
@@ -306,6 +321,8 @@ class AnnouncementAdminView(CamelModel):
     body_html: str
     audience: str
     banner_url: str | None = None
+    cta_label: str | None = Field(default=None, max_length=80)
+    cta_url: str | None = Field(default=None, max_length=500)
     show_on_home: bool = False
     status: str
     event_id: uuid.UUID | None = None
@@ -329,6 +346,7 @@ class AuditRow(CamelModel):
 class CheckinRequest(StrictCamelModel):
     token: str
     event_id: uuid.UUID | None = None
+    scope: str = Field(default="pass", pattern="^(pass|event|lunch)$")
     day: str | None = None
     device_label: str | None = None
 

@@ -16,8 +16,9 @@ import {
   Ticket,
   Users,
 } from 'lucide-react';
-import { authApi, portalApi, publicApi } from '../lib/api.js';
+import { authApi, portalApi, publicApi, registrationApi } from '../lib/api.js';
 import { openCheckout } from '../lib/razorpay.js';
+import { CompleteReceiptSheet } from '../components/CompleteReceiptSheet.jsx';
 import { PaymentProgress } from '../components/PaymentProgress.jsx';
 import '../components/PassTierCard.css';
 import { ISTE, LOGO, NSSCE } from './Public.jsx';
@@ -114,6 +115,7 @@ const PORTAL_NAV = [
   ['Browse Events', '/portal/events'],
   ['Teams & Invites', '/portal/teams'],
   ['My Events & Bills', '/portal/registrations'],
+  ['Instructions & Guide', '/portal/instructions'],
   ['Profile & Settings', '/portal/profile'],
 ];
 
@@ -473,6 +475,11 @@ export function PortalSelectEvents() {
         setPayStage(order.mock ? 'verifying' : null);
         const outcome = await payOrder(editionId, order, user, title);
         if (outcome.status !== 'paid') {
+          try {
+            await portalApi.releaseOrder(editionId, order.orderId);
+          } catch {
+            // Order expiry sweep cleans up if release fails
+          }
           setPayStage(null);
           setMessage({
             tone: outcome.status === 'cancelled' ? 'info' : 'error',
@@ -529,6 +536,11 @@ export function PortalSelectEvents() {
           `Add-on Event Bookings (${addons.length}) - ${edition?.name || 'Parallax 2027'}`
         );
         if (outcome.status === 'cancelled') {
+          try {
+            await portalApi.releaseOrder(editionId, order.orderId);
+          } catch {
+            // Hold expiry sweep cleans up if release fails
+          }
           setMessage({
             tone: 'info',
             text: 'Payment was cancelled or closed. Your add-on bookings were not charged.',
@@ -538,6 +550,11 @@ export function PortalSelectEvents() {
           return;
         }
         if (outcome.status === 'failed') {
+          try {
+            await portalApi.releaseOrder(editionId, order.orderId);
+          } catch {
+            // Hold expiry sweep cleans up if release fails
+          }
           setMessage({
             tone: 'error',
             text:
@@ -823,35 +840,62 @@ export function PortalSelectEvents() {
         ) : (
           <p className="muted">No add-on events are currently open for you.</p>
         )}
-        <div className="addon-total">
-          <span>Pass</span>
-          <b>{money(passData.pricePaise)}</b>
-          <span>Add-ons</span>
-          <b>{money(addonTotal)}</b>
-          <strong>Due now {money(addonTotal)}</strong>
-        </div>
+        {(() => {
+          const addonBps = Number(policy?.platformFeeBps || 0);
+          const addonExemptUnder = Number(policy?.platformFeeExemptUnderPaise || 0);
+          const addonPlatformFee =
+            addonTotal > 0 && addonBps > 0 && !(addonExemptUnder > 0 && addonTotal < addonExemptUnder)
+              ? Math.round((addonTotal * addonBps) / 10000)
+              : 0;
+          const addonPayableTotal = addonTotal + addonPlatformFee;
+          const addonPctLabel = (addonBps / 100).toFixed(addonBps % 100 ? 2 : 0);
 
-        {/* Cancellation, Refund & Double Payment Warning */}
-        <div style={{ margin: '14px 0', padding: '12px 14px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', fontSize: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f8fafc', fontWeight: 700, marginBottom: '6px' }}>
-            <ShieldCheck size={15} color="#38bdf8" />
-            <span>Add-on Payment, Refund &amp; Safety Policy</span>
-          </div>
-          <p style={{ margin: '0 0 6px 0', color: '#94a3b8', lineHeight: '1.4' }}>
-            • <b>Refund Guarantee:</b> If an event or workshop is cancelled by the organisers, a 100% refund is credited back to your bank within 5–7 working days.
-          </p>
-          <p style={{ margin: 0, color: '#fbbf24', lineHeight: '1.4' }}>
-            • <b>Avoid Double Charges:</b> Do not refresh or exit while Razorpay checkout is processing. If money is deducted but tickets take a moment, wait 2 minutes or check your receipts before trying again.
-          </p>
-        </div>
+          return (
+            <>
+              <div className="addon-total">
+                <span>Pass</span>
+                <b>{money(passData.pricePaise)}</b>
+                <span>Add-ons</span>
+                <b>{money(addonTotal)}</b>
+                {addonPlatformFee > 0 ? (
+                  <>
+                    <span>Platform fee ({addonPctLabel}%)</span>
+                    <b>{money(addonPlatformFee)}</b>
+                  </>
+                ) : null}
+                <strong>Due now {money(addonPayableTotal)}</strong>
+              </div>
 
-        <Button onClick={registerAddons} disabled={!addons.length || busy === 'addons'} icon={CreditCard} variant="primary">
-          {busy === 'addons'
-            ? 'Securing booking…'
-            : addonTotal === 0
-              ? 'Confirm Free Bookings'
-              : `Pay ${money(addonTotal)} with Razorpay`}
-        </Button>
+              {/* Cancellation, Refund & Double Payment Warning */}
+              <div style={{ margin: '14px 0', padding: '12px 14px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', fontSize: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f8fafc', fontWeight: 700, marginBottom: '6px' }}>
+                  <ShieldCheck size={15} color="#38bdf8" />
+                  <span>Payment Charges, Refund &amp; Safety Terms</span>
+                </div>
+                <p style={{ margin: '0 0 6px 0', color: '#cbd5e1', lineHeight: '1.45' }}>
+                  • <b>Platform &amp; Razorpay Charges:</b>{' '}
+                  {addonPlatformFee > 0
+                    ? `Your total (${money(addonPayableTotal)}) includes a ${addonPctLabel}% platform fee (${money(addonPlatformFee)}). Standard Razorpay payment gateway or convenience charges may apply separately at checkout depending on your payment method. Platform and gateway charges are non-refundable once settled.`
+                    : `Payments are processed securely via Razorpay (UPI, cards, netbanking). Standard Razorpay payment gateway or convenience charges may apply at checkout depending on your payment method and are non-refundable once settled.`}
+                </p>
+                <p style={{ margin: '0 0 6px 0', color: '#94a3b8', lineHeight: '1.45' }}>
+                  • <b>Cancellation &amp; Refund:</b> If an event or workshop is cancelled by the organisers, the eligible event fee is refunded to your source account within 5–7 working days.
+                </p>
+                <p style={{ margin: 0, color: '#fbbf24', lineHeight: '1.45' }}>
+                  • <b>Avoid Double Charges:</b> Do not refresh or exit while Razorpay checkout is processing. If money is deducted but tickets take a moment, wait 2 minutes or check your receipts before trying again.
+                </p>
+              </div>
+
+              <Button onClick={registerAddons} disabled={!addons.length || busy === 'addons'} icon={CreditCard} variant="primary">
+                {busy === 'addons'
+                  ? 'Securing booking…'
+                  : addonTotal === 0
+                    ? 'Confirm Free Bookings'
+                    : `Pay ${money(addonPayableTotal)} with Razorpay`}
+              </Button>
+            </>
+          );
+        })()}
         <p className="demo-label">
           Add-on reservations expire after {policy?.holdMinutes || 15} minutes if unpaid.
         </p>
@@ -869,7 +913,7 @@ export function PortalSelectEvents() {
 }
 
 export function PortalRegistrations() {
-  const { editionId } = useSite();
+  const { editionId, edition } = useSite();
   const { user } = useAuth();
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], {
     enabled: Boolean(editionId),
@@ -891,6 +935,12 @@ export function PortalRegistrations() {
   const isSuspended = user?.status === 'suspended' || pass.data?.data?.status === 'suspended';
   const [confirm, setConfirm] = useState(null);
   const [message, setMessage] = useState(null);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const regQuery = useAsync(
+    () => registrationApi.get(editionId),
+    [editionId],
+    { enabled: Boolean(editionId && showReceipt) },
+  );
   const rows = regs.data?.data || [];
   const hasVisitedTeamsPortal = (() => {
     try {
@@ -957,6 +1007,11 @@ export function PortalRegistrations() {
           <SectionHead
             kicker="Selection Record"
             title="My events & bills"
+            action={
+              <Button variant="ghost" icon={Printer} onClick={() => setShowReceipt(true)}>
+                View complete receipt
+              </Button>
+            }
           />
           <Feedback message={message} />
           {myTeams.length && !hasVisitedTeamsPortal ? (
@@ -1105,10 +1160,20 @@ export function PortalRegistrations() {
                             <div className="reg-tl-foot">
                               <div className="reg-tl-badges">
                                 <Badge tone={statusInfo.tone}>{statusInfo.label}</Badge>
-                                {row.paymentStatus === 'refunded' ? (
-                                  <Badge tone="bad">Refunded</Badge>
-                                ) : row.paymentStatus === 'refund_pending' ? (
-                                  <Badge tone="warn">Refund Pending</Badge>
+                                {row.refundStatus === 'processed' || row.paymentStatus === 'refunded' ? (
+                                  <Badge tone="good">
+                                    Refunded {money(row.refundedPaise || row.feePaise)}
+                                  </Badge>
+                                ) : row.refundStatus === 'processing' ? (
+                                  <Badge tone="warn">
+                                    Refund Processing ({money(row.refundedPaise || row.feePaise)})
+                                  </Badge>
+                                ) : row.refundStatus === 'pending' || row.paymentStatus === 'refund_pending' ? (
+                                  <Badge tone="warn">
+                                    Refund Pending ({money(row.refundedPaise || row.feePaise)})
+                                  </Badge>
+                                ) : row.refundStatus === 'failed' ? (
+                                  <Badge tone="bad">Refund Failed</Badge>
                                 ) : (
                                   <span className="reg-tl-fee">
                                     {row.feePaise > 0 ? money(row.feePaise) : '₹0 · Pass'}
@@ -1219,6 +1284,14 @@ export function PortalRegistrations() {
               </Button>
             </div>
           </Sheet>
+      <CompleteReceiptSheet
+        open={showReceipt}
+        onClose={() => setShowReceipt(false)}
+        edition={edition}
+        registration={regQuery.data?.data?.registration}
+        eventRegistrations={rows}
+        user={user}
+      />
     </>
   );
 }
@@ -1909,6 +1982,129 @@ export function PortalTeams() {
           </Button>
         </div>
       </Sheet>
+    </>
+  );
+}
+
+export function InstructionsPage() {
+  const { edition } = useSite();
+  const helpdeskPhone = (edition?.helpdeskPhone || '').trim();
+  const contactEmail = edition?.contactEmail || 'iste@nssce.ac.in';
+
+  const sections = [
+    {
+      title: '1. Pass Purchase & Document Verification',
+      points: [
+        'Every participant is required to purchase a Convention Pass by completing their profile details, uploading the mandatory identification documents, and completing payment.',
+        'All submitted passes are subject to review and verification by the registration desk.',
+        'If the desk requests corrected documents, a 24-hour resubmission window applies. Failure to submit the requested documents within 24 hours may result in pass revocation and release of associated event seats and team placements in accordance with convention policy.',
+        'If a pass is rejected or revoked, it will no longer grant gate entry or appear as active on your dashboard; however, your payment receipt remains available for your records.',
+      ],
+    },
+    {
+      title: '2. Event Selection, Pass Allowance & Seat Holds',
+      points: [
+        'Your Convention Pass may include an event allowance configured by count and/or value cap. Only events that fit strictly within the remaining allowance limits are covered at ₹0; any additional events are billed at their full applicable add-on fee.',
+        'During checkout, selected seats are temporarily reserved while payment is in progress. If payment is cancelled, closed, or fails, reserved seats are released back to general availability.',
+        'Applicable platform or Razorpay payment gateway fees may apply to online transactions depending on the active edition policy.',
+      ],
+    },
+    {
+      title: '3. Single Pass QR for All Access',
+      points: [
+        'Your Convention Pass QR code serves as your unified credential across the convention — it is used for main gate admission, individual event check-ins, and lunch check-ins.',
+        'Please keep your Pass QR accessible and present physical college identification if requested by verification staff at the gate.',
+      ],
+    },
+    {
+      title: '4. Teams & Leadership Handover',
+      points: [
+        'For team events, you may create a team and share its invite code, or join an existing team using an invite code.',
+        'If a team leader cancels their event registration or is removed, team leadership is automatically transferred to the earliest remaining member on the roster. A team is disbanded only if no members remain.',
+      ],
+    },
+    {
+      title: '5. Cancellations, Refunds & Receipts',
+      points: [
+        'Event cancellations are subject to the convention cancellation window and refund policy. Eligible refunds for cancelled paid events are processed once reviewed and confirmed by the finance desk, and their live status is tracked under your events list.',
+        'You can view and print your complete consolidated receipt at any time from "My Pass & Ticket" or via "View complete receipt" in "My Events & Bills".',
+      ],
+    },
+    {
+      title: '6. Support & Assistance',
+      points: [
+        'All registrations, allowances, and refunds are governed by the active edition policy and verification guidelines.',
+        'For any questions, discrepancies, or assistance with your pass, events, or refunds, please contact our support desk.',
+      ],
+    },
+  ];
+
+  return (
+    <>
+      <SectionHead
+        kicker="Participant Guide"
+        title="Instructions & Policies"
+        action={
+          <Link to="/contact" style={{ textDecoration: 'none' }}>
+            <Button variant="ghost" icon={ArrowRight}>
+              Contact Support
+            </Button>
+          </Link>
+        }
+      />
+      <div style={{ display: 'grid', gap: 16 }}>
+        {sections.map((sec) => (
+          <Panel key={sec.title}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: 16 }}>{sec.title}</h3>
+            <ul
+              style={{
+                margin: 0,
+                paddingLeft: 18,
+                display: 'grid',
+                gap: 8,
+                color: 'var(--dim)',
+                lineHeight: 1.6,
+                fontSize: 14,
+              }}
+            >
+              {sec.points.map((pt, idx) => (
+                <li key={idx}>{pt}</li>
+              ))}
+            </ul>
+          </Panel>
+        ))}
+        <Panel>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: 16 }}>Need Help?</h3>
+          <p className="muted" style={{ margin: '0 0 12px 0', fontSize: 14, lineHeight: 1.6 }}>
+            If you require assistance with verification, event bookings, or refunds, please reach
+            out to the organising desk:
+          </p>
+          <div style={{ display: 'grid', gap: 10, fontSize: 14 }}>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <span>
+                Email:{' '}
+                <a href={`mailto:${contactEmail}`} style={{ color: '#38bdf8' }}>
+                  {contactEmail}
+                </a>
+              </span>
+              {helpdeskPhone && !/00000/.test(helpdeskPhone) ? (
+                <span>
+                  Phone / WhatsApp:{' '}
+                  <a href={`tel:${helpdeskPhone.replace(/[^\d+]/g, '')}`} style={{ color: '#38bdf8' }}>
+                    {helpdeskPhone}
+                  </a>
+                </span>
+              ) : null}
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <Link to="/contact" className="login-machined-btn is-gold">
+                <span>Open Contact Page</span>
+                <ArrowRight size={14} strokeWidth={2} />
+              </Link>
+            </div>
+          </div>
+        </Panel>
+      </div>
     </>
   );
 }

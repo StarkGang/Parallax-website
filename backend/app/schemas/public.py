@@ -20,6 +20,8 @@ class PolicyPublic(CamelModel):
     selection_change_deadline: datetime | None = None
     policy_version: int
     gst_note: str | None = None
+    platform_fee_bps: int = 0
+    platform_fee_exempt_under_paise: int = 0
 
 
 class EditionPublic(CamelModel):
@@ -38,6 +40,7 @@ class EditionPublic(CamelModel):
     registration_closes_at: datetime
     status: str
     contact_email: str
+    helpdesk_phone: str | None = None
     branding: dict
     logo_icon_id: uuid.UUID | None = None
     policy: PolicyPublic | None = None
@@ -118,6 +121,8 @@ class AnnouncementPublic(CamelModel):
     published_at: datetime | None = None
     audience: str
     banner_url: str | None = None
+    cta_label: str | None = None
+    cta_url: str | None = None
     show_on_home: bool = False
     event_id: uuid.UUID | None = None
 

@@ -952,6 +952,9 @@ export function AdminOverview() {
   const passesSold = data?.passesSold ?? 0;
   const checkedIn = data?.checkedIn ?? 0;
   const refunded = data?.refundedPaise || 0;
+  const pendingRefundsPaise = data?.pendingRefundsPaise || 0;
+  const pendingRefundsCount = data?.pendingRefundsCount || 0;
+  const recentRefunds = data?.recentRefunds || [];
   const revenueCollected = sales.reduce((sum, row) => sum + (Number(row.amountPaise) || 0), 0);
   const orders = sales.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
   const peakDay = sales.reduce((peak, row) => Math.max(peak, Number(row.amountPaise) || 0), 0);
@@ -1001,10 +1004,26 @@ export function AdminOverview() {
           icon={IndianRupee}
           label="Net revenue"
           value={money(data?.netRevenuePaise ?? data?.revenuePaise ?? 0)}
-          badge={refunded ? `${money(refunded)} refunded` : 'No refunds'}
+          badge={refunded ? `-${money(refunded)} refunded` : 'No refunds'}
           badgeTone={refunded ? 'bad' : 'muted'}
-          note={`Gross ${money(data?.revenuePaise || 0)} across ${orders} paid orders.`}
+          note={`Gross ${money(data?.revenuePaise || 0)} − ${money(refunded)} refunded across ${orders} orders.`}
           chart={<Sparkline values={sales.map((row) => Number(row.amountPaise) || 0)} />}
+        />
+        <MetricCard
+          icon={Wallet}
+          label="Refunds"
+          value={refunded ? `-${money(refunded)}` : money(0)}
+          badge={
+            pendingRefundsCount
+              ? `${pendingRefundsCount} pending (${money(pendingRefundsPaise)})`
+              : 'None pending'
+          }
+          badgeTone={pendingRefundsCount ? 'warn' : refunded ? 'bad' : 'muted'}
+          note={
+            <Link to="/manage/finance" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+              Review &amp; process refunds →
+            </Link>
+          }
         />
         <MetricCard
           icon={Users}
@@ -1045,6 +1064,40 @@ export function AdminOverview() {
             </div>
           }
         />
+      </div>
+
+      <div className="adm-card">
+        <div className="adm-card-head">
+          <div>
+            <h2>Recent refunds</h2>
+            <p>Processed refunds are deducted from net revenue; pending ones await confirmation.</p>
+          </div>
+          <Button variant="ghost" to="/manage/finance">
+            Open finance ledger
+          </Button>
+        </div>
+        {recentRefunds.length ? (
+          <DataTable head={['Order', 'Amount', 'Reason', 'Status', 'Date']}>
+            {recentRefunds.map((rf) => (
+              <tr key={rf.id}>
+                <td className="mono-note">{rf.orderId}</td>
+                <td style={{ color: '#f87171', fontWeight: 600 }}>-{money(rf.amountPaise)}</td>
+                <td>
+                  {rf.reasonCode}
+                  {rf.reasonNote ? <div className="table-sub">{rf.reasonNote}</div> : null}
+                </td>
+                <td>
+                  <StatusBadge status={rf.status} />
+                </td>
+                <td>{date(rf.processedAt || rf.createdAt)}</td>
+              </tr>
+            ))}
+          </DataTable>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>
+            No refunds recorded for this edition yet.
+          </p>
+        )}
       </div>
 
       <div className="adm-card">
@@ -2510,6 +2563,7 @@ export function AdminPolicy() {
           mode: 'up_to',
           cap: '450',
           capInclusive: true,
+          allowancePackOrder: 0,
           lunchDays: ['day1', 'day2'],
           addonRequiresPass: true,
           teamMembersRequirePass: true,
@@ -2517,6 +2571,8 @@ export function AdminPolicy() {
           deadline: '',
           teamFeeBasisDefault: 'per_participant',
           gstNote: 'Inclusive of all applicable taxes',
+          platformFeePercent: '0',
+          platformFeeExemptUnder: '0',
           reason: 'Initial policy setup',
         });
       }
@@ -2528,6 +2584,7 @@ export function AdminPolicy() {
       mode: current.includedSelectionMode,
       cap: current.includedValueCapPaise != null ? rupees(current.includedValueCapPaise) : '',
       capInclusive: current.capInclusive,
+      allowancePackOrder: Number(current.allowancePackOrder ?? 0),
       lunchDays: current.lunchIncludedDays || [],
       addonRequiresPass: current.addonRequiresPass,
       teamMembersRequirePass: current.teamMembersRequirePass,
@@ -2535,6 +2592,10 @@ export function AdminPolicy() {
       deadline: toLocalInput(current.selectionChangeDeadline),
       teamFeeBasisDefault: current.teamFeeBasisDefault || 'per_participant',
       gstNote: current.gstNote || '',
+      platformFeePercent: current.platformFeeBps ? String(current.platformFeeBps / 100) : '0',
+      platformFeeExemptUnder: current.platformFeeExemptUnderPaise
+        ? rupees(current.platformFeeExemptUnderPaise)
+        : '0',
       reason: '',
     });
   }, [current?.id]);
@@ -2543,10 +2604,11 @@ export function AdminPolicy() {
 
   const payloadFrom = () => ({
     passPricePaise: paise(form.passPrice),
-    includedEventCount: Number(form.includedEventCount) || 0,
+    includedEventCount: form.includedEventCount === '' ? 0 : Number(form.includedEventCount),
     includedSelectionMode: form.mode,
     includedValueCapPaise: form.cap === '' || form.cap == null ? null : paise(form.cap),
     capInclusive: form.capInclusive,
+    allowancePackOrder: Number(form.allowancePackOrder ?? 0),
     lunchIncludedDays: form.lunchDays,
     addonRequiresPass: form.addonRequiresPass,
     teamMembersRequirePass: form.teamMembersRequirePass,
@@ -2554,6 +2616,8 @@ export function AdminPolicy() {
     holdMinutes: Number(form.holdMinutes) || 15,
     selectionChangeDeadline: fromLocalInput(form.deadline),
     gstNote: form.gstNote || null,
+    platformFeeBps: Math.max(0, Math.min(2500, Math.round((Number(form.platformFeePercent) || 0) * 100))),
+    platformFeeExemptUnderPaise: form.platformFeeExemptUnder ? paise(form.platformFeeExemptUnder) : 0,
     reason: form.reason || 'Updated in the staff console',
   });
 
@@ -2604,6 +2668,20 @@ export function AdminPolicy() {
     }
   };
 
+  const deleteVersion = async (row) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await adminApi.deletePolicy(editionId, row.id);
+      await policies.reload();
+      setMessage({ tone: 'success', text: `Deleted policy v${row.version}.` });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (policies.loading || !form) return <Loading label="Loading policies" rows={2} />;
   if (policies.error) return <ErrorBox error={policies.error} onRetry={policies.reload} />;
 
@@ -2645,14 +2723,23 @@ export function AdminPolicy() {
               onChange={(event) => set('passPrice', event.target.value)}
             />
           </Field>
-          <Field label="Included event count">
+          <Field label="Included event count (-1 = unlimited under cap)">
             <input
               type="number"
-              min="0"
+              min="-1"
               max="20"
               value={form.includedEventCount}
               onChange={(event) => set('includedEventCount', event.target.value)}
             />
+          </Field>
+          <Field label="Allowance packing order">
+            <select
+              value={String(form.allowancePackOrder ?? 0)}
+              onChange={(event) => set('allowancePackOrder', Number(event.target.value))}
+            >
+              <option value="0">0 — Cheapest first (protects revenue)</option>
+              <option value="1">1 — Expensive first (maximizes discount)</option>
+            </select>
           </Field>
           <Field label="Selection mode">
             <select value={form.mode} onChange={(event) => set('mode', event.target.value)}>
@@ -2697,6 +2784,28 @@ export function AdminPolicy() {
           </Field>
           <Field label="GST note">
             <input value={form.gstNote} onChange={(event) => set('gstNote', event.target.value)} />
+          </Field>
+          <Field label="Platform fee (%)" hint="0 = disabled. Applied to every paid transaction.">
+            <input
+              type="number"
+              min="0"
+              max="25"
+              step="0.01"
+              value={form.platformFeePercent ?? '0'}
+              onChange={(event) => set('platformFeePercent', event.target.value)}
+            />
+          </Field>
+          <Field
+            label="No platform fee under (₹)"
+            hint="0 = charge platform fee on all paid transactions when % > 0."
+          >
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={form.platformFeeExemptUnder ?? '0'}
+              onChange={(event) => set('platformFeeExemptUnder', event.target.value)}
+            />
           </Field>
           <Field label="Reason for change" className="full-span">
             <input
@@ -2747,7 +2856,7 @@ export function AdminPolicy() {
       </Panel>
 
       <DataTable
-        head={['Version', 'Fallback pass', 'Included', 'Cap', 'Mode', 'Published', 'Reason']}
+        head={['Version', 'Fallback pass', 'Included', 'Cap', 'Mode', 'Published', 'Reason', '']}
       >
         {rows.map((row) => (
           <tr key={row.id}>
@@ -2762,6 +2871,28 @@ export function AdminPolicy() {
             <td>{row.includedSelectionMode}</td>
             <td>{date(row.createdAt)}</td>
             <td>{row.reason || '-'}</td>
+            <td style={{ textAlign: 'right' }}>
+              {!row.isCurrent ? (
+                <button
+                  type="button"
+                  title={`Delete policy v${row.version}`}
+                  disabled={busy}
+                  onClick={() => deleteVersion(row)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#f87171',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                    padding: '4px 6px',
+                    borderRadius: '6px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              ) : null}
+            </td>
           </tr>
         ))}
       </DataTable>
@@ -3482,7 +3613,8 @@ export function AdminRegistrations() {
                       >
                         <input
                           type="number"
-                          min="1"
+                          min="0.01"
+                          step="0.01"
                           max={forceCancelTarget.refundableAmountPaise / 100}
                           step="0.01"
                           value={forceCancelForm.customAmount}
@@ -3596,7 +3728,8 @@ export function AdminRegistrations() {
         >
           <input
             type="number"
-            min="1"
+            min="0.01"
+            step="0.01"
             max={(refundTarget?.refundableAmountPaise || 0) / 100}
             step="0.01"
             value={refundForm.amount}
@@ -3864,27 +3997,49 @@ export function AdminPayments() {
   const list = payments.data?.data || [];
   const refundRows = refunds.data?.data || [];
 
+  const remainingForOrder = (orderRow) => {
+    if (!orderRow) return 0;
+    // Prefer the server-computed refundedPaise which already accounts for
+    // pending + processing + processed refunds so we never offer to refund
+    // money that is already committed (even if not yet settled).
+    const committed = Number(orderRow.refundedPaise) || 0;
+    return Math.max(0, (Number(orderRow.amountPaise) || 0) - committed);
+  };
+
   const openRefund = (row) => {
-    setTarget(row);
+    const rem = remainingForOrder(row);
+    setTarget({ ...row, remainingPaise: rem });
     setForm({
-      amount: rupees(row.amountPaise),
+      amount: rem > 0 ? String(rem / 100) : '',
       reasonCode: 'requested_by_participant',
       note: '',
     });
+    setMessage(null);
   };
 
   const submit = async () => {
     setMessage(null);
     try {
+      const amt = Number(form.amount);
+      if (isNaN(amt) || amt <= 0) {
+        throw new Error('Please enter a valid refund amount greater than 0.');
+      }
+      const amtPaise = Math.round(amt * 100);
+      // Use the server-side remaining amount (which includes pending + processing
+      // refunds already committed) so we never accidentally double-refund.
+      const maxPaise = target?.remainingPaise ?? target?.amountPaise ?? 0;
+      if (amtPaise > maxPaise) {
+        throw new Error(`Refund cannot exceed the remaining refundable amount of ${money(maxPaise)}.`);
+      }
       await adminApi.createRefund(editionId, {
         orderId: target.id,
-        amountPaise: paise(form.amount),
+        amountPaise: amtPaise,
         reasonCode: form.reasonCode,
         reasonNote: form.note || null,
       });
       await Promise.all([payments.reload(), refunds.reload()]);
       setTarget(null);
-      setMessage({ tone: 'success', text: 'Refund requested.' });
+      setMessage({ tone: 'success', text: `Refund of ${money(amtPaise)} initiated.` });
     } catch (error) {
       setMessage({ tone: 'error', text: error.message });
     }
@@ -3897,7 +4052,7 @@ export function AdminPayments() {
       {payments.loading ? <Loading label="Loading payments" rows={2} /> : null}
       {payments.error ? <ErrorBox error={payments.error} onRetry={payments.reload} /> : null}
       <DataTable
-        head={['Participant', 'Purpose', 'Amount', 'Status', 'Created', 'Paid', '']}
+        head={['Participant', 'Purpose', 'Amount', 'Refunded', 'Status', 'Created', 'Paid', '']}
         empty={!list.length && !payments.loading ? 'No payments recorded.' : null}
       >
         {list.map((row) => (
@@ -3909,15 +4064,28 @@ export function AdminPayments() {
             <td>{row.purpose}</td>
             <td>{money(row.amountPaise)}</td>
             <td>
+              {Number(row.refundedPaise) > 0 ? (
+                <span style={{ color: '#f87171', fontWeight: 600 }}>
+                  -{money(Number(row.refundedPaise))}
+                </span>
+              ) : (
+                <span className="muted" style={{ fontSize: '12px' }}>—</span>
+              )}
+            </td>
+            <td>
               <StatusBadge status={row.status} />
             </td>
             <td>{date(row.createdAt)}</td>
             <td>{row.paidAt ? date(row.paidAt) : '-'}</td>
             <td>
-              {row.status === 'paid' ? (
+              {row.status === 'paid' && remainingForOrder(row) > 0 ? (
                 <button className="table-action" onClick={() => openRefund(row)}>
                   Refund
                 </button>
+              ) : row.status === 'paid' && remainingForOrder(row) <= 0 ? (
+                <span className="mono-note" style={{ fontSize: '11px', opacity: 0.6 }}>
+                  Fully committed
+                </span>
               ) : null}
             </td>
           </tr>
@@ -3926,7 +4094,7 @@ export function AdminPayments() {
 
       <SectionHead kicker="LEDGER" title="Refund requests" />
       <DataTable
-        head={['Order', 'Amount', 'Reason', 'Status', 'Requested', 'Processed']}
+        head={['Order', 'Amount', 'Reason', 'Status', 'Requested', 'Processed', 'Actions']}
         empty={!refundRows.length ? 'No refunds requested.' : null}
       >
         {refundRows.map((row) => (
@@ -3942,6 +4110,53 @@ export function AdminPayments() {
             </td>
             <td>{date(row.createdAt)}</td>
             <td>{row.processedAt ? date(row.processedAt) : '-'}</td>
+            <td>
+              {row.status === 'pending' || row.status === 'failed' ? (
+                <button
+                  type="button"
+                  className="table-action"
+                  onClick={async () => {
+                    setMessage(null);
+                    try {
+                      const res = await adminApi.processRefund(editionId, row.id);
+                      const st = res.data?.status;
+                      setMessage({
+                        tone: 'success',
+                        text:
+                          st === 'processed'
+                            ? `Refund of ${money(row.amountPaise)} completed.`
+                            : `Refund of ${money(row.amountPaise)} initiated and processing.`,
+                      });
+                      await Promise.all([payments.reload(), refunds.reload()]);
+                    } catch (err) {
+                      setMessage({ tone: 'error', text: err.message });
+                    }
+                  }}
+                >
+                  Confirm &amp; Refund
+                </button>
+              ) : row.status === 'processing' ? (
+                <button
+                  type="button"
+                  className="table-action"
+                  onClick={async () => {
+                    setMessage(null);
+                    try {
+                      const res = await adminApi.processRefund(editionId, row.id);
+                      setMessage({
+                        tone: 'info',
+                        text: `Refund status: ${res.data?.status || 'processing'}.`,
+                      });
+                      await Promise.all([payments.reload(), refunds.reload()]);
+                    } catch (err) {
+                      setMessage({ tone: 'error', text: err.message });
+                    }
+                  }}
+                >
+                  Sync Status
+                </button>
+              ) : null}
+            </td>
           </tr>
         ))}
       </DataTable>
@@ -3955,12 +4170,30 @@ export function AdminPayments() {
         <p className="muted">
           {target?.userName} · {money(target?.amountPaise)} order
         </p>
+        {target?.refundedPaise > 0 ? (
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: '6px',
+              background: 'rgba(248,113,113,0.08)',
+              border: '1px solid rgba(248,113,113,0.2)',
+              marginBottom: '14px',
+              fontSize: '13px',
+            }}
+          >
+            <span style={{ opacity: 0.7 }}>Already refunded / committed: </span>
+            <b style={{ color: '#f87171' }}>{money(target.refundedPaise)}</b>
+            <span style={{ opacity: 0.7 }}> · Remaining: </span>
+            <b style={{ color: '#38bdf8' }}>{money(target.remainingPaise ?? 0)}</b>
+          </div>
+        ) : null}
         <FieldGrid>
           <Field label="Amount (₹)">
             <input
               type="number"
-              min="1"
-              max={rupees(target?.amountPaise || 0)}
+              min="0.01"
+              step="0.01"
+              max={(target?.remainingPaise ?? target?.amountPaise ?? 0) / 100}
               value={form.amount}
               onChange={(event) => setForm({ ...form, amount: event.target.value })}
             />
@@ -3996,10 +4229,16 @@ export function AdminPayments() {
           </Button>
           <Button
             onClick={submit}
-            disabled={!form.amount || Number(form.amount) <= 0}
+            disabled={
+              !form.amount ||
+              Number(form.amount) <= 0 ||
+              Number(form.amount) > (target?.remainingPaise ?? target?.amountPaise ?? 0) / 100
+            }
             icon={CreditCard}
           >
-            Request refund
+            {form.amount && Number(form.amount) > 0
+              ? `Request refund (${money(Math.round(Number(form.amount) * 100))})`
+              : 'Request refund'}
           </Button>
         </div>
       </Sheet>
@@ -4049,13 +4288,15 @@ export function AdminCheckin() {
     enabled: Boolean(editionId),
   });
 
+  const isRealEvent = Boolean(selectedEventId && selectedEventId !== '__lunch__');
+
   const rosterAsync = useAsync(
     () =>
-      selectedEventId
+      isRealEvent
         ? adminApi.eventRoster(editionId, selectedEventId, { day })
         : Promise.resolve({ data: null }),
-    [editionId, selectedEventId, day],
-    { enabled: Boolean(editionId && selectedEventId) },
+    [editionId, selectedEventId, isRealEvent, day],
+    { enabled: Boolean(editionId && isRealEvent) },
   );
 
   const performCheckin = async (rawToken) => {
@@ -4066,18 +4307,20 @@ export function AdminCheckin() {
     setScanStatus('Checking…');
     setMessage(null);
     setResult(null);
+    const isLunch = selectedEventId === '__lunch__';
     try {
       const body = await adminApi.checkin(editionId, {
         token: cleanToken,
         day: day || null,
-        eventId: selectedEventId || null,
+        scope: isLunch ? 'lunch' : isRealEvent ? 'event' : 'pass',
+        eventId: isRealEvent ? selectedEventId : null,
       });
       setResult(body.data);
       setToken('');
       setScanStatus(body.data?.result === 'duplicate' ? 'Already checked in' : 'Admitted ✓');
       recent.reload();
       attendance.reload();
-      if (selectedEventId) {
+      if (isRealEvent) {
         rosterAsync.reload();
       }
       navigator.vibrate?.(body.data?.result === 'duplicate' ? [40, 40, 40] : 80);
@@ -4126,6 +4369,13 @@ export function AdminCheckin() {
 
   const handleUndoAttendance = async (attendanceId) => {
     if (!attendanceId) return;
+    if (
+      !window.confirm(
+        'Warning: This will reset this attendance record so the attendee can be scanned and marked again. Continue?',
+      )
+    ) {
+      return;
+    }
     setMessage(null);
     try {
       await adminApi.deleteAttendance(editionId, attendanceId);
@@ -4469,6 +4719,7 @@ export function AdminCheckin() {
           >
             <select value={selectedEventId} onChange={(e) => setSelectedEventId(e.target.value)}>
               <option value="">🎟️ General Fest Turnstile Admission (All Passes)</option>
+              <option value="__lunch__">🍽️ Lunch Check-in (Kitchen / Dining Hall)</option>
               {(eventsList.data?.data || []).map((ev) => (
                 <option key={ev.id} value={ev.id}>
                   🎯 {ev.title} {ev.venueRoom ? `· Room ${ev.venueRoom}` : ''} (
@@ -4826,6 +5077,8 @@ export function AdminAnnouncements() {
     title: '',
     bodyMd: '',
     bannerUrl: '',
+    ctaLabel: '',
+    ctaUrl: '',
     showOnHome: false,
     audience: 'public',
     status: 'draft',
@@ -4837,6 +5090,8 @@ export function AdminAnnouncements() {
       title: sheet.title || '',
       bodyMd: sheet.bodyMd || '',
       bannerUrl: sheet.bannerUrl || '',
+      ctaLabel: sheet.ctaLabel || '',
+      ctaUrl: sheet.ctaUrl || '',
       showOnHome: Boolean(sheet.showOnHome),
       audience: sheet.audience || 'public',
       status: sheet.status || 'draft',
@@ -4851,6 +5106,8 @@ export function AdminAnnouncements() {
       const payload = {
         ...form,
         bannerUrl: resolveImageUrl(form.bannerUrl) || null,
+        ctaLabel: form.ctaLabel?.trim() || null,
+        ctaUrl: form.ctaUrl?.trim() || null,
         showOnHome: Boolean(form.showOnHome),
       };
       if (sheet?.id) await adminApi.updateAnnouncement(editionId, sheet.id, payload);
@@ -5004,6 +5261,35 @@ export function AdminAnnouncements() {
               />
             ) : null}
           </Field>
+          <FieldGrid>
+            <Field label="Action button label (optional)">
+              <input
+                value={form.ctaLabel}
+                onChange={(event) => setForm({ ...form, ctaLabel: event.target.value })}
+                placeholder="e.g. Read Instructions"
+                maxLength={80}
+              />
+            </Field>
+            <Field label="Action link (optional)">
+              <input
+                list="announcement-cta-urls"
+                value={form.ctaUrl}
+                onChange={(event) => setForm({ ...form, ctaUrl: event.target.value })}
+                placeholder="/portal/instructions or https://..."
+                maxLength={500}
+              />
+              <datalist id="announcement-cta-urls">
+                <option value="/portal/instructions">Instructions &amp; Policies</option>
+                <option value="/portal/registration">Pass &amp; Registration</option>
+                <option value="/portal/events">Browse Events</option>
+                <option value="/portal/registrations">My Events &amp; Bills</option>
+                <option value="/events">Public Events</option>
+                <option value="/pass">Pass Tiers</option>
+                <option value="/schedule">Schedule</option>
+                <option value="/faq">FAQ</option>
+              </datalist>
+            </Field>
+          </FieldGrid>
           <Toggle
             checked={Boolean(form.showOnHome)}
             onChange={(value) => setForm({ ...form, showOnHome: value })}
@@ -5089,7 +5375,12 @@ export function AdminAttendance() {
   const list = rows.data?.data || [];
 
   const handleRevoke = async (attendanceId) => {
-    if (!window.confirm('Revoke this attendance record?')) return;
+    if (
+      !window.confirm(
+        'Warning: This will reset this attendance record so the attendee can be scanned and marked again. Continue?',
+      )
+    )
+      return;
     try {
       await adminApi.deleteAttendance(editionId, attendanceId);
       rows.reload();

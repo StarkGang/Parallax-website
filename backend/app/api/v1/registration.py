@@ -22,6 +22,7 @@ from app.models.edition import ConventionEdition
 from app.models.registration import RegistrationNotification
 from app.schemas.registration import (
     CategoryChangeRequest,
+    DocumentLinkUpload,
     PaymentVerification,
     RegistrationProfile,
 )
@@ -49,6 +50,11 @@ async def get_registration(
     await _edition(db, edition_id)
     await service.lazy_enforce_for_read(db, edition_id=edition_id)
     config = await service.public_config(db, edition_id)
+    policy_obj = None
+    try:
+        policy_obj = await edition_service.current_policy(db, edition_id)
+    except NotFound:
+        policy_obj = None
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
     notifications = [
         service.notification_payload(item)
@@ -57,6 +63,12 @@ async def get_registration(
     return {
         "data": {
             **config,
+            "policy": (
+                edition_service.policy_public(policy_obj).model_dump(by_alias=True)
+                if policy_obj
+                else None
+            ),
+            "settings": config.get("registration"),
             "registration": (
                 await service.serialize_registration(db, row, include_documents=True)
                 if row
@@ -124,6 +136,38 @@ async def upload_document(
     }
 
 
+@router.post(
+    "/documents/{doc_type}/link",
+    dependencies=[Depends(limiter("registration_document", 30, 300))],
+)
+async def upload_document_link(
+    edition_id: uuid.UUID,
+    doc_type: str,
+    payload: DocumentLinkUpload,
+    request: Request,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    edition = await _edition(db, edition_id)
+    document = await service.save_document_link(
+        db,
+        request,
+        ctx.user,
+        edition,
+        doc_type,
+        payload.url,
+    )
+    await db.commit()
+    row = await service.registration_for_user(db, ctx.user.id, edition_id)
+    assert row is not None
+    return {
+        "data": {
+            "document": service.document_payload(document, edition_id, row.id),
+            "registration": await service.serialize_registration(db, row),
+        }
+    }
+
+
 @router.delete(
     "/documents/{doc_type}",
     dependencies=[Depends(limiter("registration_document_delete", 30, 300))],
@@ -159,6 +203,8 @@ async def document_content(
     document = await service.document_for_user(
         db, ctx.user.id, edition_id, document_id
     )
+    if getattr(document, "external_url", None) or not document.storage_key or str(document.storage_key).startswith("external:"):
+        raise NotFound("This document is an external link and has no stored file.")
     try:
         data = await get_document_storage().get(document.storage_key)
     except FileNotFoundError:

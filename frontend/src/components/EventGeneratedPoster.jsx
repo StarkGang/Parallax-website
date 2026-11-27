@@ -318,7 +318,9 @@ export function EventGeneratedPoster({ event = {} }) {
           </span>
           <h4 className="egp-title">{title}</h4>
           <span className="egp-sub">
-            {isTeam ? 'TEAM ENTRY' : 'SOLO ENTRY'} &middot; {venue}
+            {event?.isAnnouncement
+              ? `OFFICIAL BULLETIN · ${venue}`
+              : `${isTeam ? 'TEAM ENTRY' : 'SOLO ENTRY'} · ${venue}`}
           </span>
         </div>
       </div>
@@ -335,8 +337,14 @@ export function EventGeneratedPoster({ event = {} }) {
           <b>{time}</b>
         </div>
         <div className="egp-stat">
-          <b>{feeText}</b>
-          <span>{feeText === 'INCLUDED' || feeText === 'FREE' ? 'PASS' : 'REG FEE'}</span>
+          <b>{event?.isAnnouncement ? 'NOTICE' : feeText}</b>
+          <span>
+            {event?.isAnnouncement
+              ? 'PUBLIC'
+              : feeText === 'INCLUDED' || feeText === 'FREE'
+                ? 'PASS'
+                : 'REG FEE'}
+          </span>
         </div>
         <div className="egp-stat egp-stat-venue">
           <MapPin size={11} strokeWidth={2.2} />

@@ -126,3 +126,4 @@ render.html
 /docs/audits/
 AUDIT*.md
 frontend/public/x.html
+audit/

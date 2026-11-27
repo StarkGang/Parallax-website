@@ -9,6 +9,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -59,6 +60,14 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
     )
     included_value_cap_paise: Mapped[int | None] = mapped_column(Integer)
     cap_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 0 = cheapest first (default), 1 = most expensive first
+    allowance_pack_order: Mapped[int] = mapped_column(
+        SmallInteger, default=0, server_default=text("0"), nullable=False
+    )
+    # 0 = cheapest first (default), 1 = most expensive first
+    allowance_pack_order: Mapped[int] = mapped_column(
+        SmallInteger, default=0, server_default=text("0"), nullable=False
+    )
     addon_requires_pass: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     team_members_require_pass: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
@@ -68,6 +77,12 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
     hold_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
     refund_rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     gst_note: Mapped[str | None] = mapped_column(Text)
+    platform_fee_bps: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    platform_fee_exempt_under_paise: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     reason: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
@@ -195,6 +210,8 @@ class Announcement(Base, UUIDPrimaryKey, Timestamps):
     body_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
     audience: Mapped[str] = mapped_column(String(20), default="public", nullable=False)
     banner_url: Mapped[str | None] = mapped_column(String(500))
+    cta_label: Mapped[str | None] = mapped_column(String(80))
+    cta_url: Mapped[str | None] = mapped_column(String(500))
     show_on_home: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)

@@ -23,6 +23,8 @@ def serialize(a: Announcement) -> dict[str, Any]:
         "bodyHtml": render_markdown(a.body_md),
         "audience": a.audience,
         "bannerUrl": a.banner_url,
+        "ctaLabel": getattr(a, "cta_label", None),
+        "ctaUrl": getattr(a, "cta_url", None),
         "showOnHome": bool(a.show_on_home),
         "status": a.status,
         "eventId": str(a.event_id) if a.event_id else None,
@@ -90,7 +92,7 @@ async def upsert(
         a = Announcement(edition_id=edition_id)
         db.add(a)
 
-    for field in ["title", "body_md", "audience", "banner_url", "show_on_home", "event_id", "status"]:
+    for field in ["title", "body_md", "audience", "banner_url", "cta_label", "cta_url", "show_on_home", "event_id", "status"]:
         if field in payload:
             setattr(a, field, payload[field])
 

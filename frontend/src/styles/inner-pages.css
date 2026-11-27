@@ -1641,18 +1641,18 @@ section[id],
 .pay-progress-dialog,
 .pay-progress-card {
   position: relative;
-  width: min(380px, calc(100vw - 32px));
+  width: min(392px, calc(100vw - 32px));
   margin: auto;
   padding: 28px 24px 22px;
   text-align: center;
   color: #f1f5f9;
   box-sizing: border-box;
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
+  background: linear-gradient(165deg, rgba(16, 20, 32, 0.98), rgba(8, 11, 18, 0.99));
+  border: 1px solid rgba(212, 175, 55, 0.24);
+  border-radius: 16px;
   box-shadow:
-    0 20px 25px -5px rgba(0, 0, 0, 0.6),
-    0 8px 10px -6px rgba(0, 0, 0, 0.4);
+    0 24px 48px -12px rgba(0, 0, 0, 0.78),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
   animation: payDialogScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
@@ -1663,7 +1663,7 @@ section[id],
 
 .pay-progress-dialog.is-success,
 .pay-progress-card.is-success {
-  border-color: rgba(34, 197, 94, 0.4);
+  border-color: rgba(34, 197, 94, 0.42);
 }
 
 .pay-progress-icon-cell,
@@ -1677,23 +1677,23 @@ section[id],
 .pay-icon-active {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #f5d061;
+  background: radial-gradient(circle, rgba(212, 175, 55, 0.14), rgba(212, 175, 55, 0.03));
+  border: 1px solid rgba(212, 175, 55, 0.35);
 }
 
 .pay-icon-success {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   color: #22c55e;
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
 .pay-spin {
@@ -1716,7 +1716,7 @@ section[id],
 .pay-progress-subline,
 .pay-progress-detail {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.5;
   color: #94a3b8;
 }
@@ -1725,89 +1725,130 @@ section[id],
 .pay-progress-amount-row {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-top: 14px;
-  padding: 5px 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  padding: 6px 14px;
+  background: rgba(212, 175, 55, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.24);
+  border-radius: 999px;
 }
 
 .pay-badge-label,
 .pay-progress-amount-tag {
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   font-weight: 600;
-  color: #64748b;
+  color: #94a3b8;
 }
 
 .pay-badge-value,
 .pay-progress-amount-value {
   font-size: 14.5px;
   font-weight: 700;
-  color: #f8fafc;
+  color: #f5d061;
   letter-spacing: -0.01em;
+}
+
+.pay-progress-diamond-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+}
+
+.pay-diamond-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.45), transparent);
+}
+
+.pay-diamond-svg {
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 6px rgba(212, 175, 55, 0.35));
 }
 
 .pay-progress-stepper,
 .pay-progress-steps {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 20px 0 0;
-  padding: 16px 0 0;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
   list-style: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
   text-align: left;
+}
+
+.pay-progress-stepper::before {
+  content: '';
+  position: absolute;
+  left: 19px;
+  top: 18px;
+  bottom: 18px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.4), rgba(148, 163, 184, 0.16));
+  pointer-events: none;
 }
 
 .pay-step-row,
 .pay-step-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  transition: background 0.15s ease;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .pay-step-row.is-active,
 .pay-step-item.is-active {
-  background: rgba(56, 189, 248, 0.05);
+  background: rgba(212, 175, 55, 0.07);
+  border-color: rgba(212, 175, 55, 0.24);
 }
 
 .pay-step-badge,
 .pay-step-dot {
+  position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 4px;
+  transform: rotate(45deg);
+}
+
+.pay-step-badge > *,
+.pay-step-dot > * {
+  transform: rotate(-45deg);
 }
 
 .pay-step-row.is-pending .pay-step-badge,
 .pay-step-item.is-pending .pay-step-dot {
   color: #64748b;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #0b0f1a;
+  border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
 .pay-step-row.is-active .pay-step-badge,
 .pay-step-item.is-active .pay-step-dot {
-  color: #0284c7;
-  background: rgba(56, 189, 248, 0.12);
-  border: 1.5px solid #0284c7;
+  color: #f5d061;
+  background: #17140c;
+  border: 1.5px solid #d4af37;
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.28);
 }
 
 .pay-step-row.is-done .pay-step-badge,
 .pay-step-item.is-done .pay-step-dot {
   color: #ffffff;
   background: #16a34a;
-  border: 1.5px solid #16a34a;
+  border: 1.5px solid #22c55e;
 }
 
 .pay-step-text,
@@ -1819,7 +1860,7 @@ section[id],
 
 .pay-step-row.is-active .pay-step-text,
 .pay-step-item.is-active .pay-step-label {
-  color: #f1f5f9;
+  color: #f8fafc;
   font-weight: 600;
 }
 
@@ -1831,7 +1872,7 @@ section[id],
 .pay-step-inline-spin,
 .pay-step-spinner {
   margin-left: auto;
-  color: #0284c7;
+  color: #f5d061;
 }
 
 .pay-progress-footer-note,
@@ -3145,8 +3186,8 @@ section[id],
 
 .px-contact-channel-cols {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 28px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
 }
 
 .px-contact-channel-col {
@@ -3406,12 +3447,20 @@ section[id],
   color: #94a3b8;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1120px) {
   .px-contact-channel-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .px-contact-dispatch-grid {
     grid-template-columns: 1fr;
   }
+}
 
-  .px-contact-dispatch-grid {
+@media (max-width: 640px) {
+  .px-contact-channel-cols {
     grid-template-columns: 1fr;
   }
 }

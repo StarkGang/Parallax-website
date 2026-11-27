@@ -67,6 +67,7 @@ export async function openCheckout(order, user, description = 'Convention regist
       description: description || 'Convention registration',
       theme: {
         color: '#0284c7',
+        backdrop_color: '#090d16',
       },
       handler: (response) => {
         paymentCompleted = true;

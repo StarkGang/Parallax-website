@@ -135,6 +135,8 @@ async def document_content(
     document = await service.document_for_admin(
         db, edition_id, registration_id, document_id
     )
+    if getattr(document, "external_url", None) or not document.storage_key or str(document.storage_key).startswith("external:"):
+        raise NotFound("This document is an external link and has no stored file.")
     try:
         data = await get_document_storage().get(document.storage_key)
     except FileNotFoundError:
@@ -219,6 +221,7 @@ async def decide(
             reason=payload.reason,
             notes=payload.notes,
             initiate_refund_workflow=bool(payload.initiate_refund),
+            refund_events=bool(payload.refund_events),
             can_initiate_refund=bool(
                 ctx.has("finance.write", edition_id)
                 or ctx.has_global("finance.write")
@@ -246,6 +249,8 @@ async def request_documents(
         _role(ctx, edition_id),
         payload.documents,
         payload.message,
+        refund_pass_on_expiry=bool(payload.refund_pass_on_expiry),
+        refund_events_on_expiry=bool(payload.refund_events_on_expiry),
     )
     await db.commit()
     return {"data": await service.admin_detail(db, edition_id, registration_id)}

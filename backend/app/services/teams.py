@@ -521,13 +521,27 @@ async def _cancel_seat(
         if order.id in refunded_orders:
             return False
         refunded_orders.add(order.id)
+    already_committed = int(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order.id,
+                    Refund.status.in_(("pending", "processing", "processed")),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    available = max(0, int(order.amount_paise) - already_committed)
+    if available <= 0:
+        return True
     try:
         from app.services.payments import refund_order
 
         await refund_order(
             db,
             order,
-            amount_paise=int(order.amount_paise),
+            amount_paise=available,
             reason_code="team_disbanded",
             reason_note=reason[:500],
         )
@@ -539,7 +553,7 @@ async def _cancel_seat(
         db.add(
             Refund(
                 order_id=order.id,
-                amount_paise=int(order.amount_paise),
+                amount_paise=available,
                 reason_code="team_disbanded",
                 reason_note=f"{reason} (gateway refund failed: {str(exc)[:200]})"[:500],
                 status="pending",

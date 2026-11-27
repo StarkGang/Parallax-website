@@ -46,7 +46,7 @@
   --pt-accent-text: #86efac;
   --pt-bay-top: 17.6%;
   --pt-bay-height: 28.8%;
-  --pt-verify-top: 61%;
+  --pt-verify-top: 58.2%;
   --pt-dock-bottom: 4.9%;
 }
 
@@ -274,7 +274,7 @@
   align-items: center;
   gap: 0.55em;
   font-family: var(--mono);
-  font-size: clamp(7.5px, 1.95cqw, 10.5px);
+  font-size: clamp(8.5px, 2.2cqw, 11.5px);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -297,9 +297,9 @@
 .pass-tier-doc {
   position: relative;
   padding-left: 1.2em;
-  font-size: clamp(9px, 2.25cqw, 12px);
+  font-size: clamp(10.5px, 2.65cqw, 13.5px);
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.38;
   color: #e2e8f0;
   display: -webkit-box;
   -webkit-line-clamp: 2;

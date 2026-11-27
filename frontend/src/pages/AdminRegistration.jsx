@@ -120,6 +120,14 @@ function isPdfDocument(document) {
   return document?.mime === 'application/pdf' || /\.pdf$/i.test(document?.originalName || '');
 }
 
+function drivePreviewUrl(rawUrl) {
+  if (!rawUrl) return null;
+  const match =
+    rawUrl.match(/\/d\/([A-Za-z0-9_-]{10,})/) ||
+    rawUrl.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
+  return match ? `https://drive.google.com/file/d/${match[1]}/preview` : rawUrl;
+}
+
 function AdminDocRow({ document, onOpen, downloadUrl }) {
   const pdf = isPdfDocument(document);
 
@@ -147,16 +155,34 @@ function AdminDocRow({ document, onOpen, downloadUrl }) {
         </span>
       </button>
       <div className="admin-doc-file-actions">
-        <button type="button" className="table-action is-primary" onClick={() => onOpen(document)}>
-          View
-        </button>
-        <a
-          className="table-action"
-          href={downloadUrl}
-          download={document.originalName || `${document.type}.bin`}
-        >
-          <Download size={13} strokeWidth={1.7} /> Download
-        </a>
+        {document.externalUrl ? (
+          <>
+            <button type="button" className="table-action is-primary" onClick={() => onOpen(document)}>
+              View
+            </button>
+            <a
+              className="table-action"
+              href={document.externalUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Drive
+            </a>
+          </>
+        ) : (
+          <>
+            <button type="button" className="table-action is-primary" onClick={() => onOpen(document)}>
+              View
+            </button>
+            <a
+              className="table-action"
+              href={downloadUrl}
+              download={document.originalName || `${document.type}.bin`}
+            >
+              <Download size={13} strokeWidth={1.7} /> Download
+            </a>
+          </>
+        )}
       </div>
     </div>
   );
@@ -205,7 +231,7 @@ function DocViewer({ viewer, onClose }) {
             </small>
           </div>
           <div className="doc-lightbox-actions">
-            {!pdf ? (
+            {!pdf && !viewer.isDrive ? (
               <>
                 <button
                   type="button"
@@ -226,13 +252,24 @@ function DocViewer({ viewer, onClose }) {
                 </button>
               </>
             ) : null}
-            <a
-              className="table-action"
-              href={viewer.downloadUrl}
-              download={doc.originalName || `${doc.type}.bin`}
-            >
-              <Download size={13} strokeWidth={1.7} /> Download
-            </a>
+            {viewer.isDrive ? (
+              <a
+                className="table-action"
+                href={viewer.downloadUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open in Drive
+              </a>
+            ) : (
+              <a
+                className="table-action"
+                href={viewer.downloadUrl}
+                download={doc.originalName || `${doc.type}.bin`}
+              >
+                <Download size={13} strokeWidth={1.7} /> Download
+              </a>
+            )}
             <button
               type="button"
               className="table-action is-primary doc-lightbox-close"
@@ -244,7 +281,20 @@ function DocViewer({ viewer, onClose }) {
           </div>
         </div>
         <div className="doc-preview-stage">
-          {viewer.loading ? (
+          {viewer.isDrive ? (
+            <iframe
+              src={viewer.url}
+              title={doc.label || doc.type}
+              style={{
+                width: '100%',
+                height: '72vh',
+                border: 'none',
+                borderRadius: 10,
+                background: '#09090b',
+              }}
+              allow="autoplay"
+            />
+          ) : viewer.loading ? (
             <span className="admin-doc-loading">Loading document…</span>
           ) : !viewer.url ? (
             <span className="admin-doc-error">
@@ -284,8 +334,14 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     reason: '',
     notes: '',
     initiateRefund: true,
+    refundEvents: true,
   });
-  const [docForm, setDocForm] = useState({ documents: ['college_id'], message: '' });
+  const [docForm, setDocForm] = useState({
+    documents: ['college_id'],
+    message: '',
+    refundPassOnExpiry: true,
+    refundEventsOnExpiry: true,
+  });
   const [editForm, setEditForm] = useState({
     fullName: '',
     phone: '',
@@ -334,6 +390,17 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
   };
 
   const openDocument = async (document) => {
+    if (document.externalUrl) {
+      setViewer({
+        document,
+        url: drivePreviewUrl(document.externalUrl),
+        loading: false,
+        error: '',
+        isDrive: true,
+        downloadUrl: document.externalUrl,
+      });
+      return;
+    }
     setViewer({
       document,
       url: null,
@@ -416,8 +483,9 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           reason: rejectForm.reason || null,
           notes: rejectForm.notes || null,
           initiateRefund: rejectForm.initiateRefund,
+          refundEvents: rejectForm.refundEvents,
         }),
-      'Registration rejected. The participant has been notified and the refund workflow recorded.',
+      'Registration rejected. The participant has been notified and the pass has been revoked.',
     );
 
   const requestDocs = () =>
@@ -427,8 +495,10 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         adminApi.requestRegistrationDocuments(editionId, registrationId, {
           documents: docForm.documents,
           message: docForm.message,
+          refundPassOnExpiry: docForm.refundPassOnExpiry,
+          refundEventsOnExpiry: docForm.refundEventsOnExpiry,
         }),
-      'Correction request sent. The participant can upload corrected documents.',
+      'Correction request sent. The participant has 24 hours to upload corrected documents.',
     );
 
   const openEditDetails = () => {
@@ -501,7 +571,29 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     data.paymentStatus === 'paid' &&
     data.verificationStatus !== 'approved' &&
     data.refundStatus !== 'completed';
-  const canRefund = data.paymentStatus === 'paid' || data.refundStatus === 'completed';
+  const refundablePaise =
+    data.refundablePaise ??
+    Math.max(0, (data.feePaise + (data.additionalPaidPaise || 0)) - (data.refundAmountPaise || 0));
+  const hasInFlightRefund = Boolean(
+    data.refund && ['pending', 'processing', 'failed'].includes(data.refund.status),
+  );
+  const canRefund = (data.paymentStatus === 'paid' && refundablePaise > 0) || hasInFlightRefund;
+
+  const openRefundDialog = () => {
+    const canInitiateMore = (!data.refund || data.refund.status === 'processed') && refundablePaise > 0;
+    const defaultAction = canInitiateMore
+      ? 'initiate'
+      : data.refund?.status === 'failed'
+        ? 'retry'
+        : 'completed';
+    setRefundForm({
+      action: defaultAction,
+      amount: canInitiateMore ? String(rupees(refundablePaise)) : '',
+      note: '',
+      reference: '',
+    });
+    setDialog('refund');
+  };
 
   return (
     <>
@@ -855,10 +947,12 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         ) : null}
         {canRefund ? (
           <div className="banner-actions">
-            <Button variant="warning" onClick={() => setDialog('refund')} icon={Wallet}>
-              {data.refund ? 'Update refund' : 'Initiate refund'}
+            <Button variant="warning" onClick={openRefundDialog} icon={Wallet}>
+              {hasInFlightRefund ? 'Update refund' : 'Initiate refund'}
             </Button>
           </div>
+        ) : data.paymentStatus === 'refunded' || (data.refundStatus === 'completed' && refundablePaise <= 0) ? (
+          <p className="muted">This registration has been refunded in full.</p>
         ) : (
           <p className="muted">A refund can be started after a successful payment.</p>
         )}
@@ -1101,10 +1195,24 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               }
             />
             <span>
-              Initiate the applicable refund workflow
+              Refund convention pass (default)
               <small>
-                Requires finance permission. Razorpay refunds stay “processing” until the gateway
-                confirms completion.
+                Starts or queues the pass fee refund. Uncheck to reject without refunding the pass.
+              </small>
+            </span>
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={rejectForm.refundEvents}
+              onChange={(event) =>
+                setRejectForm({ ...rejectForm, refundEvents: event.target.checked })
+              }
+            />
+            <span>
+              Refund paid event bookings (default)
+              <small>
+                Uncheck to release seats and teams without refunding paid add-on events.
               </small>
             </span>
           </label>
@@ -1162,6 +1270,37 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               placeholder="e.g. The college ID photo page is unreadable. Upload a clear photo of the front side."
             />
           </Field>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={docForm.refundPassOnExpiry}
+              onChange={(event) =>
+                setDocForm({ ...docForm, refundPassOnExpiry: event.target.checked })
+              }
+            />
+            <span>
+              Refund pass if 24-hour deadline expires without submission (default)
+              <small>
+                After 24 hours with no resubmission, the pass is revoked. Uncheck to revoke without
+                refunding the pass.
+              </small>
+            </span>
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={docForm.refundEventsOnExpiry}
+              onChange={(event) =>
+                setDocForm({ ...docForm, refundEventsOnExpiry: event.target.checked })
+              }
+            />
+            <span>
+              Refund paid events if 24-hour deadline expires without submission (default)
+              <small>
+                Uncheck to release seats and teams without refunding paid add-on events.
+              </small>
+            </span>
+          </label>
           <div className="sheet-actions">
             <Button variant="ghost" onClick={() => setDialog(null)}>
               Cancel
@@ -1195,9 +1334,10 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               value={refundForm.action}
               onChange={(event) => setRefundForm({ ...refundForm, action: event.target.value })}
             >
-              {!data.refund ? (
+              {(!data.refund || data.refund.status === 'processed') && refundablePaise > 0 ? (
                 <option value="initiate">Initiate refund</option>
-              ) : (
+              ) : null}
+              {data.refund && data.refund.status !== 'processed' ? (
                 <>
                   <option value="processing">Mark processing</option>
                   <option value="completed">Confirm completed</option>
@@ -1206,13 +1346,13 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
                     <option value="retry">Retry failed refund</option>
                   ) : null}
                 </>
-              )}
+              ) : null}
             </select>
           </Field>
           {refundForm.action === 'initiate' ? (
             <Field
               label="Refund amount (INR)"
-              hint={`Maximum ${money(data.feePaise + (data.additionalPaidPaise || 0))}`}
+              hint={`Maximum remaining refundable: ${money(refundablePaise)}`}
             >
               <input
                 type="number"
@@ -1220,7 +1360,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
                 step="0.01"
                 value={refundForm.amount}
                 onChange={(event) => setRefundForm({ ...refundForm, amount: event.target.value })}
-                placeholder={rupees(data.feePaise + (data.additionalPaidPaise || 0))}
+                placeholder={rupees(refundablePaise)}
               />
             </Field>
           ) : null}
@@ -1443,7 +1583,14 @@ export function AdminCollegeRegistrations() {
                 {row.categoryName}
               </Badge>
             </td>
-            <td>{money(row.feePaise)}</td>
+            <td>
+              {money(row.totalPaidPaise ?? row.feePaise)}
+              {row.refundAmountPaise > 0 ? (
+                <div className="table-sub" style={{ color: '#ef4444' }}>
+                  −{money(row.refundAmountPaise)} refunded
+                </div>
+              ) : null}
+            </td>
             <td>
               <Pill
                 value={row.paymentStatus}
@@ -1565,6 +1712,8 @@ export function AdminRegistrationSettings() {
       acceptedFormats: settings.acceptedFormats || ['pdf', 'jpg', 'jpeg', 'png'],
       maxUploadMb: String(Math.round((settings.maxUploadBytes || 5242880) / 1048576)),
       allowResubmission: Boolean(settings.allowResubmission),
+      allowDriveLinks: Boolean(settings.allowDriveLinks),
+      broadcastUrl: settings.broadcastUrl || '',
       helpdeskPhone:
         settings.helpdeskPhone && !/00000/.test(settings.helpdeskPhone)
           ? settings.helpdeskPhone
@@ -1596,6 +1745,8 @@ export function AdminRegistrationSettings() {
       acceptedFormats: form.acceptedFormats,
       maxUploadBytes: Math.max(1024, Math.round(Number(form.maxUploadMb || 5) * 1048576)),
       allowResubmission: form.allowResubmission,
+      allowDriveLinks: Boolean(form.allowDriveLinks),
+      broadcastUrl: form.broadcastUrl?.trim() || null,
       helpdeskPhone: form.helpdeskPhone || defaultHelpdesk,
       paymentInstructions: form.paymentInstructions || null,
       refundPolicy: form.refundPolicy || null,
@@ -1717,6 +1868,23 @@ export function AdminRegistrationSettings() {
           label="Allow resubmission after rejection"
           hint="When off, a rejected participant cannot upload corrected documents or request re-verification."
         />
+        <Toggle
+          checked={Boolean(form.allowDriveLinks)}
+          onChange={(value) => set('allowDriveLinks', value)}
+          label="Allow Google Drive document links"
+          hint="When on, participants can paste a public Google Drive file URL instead of (or as a fallback to) direct upload."
+        />
+        <Field
+          label="Broadcast / Support Channel URL"
+          hint="Optional WhatsApp or Telegram channel invite link shown to pass buyers."
+        >
+          <input
+            type="url"
+            value={form.broadcastUrl || ''}
+            onChange={(event) => set('broadcastUrl', event.target.value)}
+            placeholder="https://whatsapp.com/channel/... or https://t.me/..."
+          />
+        </Field>
       </Panel>
 
       <SectionHead kicker="CATEGORIES" title="Pricing and required documents" />

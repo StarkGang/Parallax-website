@@ -6793,15 +6793,28 @@ p {
 }
 
 /* Razorpay Checkout Modal Backdrop */
+/* Force light color-scheme on Razorpay's iframe/container so browsers with
+   :root { color-scheme: dark } don't paint an opaque white canvas over the iframe. */
+.razorpay-backdrop,
+.razorpay-container,
+iframe.razorpay-checkout-frame,
+iframe[src*="razorpay"] {
+  color-scheme: light !important;
+}
+
 .razorpay-backdrop,
 .razorpay-container {
-  background-color: rgba(5, 7, 10, 0.88) !important;
+  background-color: #090d16 !important;
+  background-image: linear-gradient(rgba(5, 8, 16, 0.58), rgba(5, 8, 16, 0.72)), url('/images/ho-bg-cosmos.webp') !important;
+  background-size: cover !important;
+  background-position: center !important;
   backdrop-filter: blur(10px) !important;
   -webkit-backdrop-filter: blur(10px) !important;
   opacity: 1 !important;
 }
 
 iframe.razorpay-checkout-frame {
+  background: transparent !important;
   box-shadow: 0 24px 72px -16px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(56, 189, 248, 0.25) !important;
   border-radius: 16px !important;
 }

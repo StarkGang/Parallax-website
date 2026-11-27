@@ -83,6 +83,7 @@ class RegistrationView(CamelModel):
     team_name: str | None = None
     reservation_expires_at: datetime | None = None
     order_id: uuid.UUID | None = None
+    order_platform_fee_paise: int = 0
     event_starts_at: datetime | None = None
     event_status: str | None = None
     cancelled_at: datetime | None = None
@@ -92,6 +93,8 @@ class RegistrationView(CamelModel):
     payment_id: str | None = None
     paid_at: datetime | None = None
     payment_status: str | None = None
+    refund_status: str | None = None
+    refunded_paise: int = 0
     billable: bool = False
     billing_role: str = "self"
     payer_user_id: uuid.UUID | None = None

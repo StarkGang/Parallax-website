@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -109,15 +110,31 @@ function StatusPill({ value, labels = STATE_LABELS }) {
   );
 }
 
+function drivePreviewUrl(rawUrl) {
+  if (!rawUrl) return null;
+  const s = String(rawUrl).trim();
+  const m = s.match(/\/file\/d\/([^/]+)/) || s.match(/[?&]id=([^&]+)/);
+  if (m && m[1]) {
+    return `https://drive.google.com/file/d/${m[1]}/preview`;
+  }
+  return s;
+}
+
 function DocumentPreview({ open, document, editionId, onClose }) {
   const [zoom, setZoom] = useState(1);
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
+  const isDrive = Boolean(document?.externalUrl);
 
   useEffect(() => {
     setZoom(1);
     if (!open || !document) {
       setBlobUrl(null);
+      return;
+    }
+    if (document.externalUrl) {
+      setBlobUrl(null);
+      setLoading(false);
       return;
     }
     if (document.previewBlobUrl) {
@@ -145,20 +162,25 @@ function DocumentPreview({ open, document, editionId, onClose }) {
         active = false;
       };
     }
-  }, [document?.id, document?.previewBlobUrl, open, editionId]);
+  }, [document?.id, document?.previewBlobUrl, document?.externalUrl, open, editionId]);
 
   if (!document) return null;
   const isPdf = Boolean(
-    document.mime === 'application/pdf' ||
-    document.originalName?.toLowerCase().endsWith('.pdf') ||
-    document.name?.toLowerCase().endsWith('.pdf')
+    !isDrive && (
+      document.mime === 'application/pdf' ||
+      document.originalName?.toLowerCase().endsWith('.pdf') ||
+      document.name?.toLowerCase().endsWith('.pdf')
+    )
   );
-  const url = blobUrl || document.previewBlobUrl || (document.id ? registrationApi.documentUrl(editionId, document.id) : null);
+  const url = isDrive
+    ? document.externalUrl
+    : blobUrl || document.previewBlobUrl || (document.id ? registrationApi.documentUrl(editionId, document.id) : null);
+  const embedUrl = isDrive ? drivePreviewUrl(document.externalUrl) : url;
 
   return (
     <Sheet open={open} title={document.label || document.originalName || 'Verification Document'} onClose={onClose} wide eyebrow="Verification Document">
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
-        {!isPdf && url ? (
+        {!isPdf && !isDrive && url ? (
           <>
             <Button variant="ghost" onClick={() => setZoom((v) => Math.max(1, v - 0.25))} icon={ZoomOut}>
               Zoom out
@@ -171,10 +193,10 @@ function DocumentPreview({ open, document, editionId, onClose }) {
         ) : null}
         {url ? (
           <Button variant="ghost" href={url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>
-            Open in Tab
+            {isDrive ? 'Open in Drive' : 'Open in Tab'}
           </Button>
         ) : null}
-        {url ? (
+        {!isDrive && url ? (
           <Button
             variant="ghost"
             href={url}
@@ -191,6 +213,8 @@ function DocumentPreview({ open, document, editionId, onClose }) {
             <RefreshCw size={18} className="is-spinning" />
             <span>Loading document...</span>
           </div>
+        ) : isDrive && embedUrl ? (
+          <iframe title={document.label || 'Google Drive Preview'} src={embedUrl} style={{ width: '100%', height: '70vh', maxHeight: '680px', border: 'none', borderRadius: '6px', background: '#fff' }} allow="autoplay" />
         ) : isPdf && url ? (
           <iframe title={document.label || 'PDF Preview'} src={url} style={{ width: '100%', height: '70vh', maxHeight: '680px', border: 'none', borderRadius: '6px', background: '#fff' }} />
         ) : url ? (
@@ -210,9 +234,22 @@ function DocumentPreview({ open, document, editionId, onClose }) {
   );
 }
 
-function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveFile, onPreview, isRemoving }) {
+function DocumentUploadCard({
+  req,
+  serverDoc,
+  localFile,
+  onSelectFile,
+  onRemoveFile,
+  onPreview,
+  isRemoving,
+  allowDriveLinks = false,
+  onSubmitLink,
+}) {
   const inputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [linkValue, setLinkValue] = useState('');
+  const [savingLink, setSavingLink] = useState(false);
 
   const isUploading = Boolean(localFile?.uploading);
   const isUploaded = Boolean(serverDoc || localFile?.uploaded);
@@ -389,6 +426,78 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
               <span>{localFile.error}</span>
             </div>
           ) : null}
+
+          {serverDoc?.externalUrl ? (
+            <div style={{ marginTop: '10px', fontSize: '12px', color: '#38bdf8', wordBreak: 'break-all' }}>
+              Drive link:{' '}
+              <a href={serverDoc.externalUrl} target="_blank" rel="noreferrer" style={{ color: '#38bdf8', textDecoration: 'underline' }}>
+                {serverDoc.externalUrl}
+              </a>
+            </div>
+          ) : null}
+
+          {allowDriveLinks && onSubmitLink && !isUploaded ? (
+            <div style={{ marginTop: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setShowLinkInput((v) => !v)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  color: '#38bdf8',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                {showLinkInput || localFile?.error ? 'Hide Google Drive link' : 'Or paste public Google Drive link'}
+              </button>
+              {showLinkInput || localFile?.error ? (
+                <div style={{ marginTop: '8px', display: 'grid', gap: '6px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="url"
+                      value={linkValue}
+                      onChange={(e) => setLinkValue(e.target.value)}
+                      placeholder="https://drive.google.com/file/d/.../view"
+                      style={{
+                        flex: '1 1 220px',
+                        minWidth: 0,
+                        padding: '7px 10px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255,255,255,0.16)',
+                        background: 'rgba(15,23,42,0.7)',
+                        color: '#f8fafc',
+                        fontSize: '12.5px',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="button ghost"
+                      disabled={savingLink || !linkValue.trim()}
+                      onClick={async () => {
+                        setSavingLink(true);
+                        try {
+                          await onSubmitLink(req.type, linkValue.trim());
+                          setShowLinkInput(false);
+                          setLinkValue('');
+                        } finally {
+                          setSavingLink(false);
+                        }
+                      }}
+                    >
+                      {savingLink ? 'Saving…' : 'Save Drive Link'}
+                    </button>
+                  </div>
+                  <small style={{ color: '#fbbf24', fontSize: '11.5px', lineHeight: 1.4 }}>
+                    Upload to Google Drive, set sharing to &ldquo;Anyone with the link&rdquo;, and paste the exact file URL here. Ensure it is accessible or your pass may be rejected.
+                  </small>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -451,22 +560,6 @@ function DocumentUploadCard({ req, serverDoc, localFile, onSelectFile, onRemoveF
 export function PortalRegistration() {
   const { editionId, edition } = useSite();
   const { user } = useAuth();
-
-  // Included-event allowance and value cap come from the edition policy, the
-  // same numbers the selection API enforces, so this copy cannot drift from it.
-  const policy = edition?.policy || {};
-  const includedCount = Number.isFinite(policy.includedEventCount) ? policy.includedEventCount : null;
-  const includedMode = policy.includedSelectionMode === 'exact' ? 'exactly' : 'up to';
-  const includedCapPaise = Number.isFinite(policy.includedValueCapPaise) ? policy.includedValueCapPaise : null;
-  const includedCapLabel = includedCapPaise != null ? money(includedCapPaise) : null;
-  const includedHeading = includedCount
-    ? `Pick your ${includedCount} Included Events & Competitions`
-    : 'Pick your Included Events & Competitions';
-  const includedSelectLabel = includedCount ? `Select Your ${includedCount} Events` : 'Select Your Events';
-  const includedCountStat = includedCount ? `${includedCount} Included Events with Pass` : 'Included Events with Pass';
-  const includedRule = includedCount
-    ? `Your pass includes ${includedMode} ${includedCount} technical events or workshops${includedCapLabel ? ` within a ${includedCapLabel} total value cap` : ''}.${includedCapLabel ? ` Pick any combination whose base values add up to ${includedCapLabel} or less.` : ''} Events beyond the pass are booked separately at their add-on price.`
-    : 'Your pass includes a set of technical events or workshops. Events beyond the pass are booked separately at their add-on price.';
   const [version, setVersion] = useState(0);
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(null);
@@ -479,7 +572,18 @@ export function PortalRegistration() {
   const [changeSheet, setChangeSheet] = useState(false);
   const [changeForm, setChangeForm] = useState({ categoryId: '', note: '' });
   const [showIdCard, setShowIdCard] = useState(false);
-  const [showReceipt, setShowReceipt] = useState(false);
+  const [broadcastPrompt, setBroadcastPrompt] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [showReceipt, setShowReceipt] = useState(() => searchParams.get('receipt') === '1');
+
+  useEffect(() => {
+    if (searchParams.get('receipt') === '1') {
+      setShowReceipt(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('receipt');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
   const [payStage, setPayStage] = useState(null);
   const [slowPayment, setSlowPayment] = useState(false);
   const [photoBlobUrl, setPhotoBlobUrl] = useState(null);
@@ -523,6 +627,19 @@ export function PortalRegistration() {
     (r) => r.status === 'confirmed' || r.status === 'reserved'
   );
   const config = query.data?.data;
+  const policy = config?.policy || edition?.policy || {};
+  const includedCount = Number.isFinite(policy.includedEventCount) ? policy.includedEventCount : null;
+  const includedMode = policy.includedSelectionMode === 'exact' ? 'exactly' : 'up to';
+  const includedCapPaise = Number.isFinite(policy.includedValueCapPaise) ? policy.includedValueCapPaise : null;
+  const includedCapLabel = includedCapPaise != null ? money(includedCapPaise) : null;
+  const includedHeading = includedCount
+    ? `Pick your ${includedCount} Included Events & Competitions`
+    : 'Pick your Included Events & Competitions';
+  const includedSelectLabel = includedCount ? `Select Your ${includedCount} Events` : 'Select Your Events';
+  const includedCountStat = includedCount ? `${includedCount} Included Events with Pass` : 'Included Events with Pass';
+  const includedRule = includedCount
+    ? `Your pass includes ${includedMode} ${includedCount} technical events or workshops${includedCapLabel ? ` within a ${includedCapLabel} total value cap` : ''}.${includedCapLabel ? ` Pick any combination whose base values add up to ${includedCapLabel} or less.` : ''} Events beyond the pass are booked separately at their add-on price.`
+    : 'Your pass includes a set of technical events or workshops. Events beyond the pass are booked separately at their add-on price.';
   const categories = config?.categories || [];
   const registration = localRegistration || config?.registration;
 
@@ -547,8 +664,22 @@ export function PortalRegistration() {
       paymentStatus: r.paymentStatus,
     }));
   const extraPaymentsTotal = extraPayments.reduce((sum, t) => sum + (t.amountPaise || 0), 0);
+  const extraPlatformFeePaise = (() => {
+    const seenOrders = new Set();
+    let total = 0;
+    for (const r of userRegs.data?.data || []) {
+      if ((r.feePaise || 0) <= 0 || !r.orderId || seenOrders.has(r.orderId)) continue;
+      seenOrders.add(r.orderId);
+      total += Number(r.orderPlatformFeePaise || 0);
+    }
+    return total;
+  })();
   const passPaidPaise = registration?.totalPaidPaise ?? registration?.feePaise ?? 0;
-  const receiptTotalPaise = passPaidPaise + extraPaymentsTotal;
+  const paidPlatformFeePaise = Number(
+    registration?.paymentDetails?.platformFeePaise ?? registration?.order?.platformFeePaise ?? 0,
+  );
+  const receiptTotalPaise =
+    passPaidPaise + paidPlatformFeePaise + extraPaymentsTotal + extraPlatformFeePaise;
 
   const paidLineStatus = (t) => {
     if (t.paymentStatus === 'refunded') return { label: 'REFUNDED', color: '#dc2626' };
@@ -673,7 +804,28 @@ export function PortalRegistration() {
   const passWord = (activeRoleConfig.badgeWord || 'DELEGATE').toUpperCase();
   const passWordSize = `${Math.min(74, Math.round(302 / (passWord.length * 0.6)))}px`;
 
+  const allowDriveLinks = Boolean(
+    config?.settings?.allowDriveLinks ?? config?.registration?.allowDriveLinks,
+  );
+  const broadcastUrl = (
+    config?.settings?.broadcastUrl ??
+    config?.registration?.broadcastUrl ??
+    ''
+  ).trim();
   const isPaid = Boolean(registration && registration.paymentStatus === 'paid');
+
+  useEffect(() => {
+    if (!isPaid || !broadcastUrl || !editionId || !registration?.id) return;
+    const key = `px_broadcast_prompt_${editionId}_${registration.id}`;
+    try {
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, '1');
+        setBroadcastPrompt(true);
+      }
+    } catch {
+      // Ignore storage restrictions
+    }
+  }, [isPaid, broadcastUrl, editionId, registration?.id]);
   // Perks read as confirmed only once the desk approved the pass.
   const perksConfirmed = registration?.verificationStatus === 'approved';
   const isRefundDone =
@@ -687,6 +839,13 @@ export function PortalRegistration() {
   const passStatus = passQuery.data?.data?.status;
   const isSuspended = user?.status === 'suspended' || passStatus === 'suspended';
   const hasActivePass = isPaid && !isRejected && !isSuspended;
+  const hasVisitedTeamsPortal = (() => {
+    try {
+      return localStorage.getItem('px_visited_teams_portal') === '1';
+    } catch {
+      return false;
+    }
+  })();
   const canResubmitDocs = Boolean(registration?.canResubmit);
   const passTicket =
     (tickets.data?.data || []).find((ticket) => ticket.kind === 'pass') ||
@@ -709,7 +868,7 @@ export function PortalRegistration() {
       setPhotoBlobUrl(fileState?.photo?.previewUrl || fileState?.passport_photo?.previewUrl);
       return;
     }
-    if (photoDoc?.id && editionId) {
+    if (photoDoc?.id && !photoDoc?.externalUrl && editionId) {
       let active = true;
       registrationApi
         .fetchDocumentBlob(editionId, photoDoc.id)
@@ -727,13 +886,14 @@ export function PortalRegistration() {
         active = false;
       };
     }
-  }, [photoDoc?.id, editionId, fileState?.photo?.previewUrl, fileState?.passport_photo?.previewUrl]);
+    setPhotoBlobUrl(null);
+  }, [photoDoc?.id, photoDoc?.externalUrl, editionId, fileState?.photo?.previewUrl, fileState?.passport_photo?.previewUrl]);
 
   const photoUrl =
     photoBlobUrl ||
     fileState?.photo?.previewUrl ||
     fileState?.passport_photo?.previewUrl ||
-    (photoDoc?.id ? registrationApi.documentUrl(editionId, photoDoc.id) : null);
+    (photoDoc?.id && !photoDoc?.externalUrl ? registrationApi.documentUrl(editionId, photoDoc.id) : null);
 
   useEffect(() => {
     if (config?.registration) {
@@ -927,9 +1087,36 @@ export function PortalRegistration() {
           ...prev[docType],
           uploading: false,
           uploaded: false,
-          error: err.message || 'Upload failed. Please check file and retry.',
+          error: allowDriveLinks
+            ? `${err.message || 'Upload failed.'} Please upload to Google Drive (Anyone with the link) and paste the exact file URL below.`
+            : err.message || 'Upload failed. Please check file and retry.',
         },
       }));
+    }
+  };
+
+  const handleLinkSubmit = async (docType, url) => {
+    setMessage(null);
+    try {
+      await ensureProfileSaved();
+      const res = await registrationApi.uploadDocumentLink(editionId, docType, url);
+      if (res?.data?.registration) {
+        setLocalRegistration(res.data.registration);
+      }
+      setFileState((prev) => ({
+        ...prev,
+        [docType]: {
+          name: 'Google Drive Link',
+          size: 0,
+          uploading: false,
+          uploaded: true,
+          error: null,
+          serverDoc: res?.data?.document,
+        },
+      }));
+      setMessage({ tone: 'success', text: 'Google Drive document link saved.' });
+    } catch (err) {
+      setMessage({ tone: 'error', text: err.message || 'Could not save Google Drive link.' });
     }
   };
 
@@ -1012,6 +1199,7 @@ export function PortalRegistration() {
         `${selectedCategory?.name || 'Convention Pass'} - ${edition?.name || 'Parallax 2027'}`
       );
       if (!response) {
+        try { await portalApi.releaseOrder(editionId, order.orderId); } catch (_) { /* best effort */ }
         setBusy('');
         setMessage({
           tone: 'info',
@@ -1020,6 +1208,7 @@ export function PortalRegistration() {
         return;
       }
       if (response.failed) {
+        try { await portalApi.releaseOrder(editionId, order.orderId); } catch (_) { /* best effort */ }
         setBusy('');
         setMessage({
           tone: 'error',
@@ -1107,6 +1296,8 @@ export function PortalRegistration() {
               localFile={local}
               onSelectFile={(file) => handleFileSelect(req.type, file)}
               onRemoveFile={() => handleFileRemove(req.type)}
+              allowDriveLinks={allowDriveLinks}
+              onSubmitLink={handleLinkSubmit}
               isRemoving={busy === `remove-${req.type}`}
               onPreview={() => {
                 const isLocalPdf =
@@ -1192,7 +1383,7 @@ export function PortalRegistration() {
         }
       />
 
-      {hasActivePass ? (
+      {hasActivePass && !hasVisitedTeamsPortal ? (
         <div
           style={{
             padding: '18px 22px',
@@ -1517,6 +1708,18 @@ export function PortalRegistration() {
                 <Button onClick={() => setChangeSheet(true)} variant="ghost">
                   Request Category Change
                 </Button>
+              ) : null}
+              {broadcastUrl ? (
+                <a
+                  href={broadcastUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ textDecoration: 'none' }}
+                >
+                  <Button variant="ghost" icon={ExternalLink}>
+                    Join Broadcast / Support Channel
+                  </Button>
+                </a>
               ) : null}
             </div>
           </div>
@@ -1929,6 +2132,8 @@ export function PortalRegistration() {
                         localFile={local}
                         onSelectFile={(file) => handleFileSelect(req.type, file)}
                         onRemoveFile={() => handleFileRemove(req.type)}
+                        allowDriveLinks={allowDriveLinks}
+                        onSubmitLink={handleLinkSubmit}
                         isRemoving={busy === `remove-${req.type}`}
                         onPreview={() => {
                           const isLocalPdf = local?.file?.type === 'application/pdf' || local?.name?.toLowerCase().endsWith('.pdf');
@@ -2014,6 +2219,20 @@ export function PortalRegistration() {
                     <p style={{ margin: '4px 0 0 0', color: '#f5d061', fontSize: '13px', fontWeight: 500 }}>
                       Full 2-Day All-Access + Lunch Included
                     </p>
+                    {(() => {
+                      const bps = Number(policy.platformFeeBps || 0);
+                      const exemptUnder = Number(policy.platformFeeExemptUnderPaise || 0);
+                      const pFee =
+                        fee > 0 && bps > 0 && !(exemptUnder > 0 && fee < exemptUnder)
+                          ? Math.round((fee * bps) / 10000)
+                          : 0;
+                      return pFee > 0 ? (
+                        <p style={{ margin: '6px 0 0 0', color: '#94a3b8', fontSize: '12.5px' }}>
+                          Base: {money(fee)} + Platform Fee ({(bps / 100).toFixed(bps % 100 ? 2 : 0)}%):{' '}
+                          {money(pFee)} = <b style={{ color: '#fff' }}>{money(fee + pFee)}</b>
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
 
                   <div>
@@ -2051,26 +2270,68 @@ export function PortalRegistration() {
 
                 <hr className="portal-reg-divider" />
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                  <span style={{ fontSize: '15px', fontWeight: '500', color: '#cbd5e1' }}>Total Amount Payable</span>
-                  <span style={{ fontSize: '32px', fontWeight: '700', color: '#f5d061', letterSpacing: '-0.02em' }}>
-                    {money(fee)}
-                  </span>
-                </div>
+                {(() => {
+                  const bps = Number(policy.platformFeeBps || 0);
+                  const exemptUnder = Number(policy.platformFeeExemptUnderPaise || 0);
+                  const pFee =
+                    fee > 0 && bps > 0 && !(exemptUnder > 0 && fee < exemptUnder)
+                      ? Math.round((fee * bps) / 10000)
+                      : 0;
+                  const pctLabel = (bps / 100).toFixed(bps % 100 ? 2 : 0);
+                  const payableTotal = fee + pFee;
 
-                {/* Cancellation, Refund Policy & Double-Payment Caution */}
-                <div className="portal-reg-terms">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <ShieldCheck size={16} color="#f5d061" />
-                    <b style={{ color: '#f8fafc', fontSize: '13px' }}>Cancellation, Refund &amp; Payment Safety Terms</b>
-                  </div>
-                  <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.45' }}>
-                    • <b>Cancellation &amp; Refund:</b> If your uploaded college or institution credentials are found invalid or duplicate, registration may be cancelled and 100% refunded through Razorpay to your source bank/UPI within 5–7 working days.
-                  </p>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#fbbf24', lineHeight: '1.45' }}>
-                    • <b>Avoid Double Charges:</b> Please do not refresh, close, or navigate back while the Razorpay window is processing. If money is deducted from your account but this screen takes a moment, please wait 2 minutes or check your email receipt before trying again.
-                  </p>
-                </div>
+                  return (
+                    <>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {pFee > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px', borderBottom: '1px dashed rgba(255,255,255,0.1)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#94a3b8' }}>
+                              <span>Pass Fee</span>
+                              <span>{money(fee)}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#94a3b8' }}>
+                              <span>Platform Fee ({pctLabel}%)</span>
+                              <span>{money(pFee)}</span>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                          <div>
+                            <span style={{ fontSize: '15px', fontWeight: '500', color: '#cbd5e1', display: 'block' }}>
+                              Total Payable
+                            </span>
+                            <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                              Any payment gateway / bank charges, if applicable, are shown in Razorpay checkout.
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '32px', fontWeight: '700', color: '#f5d061', letterSpacing: '-0.02em' }}>
+                            {money(payableTotal)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Cancellation, Refund Policy & Payment / Gateway Charges */}
+                      <div className="portal-reg-terms">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <ShieldCheck size={16} color="#f5d061" />
+                          <b style={{ color: '#f8fafc', fontSize: '13px' }}>Payment Charges, Refund &amp; Safety Terms</b>
+                        </div>
+                        <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#cbd5e1', lineHeight: '1.5' }}>
+                          • <b>Platform &amp; Razorpay Charges:</b>{' '}
+                          {pFee > 0
+                            ? `Your total (${money(payableTotal)}) includes a ${pctLabel}% platform fee (${money(pFee)}). Standard Razorpay payment gateway or convenience charges may apply separately at checkout depending on your payment method. Platform and gateway charges are non-refundable once settled.`
+                            : `Payments are processed securely via Razorpay (UPI, cards, netbanking). Standard Razorpay payment gateway or convenience charges may apply at checkout depending on your payment method and are non-refundable once settled.`}
+                        </p>
+                        <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.5' }}>
+                          • <b>Cancellation &amp; Refund:</b> If your uploaded credentials are found invalid, mismatched, or duplicate, your registration may be cancelled and the eligible pass amount refunded to your source account within 5–7 working days.
+                        </p>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#fbbf24', lineHeight: '1.5' }}>
+                          • <b>Avoid Double Charges:</b> Do not refresh, close, or navigate back while Razorpay is processing. If an amount is debited and confirmation is delayed, wait 2 minutes or check your email receipt before retrying.
+                        </p>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               <label
@@ -2078,15 +2339,7 @@ export function PortalRegistration() {
                   display: 'flex',
                   alignItems: 'flex-start',
                   gap: '10px',
-                  marginBottom: '20px',
-                  padding: '14px 16px',
-                  borderRadius: '12px',
-                  border: verifiedBeforePay
-                    ? '1px solid rgba(16, 185, 129, 0.45)'
-                    : '1px solid rgba(251, 191, 36, 0.35)',
-                  background: verifiedBeforePay
-                    ? 'rgba(16, 185, 129, 0.08)'
-                    : 'rgba(251, 191, 36, 0.07)',
+                  margin: '16px 0 20px',
                   cursor: 'pointer',
                   fontSize: '13.5px',
                 }}
@@ -2099,12 +2352,20 @@ export function PortalRegistration() {
                 />
                 <span>
                   <b style={{ color: '#f8fafc' }}>
-                    I verify that all details above are accurate and match my college ID.
+                    I confirm my details and documents match my college ID, and I accept the{' '}
+                    <a
+                      href="/portal/instructions"
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ color: '#38bdf8', textDecoration: 'underline' }}
+                    >
+                      instructions &amp; policies
+                    </a>
+                    .
                   </b>
-                  <span style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginTop: '3px' }}>
-                    Nothing can be edited after submitting and paying (including name, college,
-                    meal preference, and accommodation). Any correction must go through the
-                    organiser desk.
+                  <span style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                    Details cannot be edited after payment; corrections require the organiser desk.
                   </span>
                 </span>
               </label>
@@ -2116,20 +2377,31 @@ export function PortalRegistration() {
                 </Button>
 
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', maxWidth: '340px' }}>
-                  <Button
-                    onClick={startCheckout}
-                    disabled={Boolean(busy) || !verifiedBeforePay}
-                    icon={CreditCard}
-                    className="portal-reg-pay-btn"
-                  >
-                    {busy !== 'checkout'
-                      ? `Pay ${money(fee)} with Razorpay`
-                      : payStage === 'preparing'
-                        ? 'Preparing secure checkout…'
-                        : payStage === 'verifying'
-                          ? 'Verifying payment…'
-                          : 'Complete payment in Razorpay'}
-                  </Button>
+                  {(() => {
+                    const bps = Number(policy.platformFeeBps || 0);
+                    const exemptUnder = Number(policy.platformFeeExemptUnderPaise || 0);
+                    const pFee =
+                      fee > 0 && bps > 0 && !(exemptUnder > 0 && fee < exemptUnder)
+                        ? Math.round((fee * bps) / 10000)
+                        : 0;
+                    const payableTotal = fee + pFee;
+                    return (
+                      <Button
+                        onClick={startCheckout}
+                        disabled={Boolean(busy) || !verifiedBeforePay}
+                        icon={CreditCard}
+                        className="portal-reg-pay-btn"
+                      >
+                        {busy !== 'checkout'
+                          ? `Pay ${money(payableTotal)} with Razorpay`
+                          : payStage === 'preparing'
+                            ? 'Preparing secure checkout…'
+                            : payStage === 'verifying'
+                              ? 'Verifying payment…'
+                              : 'Complete payment in Razorpay'}
+                      </Button>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -2155,7 +2427,19 @@ export function PortalRegistration() {
       />
 
       {/* Category Change Modal (If user wants to change category after booking) */}
-      <PaymentProgress stage={payStage} amount={fee} slow={slowPayment} />
+      <PaymentProgress
+        stage={payStage}
+        amount={(() => {
+          const bps = Number(policy.platformFeeBps || 0);
+          const exemptUnder = Number(policy.platformFeeExemptUnderPaise || 0);
+          const pFee =
+            fee > 0 && bps > 0 && !(exemptUnder > 0 && fee < exemptUnder)
+              ? Math.round((fee * bps) / 10000)
+              : 0;
+          return fee + pFee;
+        })()}
+        slow={slowPayment}
+      />
 
       <Sheet
         open={changeSheet}
@@ -2243,6 +2527,32 @@ export function PortalRegistration() {
       </Sheet>
 
       {/* Official Receipt Sheet */}
+      <Sheet
+        open={broadcastPrompt && Boolean(broadcastUrl)}
+        title="Join Broadcast & Support Channel"
+        eyebrow="STAY UPDATED"
+        onClose={() => setBroadcastPrompt(false)}
+      >
+        <p className="muted" style={{ lineHeight: 1.6 }}>
+          Your pass is registered! Join the official Broadcast / Support Channel for schedule
+          updates, verification alerts, and direct organiser announcements.
+        </p>
+        <div className="sheet-actions" style={{ marginTop: 18 }}>
+          <Button variant="ghost" onClick={() => setBroadcastPrompt(false)}>
+            Maybe later
+          </Button>
+          <a
+            href={broadcastUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ textDecoration: 'none' }}
+            onClick={() => setBroadcastPrompt(false)}
+          >
+            <Button icon={ExternalLink}>Join Broadcast / Support Channel</Button>
+          </a>
+        </div>
+      </Sheet>
+
       <Sheet
         open={showReceipt}
         title={`${edition?.name || 'Parallax 2027'} · Official Payment Receipt`}
@@ -2338,6 +2648,27 @@ export function PortalRegistration() {
                     {money(passPaidPaise)}
                   </td>
                 </tr>
+                {paidPlatformFeePaise > 0 ? (
+                  <tr>
+                    <td>
+                      <b>Platform Fee</b>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>
+                        Payment processing &amp; platform service charge
+                      </div>
+                    </td>
+                    <td>
+                      <div>{registration?.fullName}</div>
+                    </td>
+                    <td>
+                      <span style={{ color: isRefundDone ? '#dc2626' : '#16a34a', fontWeight: '700' }}>
+                        {isRefundDone ? 'REFUNDED' : 'PAID'}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                      {money(paidPlatformFeePaise)}
+                    </td>
+                  </tr>
+                ) : null}
                 {extraPayments.map((ticket) => {
                   const lineStatus = paidLineStatus(ticket);
                   return (
@@ -2367,6 +2698,25 @@ export function PortalRegistration() {
                   </tr>
                   );
                 })}
+                {extraPlatformFeePaise > 0 ? (
+                  <tr>
+                    <td>
+                      <b>Platform Fee (Events)</b>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>
+                        Payment processing &amp; platform service charge for event bookings
+                      </div>
+                    </td>
+                    <td>
+                      <div>{registration?.fullName}</div>
+                    </td>
+                    <td>
+                      <span style={{ color: '#16a34a', fontWeight: '700' }}>PAID</span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                      {money(extraPlatformFeePaise)}
+                    </td>
+                  </tr>
+                ) : null}
                 <tr className="px-receipt-total-row">
                   <td colSpan={3} style={{ textAlign: 'right', padding: '12px 4px' }}>
                     Total Amount Paid

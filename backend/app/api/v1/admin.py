@@ -83,12 +83,13 @@ async def _attendance_for(
     user_id: uuid.UUID,
     event_id: uuid.UUID | None,
     day: str,
+    scope: str = "pass",
 ) -> AttendanceRecord | None:
     """The attendance row a scan of this user/day/scope would duplicate.
 
-    A pass-level scan has ``event_id = NULL``, and SQL treats NULLs as distinct
-    inside a unique constraint, so the row has to be found explicitly instead of
-    relying on the constraint for that case.
+    Pass-level and lunch-level scans have ``event_id = NULL``, and SQL treats
+    NULLs as distinct inside a unique constraint, so the row has to be found
+    explicitly by ``scope`` as well.
     """
     stmt = select(AttendanceRecord).where(
         AttendanceRecord.edition_id == edition_id,
@@ -96,7 +97,10 @@ async def _attendance_for(
         AttendanceRecord.day == day,
     )
     if event_id is None:
-        stmt = stmt.where(AttendanceRecord.event_id.is_(None))
+        stmt = stmt.where(
+            AttendanceRecord.event_id.is_(None),
+            AttendanceRecord.scope == scope,
+        )
     else:
         stmt = stmt.where(AttendanceRecord.event_id == event_id)
     return (
@@ -380,6 +384,11 @@ async def policies(
                 "includedSelectionMode": getattr(p, "included_selection_mode", "exact"),
                 "includedValueCapPaise": p.included_value_cap_paise,
                 "capInclusive": p.cap_inclusive,
+                "allowancePackOrder": int(getattr(p, "allowance_pack_order", 0) or 0),
+                "platformFeeBps": int(getattr(p, "platform_fee_bps", 0) or 0),
+                "platformFeeExemptUnderPaise": int(
+                    getattr(p, "platform_fee_exempt_under_paise", 0) or 0
+                ),
                 "holdMinutes": p.hold_minutes,
                 "addonRequiresPass": p.addon_requires_pass,
                 "teamMembersRequirePass": p.team_members_require_pass,
@@ -422,6 +431,42 @@ async def create_policy(
     )
     await db.commit()
     return {"data": {"id": str(new_p.id), "version": new_p.version}}
+
+
+@router.delete("/policies/{policy_id}")
+async def delete_policy(
+    edition_id: uuid.UUID,
+    policy_id: uuid.UUID,
+    ctx: AuthContext = Depends(require_permission("policy.manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    policy = (
+        await db.execute(
+            select(EditionPolicy).where(
+                EditionPolicy.id == policy_id,
+                EditionPolicy.edition_id == edition_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if policy is None:
+        raise NotFound("Policy version not found.")
+    if policy.is_current:
+        raise Conflict("Cannot delete the active policy version.")
+    from app.models.commerce import ConventionPass
+
+    linked_pass = await db.scalar(
+        select(ConventionPass.id).where(
+            ConventionPass.edition_id == edition_id,
+            ConventionPass.policy_version == policy.version,
+        ).limit(1)
+    )
+    if linked_pass is not None:
+        raise Conflict(
+            f"Policy v{policy.version} is still referenced by issued passes and cannot be deleted."
+        )
+    await db.delete(policy)
+    await db.commit()
+    return {"data": {"deleted": True, "id": str(policy_id), "version": policy.version}}
 
 
 @router.get("/categories")
@@ -789,6 +834,23 @@ async def payments_list(
             )
         ).all()
     )
+    # Build a per-order refunded totals map (processing + processed) so the
+    # Finance table can show accurate remaining-refundable amounts without
+    # a second round-trip and without double-counting pending placeholders.
+    order_ids = [o.id for o, _ in rows]
+    refund_totals: dict = {}
+    if order_ids:
+        r_rows = (
+            await db.execute(
+                select(Refund.order_id, func.coalesce(func.sum(Refund.amount_paise), 0))
+                .where(
+                    Refund.order_id.in_(order_ids),
+                    Refund.status.in_(["pending", "processing", "processed"]),
+                )
+                .group_by(Refund.order_id)
+            )
+        ).all()
+        refund_totals = {oid: int(amt or 0) for oid, amt in r_rows}
     return {
         "data": [
             {
@@ -797,6 +859,7 @@ async def payments_list(
                 "userEmail": u.email,
                 "purpose": o.purpose,
                 "amountPaise": o.amount_paise,
+                "refundedPaise": refund_totals.get(o.id, 0),
                 "status": o.status,
                 "gatewayOrderId": o.gateway_order_id,
                 "createdAt": edition_service.aware(o.created_at).isoformat() if o.created_at else None,
@@ -830,6 +893,64 @@ async def create_refund(
     return {"data": {"refundId": str(refund.id), "status": refund.status}}
 
 
+@router.post("/refunds/{refund_id}/process", dependencies=[Depends(limiter("admin_refund", 30, 60))])
+async def process_pending_refund(
+    edition_id: uuid.UUID,
+    refund_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_permission("finance.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    rf = await db.get(Refund, refund_id)
+    if rf is None:
+        raise NotFound("Refund request not found.")
+    order = await payment_service.order_for(db, rf.order_id)
+    if order.edition_id != edition_id:
+        raise NotFound("Refund request not found in this edition.")
+    if rf.status == "processed":
+        return {"data": {"refundId": str(rf.id), "status": rf.status, "amountPaise": rf.amount_paise}}
+    if rf.status == "processing" and rf.gateway_refund_id:
+        settings = get_settings()
+        if settings.payments_enabled and not rf.gateway_refund_id.startswith("rfnd_mock_"):
+            try:
+                gw = await payment_service.fetch_gateway_refund(rf.gateway_refund_id)
+                gw_status = str(gw.get("status") or "").lower()
+                if gw_status == "processed":
+                    rf.status = "processed"
+                    rf.processed_at = datetime.now(UTC)
+                elif gw_status == "failed":
+                    rf.status = "failed"
+            except Exception as exc:
+                raise Conflict(f"Could not sync gateway refund status: {exc}")
+        else:
+            rf.status = "processed"
+            rf.processed_at = rf.processed_at or datetime.now(UTC)
+        await db.commit()
+        return {"data": {"refundId": str(rf.id), "status": rf.status, "amountPaise": rf.amount_paise}}
+
+    if rf.status not in ("pending", "failed"):
+        raise Conflict(f"Refund is already {rf.status}.")
+
+    # Retire the pending placeholder before calling refund_order so refund_order
+    # creates a fresh gateway/processed refund row cleanly.
+    reason_code = rf.reason_code or "admin_confirmed"
+    reason_note = rf.reason_note
+    amount_paise = rf.amount_paise
+    await db.delete(rf)
+    await db.flush()
+
+    new_rf = await payment_service.refund_order(
+        db,
+        order,
+        amount_paise=amount_paise,
+        reason_code=reason_code,
+        reason_note=reason_note,
+        requested_by_id=ctx.user.id,
+    )
+    await db.commit()
+    return {"data": {"refundId": str(new_rf.id), "status": new_rf.status, "amountPaise": new_rf.amount_paise}}
+
+
 @router.get("/refunds")
 async def refunds(
     edition_id: uuid.UUID,
@@ -853,6 +974,7 @@ async def refunds(
                 "reasonCode": r.reason_code,
                 "reasonNote": r.reason_note,
                 "status": r.status,
+                "gatewayRefundId": r.gateway_refund_id,
                 "createdAt": edition_service.aware(r.created_at).isoformat() if r.created_at else None,
                 "processedAt": edition_service.aware(r.processed_at).isoformat() if r.processed_at else None,
             }
@@ -914,28 +1036,84 @@ async def registrations(
         ).all()
     )
 
-    # Collect order IDs to look up any processed or pending refunds
-    order_ids = [o.id for _, _, _, o, _ in rows if o is not None]
-    refund_map = {}
+    # Collect order IDs to look up committed refunds (pending + processing + processed).
+    # Including "pending" is crucial: a cancellation auto-queues a pending refund before
+    # the admin clicks "process". Without it the displayed remaining amount is inflated and
+    # the admin can initiate a second refund for the same money.
+    order_ids = list({o.id for _, _, _, o, _ in rows if o is not None})
+    refund_map: dict[uuid.UUID, int] = {}
+    reg_refunded_map: dict[uuid.UUID, int] = {}
     if order_ids:
         r_rows = (
             await db.execute(
                 select(Refund.order_id, func.coalesce(func.sum(Refund.amount_paise), 0))
-                .where(Refund.order_id.in_(order_ids), Refund.status.in_(["processed", "pending"]))
+                .where(
+                    Refund.order_id.in_(order_ids),
+                    Refund.status.in_(["pending", "processed", "processing"]),
+                )
                 .group_by(Refund.order_id)
             )
         ).all()
         refund_map = {oid: int(amt or 0) for oid, amt in r_rows}
+
+        # Allocate each order's committed refund across its billable registrations
+        # (preferring cancelled rows) so an active sibling on a multi-seat order
+        # does not falsely show as refunded.
+        sibling_regs = list(
+            (
+                await db.execute(
+                    select(Registration)
+                    .where(
+                        Registration.order_id.in_(order_ids),
+                        Registration.fee_paise > 0,
+                    )
+                    .order_by(Registration.created_at.asc())
+                )
+            ).scalars()
+        )
+        siblings_by_order: dict[uuid.UUID, list[Registration]] = {}
+        for sr in sibling_regs:
+            if sr.order_id is not None:
+                siblings_by_order.setdefault(sr.order_id, []).append(sr)
+        for oid, pool in refund_map.items():
+            if pool <= 0:
+                continue
+            o_regs = siblings_by_order.get(oid, [])
+            targets = [sr for sr in o_regs if sr.status == "cancelled"] or o_regs
+            rem = pool
+            for sr in targets:
+                if rem <= 0:
+                    break
+                cap = int(sr.fee_paise or 0)
+                if cap <= 0:
+                    continue
+                slice_amt = min(cap, rem)
+                reg_refunded_map[sr.id] = slice_amt
+                rem -= slice_amt
 
     show_pii = ctx.has("user.read_pii", edition_id)
 
     data = []
     for r, u, e, o, col in rows:
         is_included = r.kind == "included" or r.fee_paise == 0
-        refunded_paise = refund_map.get(o.id, 0) if o else 0
-        order_remaining = max(0, (o.amount_paise - refunded_paise)) if o else 0
-        max_refundable = 0 if is_included else min(r.fee_paise, order_remaining)
-        is_refundable = bool(o and o.status == "paid" and not is_included and max_refundable > 0)
+        order_refunded_paise = refund_map.get(o.id, 0) if o else 0
+        refunded_paise = (
+            (int(r.fee_paise or 0) if o and o.status == "refunded" else reg_refunded_map.get(r.id, 0))
+            if not is_included
+            else 0
+        )
+        order_remaining = max(0, (o.amount_paise - order_refunded_paise)) if o else 0
+        max_refundable = 0 if is_included else min(max(0, r.fee_paise - refunded_paise), order_remaining)
+        # Refundable when: the order is still in "paid" state (not yet fully
+        # refunded), the registration has a fee, and there is money left.
+        # Using o.status == "paid" is intentional: once fully refunded the
+        # order flips to "refunded" and refund_order will reject it anyway.
+        is_refundable = bool(
+            o
+            and o.status == "paid"
+            and not is_included
+            and max_refundable > 0
+        )
 
         data.append(
             {
@@ -1095,28 +1273,47 @@ async def force_cancel_registration(
                 await db.execute(
                     select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                         Refund.order_id == order.id,
-                        Refund.status == "processed",
+                        Refund.status.in_(["pending", "processed", "processing"]),
                     )
                 )
             )
             .scalars()
             .one()
         ) or 0
+        sibling_regs = list(
+            (
+                await db.execute(
+                    select(Registration)
+                    .where(Registration.order_id == order.id, Registration.fee_paise > 0)
+                    .order_by(Registration.created_at.asc())
+                )
+            ).scalars()
+        )
+        reg_already = 0
+        if already_refunded > 0:
+            targets = [sr for sr in sibling_regs if sr.status == "cancelled" and sr.id != reg.id] or sibling_regs
+            rem = int(already_refunded)
+            for sr in targets:
+                if rem <= 0:
+                    break
+                cap = int(sr.fee_paise or 0)
+                if cap <= 0:
+                    continue
+                slice_amt = min(cap, rem)
+                if sr.id == reg.id:
+                    reg_already = slice_amt
+                rem -= slice_amt
         order_remaining = max(0, order.amount_paise - int(already_refunded))
-        max_refundable = min(reg.fee_paise, order_remaining)
+        max_refundable = min(max(0, reg.fee_paise - reg_already), order_remaining)
 
         amount_paise = (
             payload.refund_amount_paise
             if payload.refund_amount_paise is not None
             else max_refundable
         )
-        if amount_paise > reg.fee_paise:
+        if amount_paise > max_refundable:
             raise ValidationFailed(
-                f"Refund amount (INR {amount_paise/100:.2f}) cannot exceed the paid fee of INR {reg.fee_paise/100:.2f}."
-            )
-        if amount_paise > order_remaining:
-            raise ValidationFailed(
-                f"Only INR {order_remaining/100:.2f} remains refundable on this order."
+                f"Only INR {max_refundable/100:.2f} remains refundable for this registration."
             )
         if amount_paise <= 0:
             raise ValidationFailed("Refund amount must be greater than zero.")
@@ -1130,37 +1327,36 @@ async def force_cancel_registration(
             requested_by_id=ctx.user.id,
         )
         refund_data = {"refundId": str(rf.id), "amountPaise": rf.amount_paise}
-    elif reg.kind != "included" and reg.fee_paise > 0 and reg.order_id is not None:
-        # The seat was taken away without a refund instruction. The money is
-        # still the attendee's, so it is parked in the finance ledger instead of
-        # disappearing from every screen.
-        order = await db.get(PaymentOrder, reg.order_id)
-        if order is not None and order.status == "paid":
-            already = (
-                (
-                    await db.execute(
-                        select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
-                            Refund.order_id == order.id,
-                            Refund.status.in_(["pending", "processing", "processed"]),
-                        )
-                    )
-                )
-                .scalars()
-                .one()
-            ) or 0
-            outstanding = max(0, int(order.amount_paise) - int(already))
-            if outstanding > 0:
-                db.add(
-                    Refund(
-                        order_id=order.id,
-                        amount_paise=min(int(reg.fee_paise), outstanding),
-                        reason_code="admin_force_cancel",
-                        reason_note=(payload.reason or "Removed from event by administration")[:300],
-                        status="pending",
-                        requested_by=ctx.user.id,
-                    )
-                )
-                await db.flush()
+
+    # Notify the participant about the admin cancellation and refund outcome.
+    from app.models.commerce import EmailOutbox
+
+    target_user = await db.get(User, reg.user_id)
+    if target_user is not None and target_user.email:
+        if refund_data:
+            amt_inr = refund_data["amountPaise"] / 100
+            kind_label = (
+                "full"
+                if refund_data["amountPaise"] >= int(reg.fee_paise or 0)
+                else "partial"
+            )
+            refund_line = f"A {kind_label} refund of INR {amt_inr:.2f} has been initiated to your original payment method."
+        else:
+            refund_line = "No refund was issued for this cancellation."
+        event_title = event.title if event else "your event"
+        db.add(
+            EmailOutbox(
+                recipient=target_user.email,
+                template="event_force_cancelled",
+                payload={
+                    "subject": f"Event registration cancelled: {event_title}",
+                    "eventTitle": event_title,
+                    "reason": reg.cancellation_reason,
+                    "refundSummary": refund_line,
+                },
+                status="pending",
+            )
+        )
 
     cache_delete_pattern("public:*")
     cache_delete_pattern("admin:dashboard:*")
@@ -1213,20 +1409,59 @@ async def refund_registration(
     if order is None or order.status != "paid":
         raise ValidationFailed("Only paid registrations can be refunded.")
 
-    already_refunded = (
+    settled_or_processing = (
         (
             await db.execute(
                 select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                     Refund.order_id == order.id,
-                    Refund.status == "processed",
+                    Refund.status.in_(["processed", "processing"]),
                 )
             )
         )
         .scalars()
         .one()
     ) or 0
-    order_remaining = max(0, order.amount_paise - int(already_refunded))
-    max_refundable = min(reg.fee_paise, order_remaining)
+    pending_rows = list(
+        (
+            await db.execute(
+                select(Refund).where(
+                    Refund.order_id == order.id,
+                    Refund.status == "pending",
+                )
+            )
+        ).scalars()
+    )
+    pending_total = sum(int(rf.amount_paise or 0) for rf in pending_rows)
+
+    sibling_regs = list(
+        (
+            await db.execute(
+                select(Registration)
+                .where(Registration.order_id == order.id, Registration.fee_paise > 0)
+                .order_by(Registration.created_at.asc())
+            )
+        ).scalars()
+    )
+    reg_settled = 0
+    if settled_or_processing > 0:
+        targets = [sr for sr in sibling_regs if sr.status == "cancelled"] or sibling_regs
+        rem = int(settled_or_processing)
+        for sr in targets:
+            if rem <= 0:
+                break
+            cap = int(sr.fee_paise or 0)
+            if cap <= 0:
+                continue
+            slice_amt = min(cap, rem)
+            if sr.id == reg.id:
+                reg_settled = slice_amt
+            rem -= slice_amt
+
+    reg_fee_remaining = max(0, int(reg.fee_paise or 0) - reg_settled)
+    # Allow settling an existing pending placeholder on this order, but never
+    # exceed what remains un-settled on the order minus other pending rows.
+    max_order_available = max(0, int(order.amount_paise) - int(settled_or_processing))
+    max_refundable = min(reg_fee_remaining, max_order_available)
     if max_refundable <= 0:
         raise ValidationFailed("This registration has already been fully refunded.")
 
@@ -1235,16 +1470,25 @@ async def refund_registration(
         if payload.amount_paise is not None
         else max_refundable
     )
-    if amount_paise > reg.fee_paise:
+    if amount_paise <= 0:
+        raise ValidationFailed("Refund amount must be greater than zero.")
+    if amount_paise > reg_fee_remaining:
         raise ValidationFailed(
-            f"Refund amount (INR {amount_paise/100:.2f}) cannot exceed the paid fee of INR {reg.fee_paise/100:.2f}."
+            f"Refund amount (INR {amount_paise/100:.2f}) exceeds the remaining refundable fee (INR {reg_fee_remaining/100:.2f})."
         )
+
+    matching_pending = next((rf for rf in pending_rows if int(rf.amount_paise or 0) == amount_paise), None)
+    other_pending = pending_total - (int(matching_pending.amount_paise) if matching_pending else 0)
+    order_remaining = max(0, max_order_available - other_pending)
     if amount_paise > order_remaining:
         raise ValidationFailed(
             f"Only INR {order_remaining/100:.2f} remains refundable on this order."
         )
-    if amount_paise <= 0:
-        raise ValidationFailed("Refund amount must be greater than zero.")
+
+    # Retire only the matching pending placeholder for this exact amount.
+    if matching_pending is not None:
+        await db.delete(matching_pending)
+        await db.flush()
 
     rf = await payment_service.refund_order(
         db,
@@ -1582,8 +1826,13 @@ async def attendance(
                 "participantName": u.full_name,
                 "participantEmail": u.email,
                 "eventId": str(e.id) if e else None,
-                "eventTitle": e.title if e else "Convention Pass Gate",
-                "venueRoom": e.venue_room if e else "Main Entrance",
+                "scope": getattr(a, "scope", "event" if e else "pass"),
+                "eventTitle": (
+                    e.title
+                    if e
+                    else ("Lunch Check-in" if getattr(a, "scope", "pass") == "lunch" else "Convention Pass Gate")
+                ),
+                "venueRoom": e.venue_room if e else ("Dining Hall" if getattr(a, "scope", "pass") == "lunch" else "Main Entrance"),
                 "day": a.day,
                 "result": a.result,
                 "checkedInAt": edition_service.aware(a.checked_in_at).isoformat() if a.checked_in_at else None,
@@ -2013,7 +2262,8 @@ async def checkin(
         )
     day = payload.day or datetime.now(UTC).strftime("%Y-%m-%d")
 
-    event_id = payload.event_id
+    event_id = None if payload.scope == "lunch" else payload.event_id
+    scan_scope = "event" if event_id is not None else (payload.scope or "pass")
     team_info = None
     if ticket.registration_id:
         registration = await db.get(Registration, ticket.registration_id)
@@ -2074,15 +2324,23 @@ async def checkin(
                     "isLeader": t_obj.leader_id == ticket.user_id,
                 }
 
-    existing_row = await _attendance_for(db, edition_id, ticket.user_id, event_id, day)
+    existing_row = await _attendance_for(
+        db, edition_id, ticket.user_id, event_id, day, scope=scan_scope
+    )
     if existing_row is not None:
         repeat_logistics = _attendee_logistics(col_reg)
+        dup_msg = (
+            "Already marked for lunch on this day."
+            if scan_scope == "lunch"
+            else "Already checked in for this day."
+        )
         return {
             "data": {
                 "result": "duplicate",
+                "scope": scan_scope,
                 "participantName": user.full_name if user else "Participant",
                 "checkedInAt": edition_service.aware(existing_row.checked_in_at).isoformat(),
-                "message": "Already checked in for this day.",
+                "message": dup_msg,
                 "gender": repeat_logistics["gender"],
                 "foodPreference": repeat_logistics["foodPreference"],
                 "needsAccommodation": repeat_logistics["needsAccommodation"],
@@ -2094,6 +2352,7 @@ async def checkin(
         user_id=ticket.user_id,
         ticket_id=ticket.id,
         event_id=event_id,
+        scope=scan_scope,
         day=day,
         result="admitted",
         checked_in_by=ctx.user.id,
@@ -2108,15 +2367,23 @@ async def checkin(
             await db.flush()
     except IntegrityError:
         db.expunge(rec)
-        existing_row = await _attendance_for(db, edition_id, ticket.user_id, event_id, day)
+        existing_row = await _attendance_for(
+            db, edition_id, ticket.user_id, event_id, day, scope=scan_scope
+        )
         if existing_row is None:
             raise
+        dup_msg = (
+            "Already marked for lunch on this day."
+            if scan_scope == "lunch"
+            else "Already checked in for this day."
+        )
         return {
             "data": {
                 "result": "duplicate",
+                "scope": scan_scope,
                 "participantName": user.full_name if user else "Participant",
                 "checkedInAt": edition_service.aware(existing_row.checked_in_at).isoformat(),
-                "message": "Already checked in for this day.",
+                "message": dup_msg,
                 "team": team_info,
             }
         }
@@ -2141,6 +2408,7 @@ async def checkin(
     return {
         "data": {
             "result": "admitted",
+            "scope": scan_scope,
             "participantName": user.full_name if user else "Participant",
             "checkedInAt": datetime.now(UTC).isoformat(),
             "isVerified": is_verified,

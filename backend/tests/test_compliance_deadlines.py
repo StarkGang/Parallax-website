@@ -235,7 +235,8 @@ async def test_document_request_opens_24h_window_then_releases_seat(
 
     row = await db_session.get(CollegeRegistration, uuid.UUID(registration["id"]))
     assert row.compliance_enforced_at is not None
-    assert row.verification_status == "resubmission_required"
+    assert row.verification_status == "rejected"
+    assert row.rejection_code == "resubmission_expired"
 
     notices = list(
         (

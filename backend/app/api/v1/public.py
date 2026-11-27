@@ -96,7 +96,20 @@ async def edition_current(response: Response, db: AsyncSession = Depends(get_db)
             # An edition without a current policy is still a valid edition; the
             # policy section is simply omitted until one is published.
             logger.warning("edition_without_policy", extra={"edition": edition.slug})
-        data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+        from app.models.registration import RegistrationSettings
+
+        reg_settings_phone = (
+            await db.scalar(
+                select(RegistrationSettings.helpdesk_phone).where(
+                    RegistrationSettings.edition_id == edition.id
+                )
+            )
+        )
+        data = {
+            "data": serialize_edition(
+                edition, policy, helpdesk_phone=reg_settings_phone
+            ).model_dump(by_alias=True)
+        }
     except NotFound:
         raise
     except Exception as exc:
@@ -134,7 +147,20 @@ async def edition_detail(slug: str, response: Response, db: AsyncSession = Depen
         policy = await current_policy(db, edition.id)
     except NotFound:
         pass
-    data = {"data": serialize_edition(edition, policy).model_dump(by_alias=True)}
+    from app.models.registration import RegistrationSettings
+
+    reg_settings_phone = (
+        await db.scalar(
+            select(RegistrationSettings.helpdesk_phone).where(
+                RegistrationSettings.edition_id == edition.id
+            )
+        )
+    )
+    data = {
+        "data": serialize_edition(
+            edition, policy, helpdesk_phone=reg_settings_phone
+        ).model_dump(by_alias=True)
+    }
     cache_set(f"public:edition:{slug}", data, ttl_seconds=60)
     return data
 

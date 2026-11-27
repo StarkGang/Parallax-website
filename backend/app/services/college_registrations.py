@@ -207,6 +207,8 @@ def settings_payload(row: RegistrationSettings) -> dict:
         "acceptedFormats": row.accepted_formats or [],
         "maxUploadBytes": row.max_upload_bytes,
         "allowResubmission": row.allow_resubmission,
+        "allowDriveLinks": bool(getattr(row, "allow_drive_links", False)),
+        "broadcastUrl": getattr(row, "broadcast_url", None) or None,
         "helpdeskPhone": getattr(row, "helpdesk_phone", "+91 94460 00000") or "+91 94460 00000",
         "paymentInstructions": row.payment_instructions,
         "refundPolicy": row.refund_policy,
@@ -257,6 +259,8 @@ def registration_config_payload(settings: RegistrationSettings | None) -> dict:
             "acceptedFormats": ["pdf", "jpg", "jpeg", "png"],
             "maxUploadBytes": 5_242_880,
             "allowResubmission": True,
+            "allowDriveLinks": False,
+            "broadcastUrl": None,
             "helpdeskPhone": "+91 94460 00000",
             "paymentInstructions": "",
             "refundPolicy": "",
@@ -360,6 +364,7 @@ def document_payload(
         "mime": row.mime,
         "sizeBytes": row.size_bytes,
         "originalName": row.original_name,
+        "externalUrl": getattr(row, "external_url", None),
         "status": row.status,
         "reviewNote": row.review_note,
         "uploadedAt": aware(row.uploaded_at).isoformat() if row.uploaded_at else None,
@@ -538,6 +543,8 @@ def _clear_compliance(row: CollegeRegistration) -> None:
     row.compliance_kind = None
     row.compliance_flagged_at = None
     row.compliance_deadline_at = None
+    row.compliance_refund_pass = True
+    row.compliance_refund_events = True
 
 
 def compliance_payload(row: CollegeRegistration) -> dict | None:
@@ -691,6 +698,8 @@ async def serialize_registration(
         "verificationStatus": row.verification_status,
         "refundStatus": row.refund_status,
         "refundAmountPaise": row.refund_amount_paise,
+        "collectedPaise": await _collected_paise(db, row),
+        "refundablePaise": await _refundable_paise(db, row),
         "transactionId": row.transaction_id,
         "paidAt": aware(row.paid_at).isoformat() if row.paid_at else None,
         "submittedAt": aware(row.submitted_at).isoformat() if row.submitted_at else None,
@@ -724,6 +733,7 @@ async def serialize_registration(
                 "id": str(order.id),
                 "status": order.status,
                 "amountPaise": order.amount_paise,
+                "platformFeePaise": int(getattr(order, "platform_fee_paise", 0) or 0),
                 "gatewayOrderId": order.gateway_order_id,
                 "purpose": order.purpose,
                 "mock": not get_settings().payments_enabled,
@@ -1077,6 +1087,7 @@ async def save_document(
         }
         old_key = existing.storage_key
         existing.storage_key = key
+        existing.external_url = None
         existing.label = config[doc_type].get("label") or DOC_DEFINITIONS[doc_type]
         existing.original_name = (filename or "")[:255] or None
         existing.mime = mime
@@ -1119,6 +1130,127 @@ async def save_document(
         resource_id=str(row.id),
         before=before,
         after={"docType": doc_type, "sha256": digest, "sizeBytes": len(data)},
+    )
+    return document
+
+
+def _validate_google_drive_url(raw_url: str) -> str:
+    """Validate that a submitted URL is an https Google Drive / Docs file link."""
+    import re
+    from urllib.parse import urlparse
+
+    url = (raw_url or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc.lower() not in {
+        "drive.google.com",
+        "docs.google.com",
+    }:
+        raise ValidationFailed(
+            "Enter a valid https://drive.google.com or https://docs.google.com file URL."
+        )
+    has_id = bool(
+        re.search(r"/d/[A-Za-z0-9_-]{10,}", parsed.path)
+        or re.search(r"(?:^|&)id=[A-Za-z0-9_-]{10,}", parsed.query)
+    )
+    if not has_id:
+        raise ValidationFailed(
+            "Paste the exact Google Drive file share URL (for example, https://drive.google.com/file/d/.../view)."
+        )
+    return url
+
+
+async def save_document_link(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    edition: ConventionEdition,
+    doc_type: str,
+    url: str,
+) -> RegistrationDocument:
+    row = await registration_for_user(db, user.id, edition.id)
+    if row is None:
+        raise NotFound("Start your registration before submitting documents.")
+    db_settings = await settings_for(db, edition.id, create=True)
+    if not getattr(db_settings, "allow_drive_links", False):
+        raise Conflict(
+            "Google Drive document links are not enabled for this edition.",
+            code="DRIVE_LINKS_DISABLED",
+        )
+    category = await db.get(RegistrationCategory, row.category_id)
+    if category is None:
+        raise NotFound("Registration category not found.")
+    config = {item["type"]: item for item in _required_docs(category)}
+    change = await pending_change(db, row.id)
+    if change is not None:
+        target = await db.get(RegistrationCategory, change.to_category_id)
+        if target is not None:
+            for item in _required_docs(target):
+                config.setdefault(item["type"], item)
+    if doc_type not in config or doc_type not in DOC_DEFINITIONS:
+        raise ValidationFailed("That document is not part of your registration category.")
+    if not _can_submit_documents(
+        row, allow_resubmission=bool(db_settings.allow_resubmission)
+    ):
+        raise Conflict(
+            "Your documents are locked while the registration is approved or closed.",
+            code="DOCUMENTS_LOCKED",
+        )
+
+    clean_url = _validate_google_drive_url(url)
+    digest = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()
+
+    existing = (
+        await db.execute(
+            select(RegistrationDocument).where(
+                RegistrationDocument.registration_id == row.id,
+                RegistrationDocument.doc_type == doc_type,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        old_key = existing.storage_key
+        existing.storage_key = "external:drive"
+        existing.external_url = clean_url
+        existing.label = config[doc_type].get("label") or DOC_DEFINITIONS[doc_type]
+        existing.original_name = "Google Drive Link"
+        existing.mime = "text/uri-list"
+        existing.size_bytes = 0
+        existing.sha256 = digest
+        existing.status = "pending"
+        existing.review_note = None
+        existing.uploaded_at = datetime.now(UTC)
+        document = existing
+        if old_key and not old_key.startswith("external:"):
+            try:
+                await get_document_storage().delete(old_key)
+            except Exception:
+                pass
+    else:
+        document = RegistrationDocument(
+            registration_id=row.id,
+            doc_type=doc_type,
+            label=config[doc_type].get("label") or DOC_DEFINITIONS[doc_type],
+            storage_key="external:drive",
+            external_url=clean_url,
+            original_name="Google Drive Link",
+            mime="text/uri-list",
+            size_bytes=0,
+            sha256=digest,
+            status="pending",
+        )
+        db.add(document)
+
+    row.last_document_at = datetime.now(UTC)
+    await db.flush()
+    await record(
+        db,
+        request,
+        actor_id=user.id,
+        actor_role="participant",
+        action="college_registration.document_link_saved",
+        resource_type="college_registration",
+        resource_id=str(row.id),
+        after={"docType": doc_type, "externalUrl": clean_url},
     )
     return document
 
@@ -1293,16 +1425,24 @@ async def submit_for_payment(
     row.category_name = category.name
     row.category_code = category.code
 
+    from app.services.editions import current_policy
+    from app.services.payments import attach_gateway_order, calculate_platform_fee
+
+    try:
+        policy = await current_policy(db, edition.id)
+    except NotFound:
+        policy = None
+    platform_fee, total_amount = calculate_platform_fee(amount, policy)
+
     existing_order = await db.get(PaymentOrder, row.order_id) if row.order_id else None
     if (
         existing_order is not None
         and existing_order.status == "created"
-        and existing_order.amount_paise == amount
+        and existing_order.amount_paise == total_amount
+        and int(getattr(existing_order, "platform_fee_paise", 0) or 0) == platform_fee
         and existing_order.purpose == "college_registration"
     ):
         order = existing_order
-        from app.services.payments import attach_gateway_order
-
         await attach_gateway_order(db, order)
     else:
         # The order being replaced must stop being payable. It kept a live
@@ -1315,15 +1455,14 @@ async def submit_for_payment(
             edition_id=edition.id,
             user_id=user.id,
             purpose="college_registration",
-            amount_paise=amount,
+            amount_paise=total_amount,
+            platform_fee_paise=platform_fee,
             status="created",
             linked_record_id=row.id,
         )
         db.add(order)
         await db.flush()
         row.order_id = order.id
-        from app.services.payments import attach_gateway_order
-
         await attach_gateway_order(db, order)
     row.submitted_at = datetime.now(UTC)
     await db.flush()
@@ -1349,18 +1488,24 @@ async def _record_late_refund(
     in ``payment_transactions`` and on the gateway. A pending refund row puts it
     in the finance ledger, and the attendee is told what will happen.
     """
-    existing = (
-        await db.execute(
-            select(Refund).where(
-                Refund.order_id == order.id, Refund.status == "pending"
+    already_committed = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order.id,
+                    Refund.status.in_(["pending", "processing", "processed"]),
+                )
             )
         )
-    ).scalars().first()
-    if existing is None:
+        .scalars()
+        .one()
+    ) or 0
+    available = int(order.amount_paise) - int(already_committed)
+    if available > 0:
         db.add(
             Refund(
                 order_id=order.id,
-                amount_paise=int(order.amount_paise),
+                amount_paise=available,
                 reason_code="late_payment",
                 reason_note=f"Payment captured after the registration was closed: {why}",
                 status="pending",
@@ -1420,7 +1565,8 @@ async def finalize_paid(
             db, row, order, "duplicate payment for an already paid registration"
         )
         return row
-    if order.amount_paise != row.fee_paise:
+    order_base = int(order.amount_paise) - int(getattr(order, "platform_fee_paise", 0) or 0)
+    if order_base != row.fee_paise:
         # Raising here rolled back the paid order, the transaction row and the
         # webhook, so a captured payment for a replaced/edited order could never
         # be recorded and Razorpay retried forever. The money is real: park it.
@@ -1435,6 +1581,7 @@ async def finalize_paid(
         "orderId": str(order.id),
         "gatewayOrderId": order.gateway_order_id,
         "amountPaise": order.amount_paise,
+        "platformFeePaise": int(getattr(order, "platform_fee_paise", 0) or 0),
         "currency": order.currency,
         "mock": not get_settings().payments_enabled,
         "transactionId": row.transaction_id,
@@ -2086,48 +2233,11 @@ async def approve(
     return row
 
 
-async def reject(
-    db: AsyncSession,
-    request: Request,
-    row: CollegeRegistration,
-    actor: User,
-    actor_role: str,
-    *,
-    reason_code: str | None,
-    reason: str | None,
-    notes: str | None,
-    initiate_refund_workflow: bool,
-    can_initiate_refund: bool = True,
-) -> CollegeRegistration:
-    code = (reason_code or "").strip() or "other"
-    custom = (reason or "").strip()
-    if code == "other" and len(custom) < 5:
-        raise ValidationFailed("Give a custom rejection explanation.")
-    label = REJECTION_REASONS.get(code) or code.replace("_", " ")
-    full_reason = f"{label}: {custom}" if custom and code != "other" else (custom or label)
-    if row.verification_status == "approved":
-        raise Conflict("An approved registration cannot be rejected.", code="ALREADY_APPROVED")
-    if row.verification_status == "rejected":
-        # A second Reject click re-ran the whole cascade: another pass teardown,
-        # another "Registration cancelled" email and possibly a second refund
-        # row for the same money.
-        raise Conflict("This registration is already rejected.", code="ALREADY_REJECTED")
-    # A rejection must end every way this attendee can still pay into it. The
-    # outstanding order used to stay payable, and the late payment then undid
-    # the rejection (finalize_paid reset it to pending_verification and issued a
-    # fresh pass). Closing the orders here is what makes the rejection stick.
+async def _void_pass_and_documents(
+    db: AsyncSession, row: CollegeRegistration
+) -> None:
+    """Close open orders, mark documents rejected, and cancel/revoke the pass."""
     await _close_open_orders(db, row.user_id, row.edition_id)
-    row.verification_status = "rejected"
-    row.decided_at = datetime.now(UTC)
-    row.decided_by = actor.id
-    row.rejection_code = code
-    row.rejection_reason = full_reason[:2000]
-    row.resubmission_requested_at = datetime.now(UTC)
-    _clear_compliance(row)
-    if notes and notes.strip():
-        stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-        line = f"[{stamp}] {actor.full_name or actor.email} (rejection): {notes.strip()}"
-        row.admin_notes = f"{row.admin_notes}\n{line}" if row.admin_notes else line
     documents = list(
         (
             await db.execute(
@@ -2141,9 +2251,9 @@ async def reject(
         document.status = "rejected"
     await db.flush()
 
-    # Void convention pass and revoke ticket
     from app.models.commerce import ConventionPass
     from app.services.tickets import revoke_for_pass
+
     user_pass = (
         await db.execute(
             select(ConventionPass)
@@ -2159,28 +2269,22 @@ async def reject(
         user_pass.status = "cancelled"
         await revoke_for_pass(db, user_pass.id)
 
-    # Free event seats, refund paid add-on orders, and purge from teams with fair leader handover
-    from app.services.passes import release_event_entitlements
-    await release_event_entitlements(
-        db,
-        user_id=row.user_id,
-        edition_id=row.edition_id,
-        reason=f"Convention pass rejected: {full_reason[:200]}",
-        refund_paid_events=True,
-        # Money only moves if this operator may move it; otherwise the add-on
-        # refunds are parked for the finance desk like the pass refund below.
-        try_gateway=bool(initiate_refund_workflow and can_initiate_refund),
-        actor_id=actor.id,
-    )
 
-    await notify(
-        db,
-        row,
-        "rejected",
-        title="Registration cancelled",
-        values={"reason": full_reason, "category": row.category_name},
-    )
-    if initiate_refund_workflow and can_initiate_refund and row.payment_status == "paid":
+async def _refund_or_park_pass(
+    db: AsyncSession,
+    request: Request | None,
+    row: CollegeRegistration,
+    actor: User | None,
+    actor_role: str | None,
+    *,
+    reason_code: str,
+    full_reason: str,
+    try_gateway: bool,
+) -> None:
+    """Initiate a gateway pass refund or park a pending refund request."""
+    if row.payment_status != "paid":
+        return
+    if try_gateway:
         try:
             await initiate_refund(
                 db,
@@ -2191,11 +2295,8 @@ async def reject(
                 amount_paise=await _refundable_paise(db, row),
                 note=f"Automatic refund on cancellation: {full_reason}",
             )
+            return
         except Exception as exc:
-            # A gateway outage must not roll back the cancellation itself. The
-            # refund is recorded as failed and stays visible for follow-up - but
-            # never overwrite a refund that is already in flight or already paid
-            # out (a second Reject click used to do exactly that).
             if row.refund_status not in {"processing", "completed"}:
                 row.refund_status = "failed"
             await db.flush()
@@ -2206,46 +2307,114 @@ async def reject(
                 title="Refund could not be started",
                 values={"reason": str(exc)[:200]},
             )
+            return
 
-    elif row.payment_status == "paid":
-        # Reaching here means no gateway refund was started - either the operator
-        # cannot move money or they unticked the refund box. Either way the pass
-        # money must not vanish: it is parked as a pending request for finance.
-        pending_amount = await _refundable_paise(db, row)
-        if row.order_id is not None and pending_amount > 0:
-            existing_request = (
-                await db.execute(
-                    select(Refund).where(
-                        Refund.order_id == row.order_id,
-                        Refund.status.in_(["pending", "processing", "processed"]),
-                    )
+    pending_amount = await _refundable_paise(db, row)
+    if row.order_id is not None and pending_amount > 0:
+        existing_request = (
+            await db.execute(
+                select(Refund).where(
+                    Refund.order_id == row.order_id,
+                    Refund.status.in_(["pending", "processing", "processed"]),
                 )
-            ).scalars().first()
-            if existing_request is None:
-                db.add(
-                    Refund(
-                        order_id=row.order_id,
-                        amount_paise=pending_amount,
-                        reason_code=code,
-                        reason_note=f"Rejection refund request: {full_reason[:200]}",
-                        status="pending",
-                        requested_by=actor.id if actor else None,
-                    )
+            )
+        ).scalars().first()
+        if existing_request is None:
+            db.add(
+                Refund(
+                    order_id=row.order_id,
+                    amount_paise=pending_amount,
+                    reason_code=reason_code,
+                    reason_note=f"Rejection refund request: {full_reason[:200]}",
+                    status="pending",
+                    requested_by=actor.id if actor else None,
                 )
-                row.refund_status = "initiated"
-                await db.flush()
-                await notify(
-                    db,
-                    row,
-                    "refund_initiated",
-                    title="Refund requested",
-                    values={"amountPaise": pending_amount, "category": row.category_name},
-                )
+            )
+            row.refund_status = "initiated"
+            await db.flush()
+            await notify(
+                db,
+                row,
+                "refund_initiated",
+                title="Refund requested",
+                values={"amountPaise": pending_amount, "category": row.category_name},
+            )
 
-    # The seats for paid add-on events are cancelled above, so their money has to
-    # come back even when the person rejecting cannot start a gateway refund or
-    # chose not to refund the pass itself. Without this the attendee lost both
-    # the seat and the money, with no ledger row to follow up.
+
+async def reject(
+    db: AsyncSession,
+    request: Request,
+    row: CollegeRegistration,
+    actor: User,
+    actor_role: str,
+    *,
+    reason_code: str | None,
+    reason: str | None,
+    notes: str | None,
+    initiate_refund_workflow: bool,
+    refund_events: bool = True,
+    can_initiate_refund: bool = True,
+) -> CollegeRegistration:
+    code = (reason_code or "").strip() or "other"
+    custom = (reason or "").strip()
+    if code == "other" and len(custom) < 5:
+        raise ValidationFailed("Give a custom rejection explanation.")
+    label = REJECTION_REASONS.get(code) or code.replace("_", " ")
+    full_reason = f"{label}: {custom}" if custom and code != "other" else (custom or label)
+    if row.verification_status == "approved":
+        raise Conflict("An approved registration cannot be rejected.", code="ALREADY_APPROVED")
+    if row.verification_status == "rejected":
+        # A second Reject click re-ran the whole cascade: another pass teardown,
+        # another "Registration cancelled" email and possibly a second refund
+        # row for the same money.
+        raise Conflict("This registration is already rejected.", code="ALREADY_REJECTED")
+    row.verification_status = "rejected"
+    row.decided_at = datetime.now(UTC)
+    row.decided_by = actor.id
+    row.rejection_code = code
+    row.rejection_reason = full_reason[:2000]
+    row.resubmission_requested_at = datetime.now(UTC)
+    _clear_compliance(row)
+    if notes and notes.strip():
+        stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        line = f"[{stamp}] {actor.full_name or actor.email} (rejection): {notes.strip()}"
+        row.admin_notes = f"{row.admin_notes}\n{line}" if row.admin_notes else line
+
+    await _void_pass_and_documents(db, row)
+
+    # Free event seats, optionally refund paid add-on orders, and purge from teams with fair leader handover
+    from app.services.passes import release_event_entitlements
+    await release_event_entitlements(
+        db,
+        user_id=row.user_id,
+        edition_id=row.edition_id,
+        reason=f"Convention pass rejected: {full_reason[:200]}",
+        refund_paid_events=bool(refund_events),
+        # Money only moves if this operator may move it; otherwise the add-on
+        # refunds are parked for the finance desk like the pass refund below.
+        try_gateway=bool(refund_events and can_initiate_refund),
+        actor_id=actor.id,
+    )
+
+    await notify(
+        db,
+        row,
+        "rejected",
+        title="Registration cancelled",
+        values={"reason": full_reason, "category": row.category_name},
+    )
+    if initiate_refund_workflow:
+        await _refund_or_park_pass(
+            db,
+            request,
+            row,
+            actor,
+            actor_role,
+            reason_code=code,
+            full_reason=full_reason,
+            try_gateway=bool(can_initiate_refund),
+        )
+
     await record(
         db,
         request,
@@ -2257,6 +2426,8 @@ async def reject(
         after={
             "reasonCode": code,
             "reason": full_reason,
+            "refundPass": bool(initiate_refund_workflow),
+            "refundEvents": bool(refund_events),
             "refundStatus": row.refund_status,
             "decidedBy": str(actor.id),
         },
@@ -2272,6 +2443,9 @@ async def request_documents(
     actor_role: str,
     documents: list[str],
     message: str,
+    *,
+    refund_pass_on_expiry: bool = True,
+    refund_events_on_expiry: bool = True,
 ) -> CollegeRegistration:
     # Requesting documents on a rejected or refunded registration would
     # silently flip it back to "resubmission_required", un-rejecting it while
@@ -2305,6 +2479,8 @@ async def request_documents(
     row.decided_at = datetime.now(UTC)
     row.decided_by = actor.id
     deadline = _set_compliance(row, COMPLIANCE_KIND_DOCUMENTS)
+    row.compliance_refund_pass = bool(refund_pass_on_expiry)
+    row.compliance_refund_events = bool(refund_events_on_expiry)
     await db.flush()
     await notify(
         db,
@@ -2530,28 +2706,57 @@ async def _enforce_compliance_row(
     request: Request | None = None,
     try_gateway: bool = True,
 ) -> dict[str, int]:
-    """Release the event seats/team slots behind one expired request.
+    """Enforce desk requests whose 24-hour window has expired.
 
-    Paid event orders are refunded through ``release_event_entitlements`` (or
-    recorded as a pending finance refund when the gateway fails). Team
-    memberships are removed by the same call, which hands leadership to the
-    next member instead of disbanding an innocent team.
+    For ``COMPLIANCE_KIND_DOCUMENTS``, expiration performs the same pass
+    revocation as a rejection (marking ``rejected``, cancelling the pass and
+    revoking its ticket, releasing event seats and transferring team
+    leadership), while respecting the admin's ``compliance_refund_pass`` and
+    ``compliance_refund_events`` choices.
     """
     from app.services.passes import release_event_entitlements
 
     kind = row.compliance_kind
     if kind == COMPLIANCE_KIND_DOCUMENTS:
         reason = "24-hour document-correction window expired"
+        refund_pass = bool(row.compliance_refund_pass)
+        refund_events = bool(row.compliance_refund_events)
+
+        row.verification_status = "rejected"
+        row.decided_at = datetime.now(UTC)
+        row.rejection_code = "resubmission_expired"
+        row.rejection_reason = reason
+        await _void_pass_and_documents(db, row)
+
+        result = await release_event_entitlements(
+            db,
+            user_id=row.user_id,
+            edition_id=row.edition_id,
+            reason=reason,
+            refund_paid_events=refund_events,
+            try_gateway=bool(refund_events and try_gateway),
+        )
+        if refund_pass:
+            await _refund_or_park_pass(
+                db,
+                request,
+                row,
+                None,
+                "system",
+                reason_code="resubmission_expired",
+                full_reason=reason,
+                try_gateway=try_gateway,
+            )
     else:
         reason = "24-hour category-change payment window expired"
-    result = await release_event_entitlements(
-        db,
-        user_id=row.user_id,
-        edition_id=row.edition_id,
-        reason=reason,
-        refund_paid_events=True,
-        try_gateway=try_gateway,
-    )
+        result = await release_event_entitlements(
+            db,
+            user_id=row.user_id,
+            edition_id=row.edition_id,
+            reason=reason,
+            refund_paid_events=True,
+            try_gateway=try_gateway,
+        )
     row.compliance_enforced_at = datetime.now(UTC)
     await notify(
         db,
@@ -2608,6 +2813,23 @@ async def _processed_refund_total(db: AsyncSession, order_id: uuid.UUID) -> int:
                 select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                     Refund.order_id == order_id,
                     Refund.status == "processed",
+                )
+            )
+        )
+        .scalars()
+        .one()
+    ) or 0
+    return int(total)
+
+
+async def _committed_refund_total(db: AsyncSession, order_id: uuid.UUID) -> int:
+    """How much of this order is already refunded or queued/in-flight for refund."""
+    total = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                    Refund.order_id == order_id,
+                    Refund.status.in_(("pending", "processing", "processed")),
                 )
             )
         )
@@ -2679,6 +2901,13 @@ async def _processed_refund_total_for(db: AsyncSession, row: CollegeRegistration
     return total
 
 
+async def _committed_refund_total_for(db: AsyncSession, row: CollegeRegistration) -> int:
+    total = 0
+    for order_id in await _refund_order_ids(db, row):
+        total += await _committed_refund_total(db, order_id)
+    return total
+
+
 async def _collected_paise(db: AsyncSession, row: CollegeRegistration) -> int:
     """Money actually captured for this pass.
 
@@ -2698,11 +2927,11 @@ async def _collected_paise(db: AsyncSession, row: CollegeRegistration) -> int:
 
 
 async def _refundable_paise(db: AsyncSession, row: CollegeRegistration) -> int:
-    """What is still owed on this registration: collected minus already refunded."""
+    """What is still owed on this registration: collected minus committed/refunded."""
     if row.order_id is None:
         return 0
-    processed = await _processed_refund_total_for(db, row)
-    return max(0, await _collected_paise(db, row) - processed)
+    committed = await _committed_refund_total_for(db, row)
+    return max(0, await _collected_paise(db, row) - committed)
 
 
 async def _refund_plan(
@@ -2715,7 +2944,7 @@ async def _refund_plan(
         order = await db.get(PaymentOrder, order_id)
         if order is None:
             continue
-        left = int(order.amount_paise) - await _processed_refund_total(db, order_id)
+        left = int(order.amount_paise) - await _committed_refund_total(db, order_id)
         if left <= 0:
             continue
         slice_paise = min(left, remaining_request)
@@ -2763,7 +2992,8 @@ async def initiate_refund(
     # every later attempt). The total spans the base order *and* any paid
     # category-change delta, because both are money on this registration.
     already_refunded = await _processed_refund_total_for(db, row)
-    refundable = await _collected_paise(db, row) - already_refunded
+    already_committed = await _committed_refund_total_for(db, row)
+    refundable = await _collected_paise(db, row) - already_committed
     if refundable <= 0:
         raise Conflict("This registration has already been refunded in full.")
     requested = int(amount_paise)
@@ -3356,19 +3586,26 @@ async def decide_category_change(
 
     if diff > 0:
         if change.order_id is None:
+            from app.services.editions import current_policy
+            from app.services.payments import attach_gateway_order, calculate_platform_fee
+
+            try:
+                policy = await current_policy(db, row.edition_id)
+            except NotFound:
+                policy = None
+            platform_fee, total_delta = calculate_platform_fee(diff, policy)
             order = PaymentOrder(
                 edition_id=row.edition_id,
                 user_id=row.user_id,
                 purpose="college_registration_delta",
-                amount_paise=diff,
+                amount_paise=total_delta,
+                platform_fee_paise=platform_fee,
                 status="created",
                 linked_record_id=row.id,
                 notes={"categoryChangeId": str(change.id), "registrationId": str(row.id)},
             )
             db.add(order)
             await db.flush()
-            from app.services.payments import attach_gateway_order
-
             await attach_gateway_order(db, order)
             change.order_id = order.id
         change.settlement_type = "additional_payment"
@@ -3500,15 +3737,29 @@ async def apply_paid_category_change(
             row.payment_status,
         )
         if order.status == "paid":
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=int(order.amount_paise),
-                    reason_code="category_change_closed",
-                    reason_note="Category change paid after the registration was closed",
-                    status="pending",
+            _committed = (
+                (
+                    await db.execute(
+                        select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                            Refund.order_id == order.id,
+                            Refund.status.in_(["pending", "processing", "processed"]),
+                        )
+                    )
                 )
-            )
+                .scalars()
+                .one()
+            ) or 0
+            _avail = int(order.amount_paise) - int(_committed)
+            if _avail > 0:
+                db.add(
+                    Refund(
+                        order_id=order.id,
+                        amount_paise=_avail,
+                        reason_code="category_change_closed",
+                        reason_note="Category change paid after the registration was closed",
+                        status="pending",
+                    )
+                )
         return
     row.category_id = target.id
     row.category_code = target.code
@@ -3621,6 +3872,8 @@ async def update_config(
             "accepted_formats": "accepted_formats",
             "max_upload_bytes": "max_upload_bytes",
             "allow_resubmission": "allow_resubmission",
+            "allow_drive_links": "allow_drive_links",
+            "broadcast_url": "broadcast_url",
             "helpdesk_phone": "helpdesk_phone",
             "payment_instructions": "payment_instructions",
             "refund_policy": "refund_policy",
@@ -3864,9 +4117,12 @@ async def admin_rows(
             "categoryCode": row.category_code,
             "categoryName": row.category_name,
             "feePaise": row.fee_paise,
+            "additionalPaidPaise": row.additional_paid_paise or 0,
+            "totalPaidPaise": row.fee_paise + (row.additional_paid_paise or 0),
             "paymentStatus": row.payment_status,
             "verificationStatus": row.verification_status,
             "refundStatus": row.refund_status,
+            "refundAmountPaise": row.refund_amount_paise or 0,
             "state": overall_state(row),
             "compliance": compliance_payload(row),
             "complianceKind": row.compliance_kind,

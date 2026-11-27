@@ -49,6 +49,10 @@ class RegistrationSettings(Base, UUIDPrimaryKey, Timestamps):
     )
     max_upload_bytes: Mapped[int] = mapped_column(Integer, default=5_242_880, nullable=False)
     allow_resubmission: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_drive_links: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    broadcast_url: Mapped[str | None] = mapped_column(String(500))
     helpdesk_phone: Mapped[str | None] = mapped_column(String(40), default="+91 94460 00000")
     payment_instructions: Mapped[str | None] = mapped_column(Text)
     refund_policy: Mapped[str | None] = mapped_column(Text)
@@ -182,6 +186,12 @@ class CollegeRegistration(Base, UUIDPrimaryKey, Timestamps):
     compliance_enforced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    compliance_refund_pass: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    compliance_refund_events: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
 
     __table_args__ = (
         UniqueConstraint("edition_id", "user_id", name="uq_college_registration_user"),
@@ -205,6 +215,7 @@ class RegistrationDocument(Base, UUIDPrimaryKey, Timestamps):
     doc_type: Mapped[str] = mapped_column(String(40), nullable=False)
     label: Mapped[str] = mapped_column(String(160), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    external_url: Mapped[str | None] = mapped_column(String(500))
     original_name: Mapped[str | None] = mapped_column(String(255))
     mime: Mapped[str] = mapped_column(String(80), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)

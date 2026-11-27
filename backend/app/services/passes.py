@@ -412,11 +412,25 @@ async def release_event_entitlements(
         ).scalar() or 0
         if still_claimed:
             continue
+        already_committed = int(
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status.in_(("pending", "processing", "processed")),
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        available = max(0, int(order.amount_paise) - already_committed)
+        if available <= 0:
+            continue
         if not try_gateway:
             db.add(
                 Refund(
                     order_id=order.id,
-                    amount_paise=order.amount_paise,
+                    amount_paise=available,
                     reason_code="pass_not_active",
                     reason_note=reason[:500],
                     status="pending",
@@ -431,7 +445,7 @@ async def release_event_entitlements(
             await refund_order(
                 db,
                 order,
-                amount_paise=order.amount_paise,
+                amount_paise=available,
                 reason_code="pass_not_active",
                 reason_note=reason[:500],
                 requested_by_id=actor_id,
@@ -446,7 +460,7 @@ async def release_event_entitlements(
             db.add(
                 Refund(
                     order_id=order.id,
-                    amount_paise=order.amount_paise,
+                    amount_paise=available,
                     reason_code="pass_not_active",
                     reason_note=f"{reason} (gateway refund failed: {str(exc)[:200]})"[:500],
                     status="pending",
@@ -710,6 +724,10 @@ async def set_selections(
                 row.cancelled_at = datetime.now(UTC)
                 row.cancelled_by = "superseded"
                 row.cancellation_reason = "Superseded by included pass selection"
+                if row.order_id is not None:
+                    old_order = await db.get(PaymentOrder, row.order_id)
+                    if old_order is not None and old_order.status == "created":
+                        old_order.status = "expired"
                 from app.services.tickets import revoke_for_registration
                 await revoke_for_registration(db, row.id)
             elif row.team_id is not None:
@@ -865,20 +883,36 @@ async def apply_paid_selection_delta(db: AsyncSession, order) -> None:
     raw_ids = (order.notes or {}).get("eventIds") or []
     event_ids = [uuid.UUID(str(eid)) for eid in raw_ids]
 
-    def _refund(reason_code: str, note: str) -> None:
-        db.add(
-            Refund(
-                order_id=order.id,
-                amount_paise=int(order.amount_paise),
-                reason_code=reason_code,
-                reason_note=note[:500],
-                status="pending",
+    async def _refund(reason_code: str, note: str) -> None:
+        from sqlalchemy import func
+
+        already_committed = (
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
+                        Refund.order_id == order.id,
+                        Refund.status.in_(("pending", "processing", "processed")),
+                    )
+                )
             )
-        )
+            .scalars()
+            .one()
+        ) or 0
+        available = max(0, int(order.amount_paise) - int(already_committed))
+        if available > 0:
+            db.add(
+                Refund(
+                    order_id=order.id,
+                    amount_paise=available,
+                    reason_code=reason_code,
+                    reason_note=note[:500],
+                    status="pending",
+                )
+            )
 
     blocked = await pass_gate_blocked(db, order.user_id, order.edition_id)
     if user_pass is None or user_pass.status != "active" or blocked:
-        _refund(
+        await _refund(
             "pass_blocked",
             blocked or "Convention pass is no longer active.",
         )
@@ -897,7 +931,7 @@ async def apply_paid_selection_delta(db: AsyncSession, order) -> None:
         ).scalars()
     )
     if len(events) != len(event_ids):
-        _refund(
+        await _refund(
             "event_unavailable",
             "One or more selected events closed before payment completed.",
         )
@@ -924,7 +958,7 @@ async def apply_paid_selection_delta(db: AsyncSession, order) -> None:
         policy.included_selection_mode, len(event_ids), policy.included_event_count
     )
     if not count_ok or prior_paid >= required_excess or covered < required_excess:
-        _refund(
+        await _refund(
             "duplicate_selection_delta",
             "The included-event difference was already covered or the selection changed.",
         )

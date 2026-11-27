@@ -54,11 +54,14 @@ class RegistrationDecision(StrictCamelModel):
     reason: str | None = Field(default=None, max_length=2000)
     notes: str | None = Field(default=None, max_length=2000)
     initiate_refund: bool = True
+    refund_events: bool = True
 
 
 class RequestDocuments(StrictCamelModel):
     documents: list[str] = Field(default_factory=list)
     message: str = Field(min_length=3, max_length=2000)
+    refund_pass_on_expiry: bool = True
+    refund_events_on_expiry: bool = True
 
 
 class RegistrationNote(StrictCamelModel):
@@ -95,6 +98,10 @@ class NotificationTemplates(StrictCamelModel):
     refund_failed: str | None = None
 
 
+class DocumentLinkUpload(StrictCamelModel):
+    url: str = Field(min_length=10, max_length=500)
+
+
 class RegistrationSettingsUpdate(StrictCamelModel):
     registration_enabled: bool | None = None
     opens_at: datetime | None = None
@@ -102,6 +109,8 @@ class RegistrationSettingsUpdate(StrictCamelModel):
     accepted_formats: list[str] | None = None
     max_upload_bytes: int | None = Field(default=None, ge=1024, le=20_971_520)
     allow_resubmission: bool | None = None
+    allow_drive_links: bool | None = None
+    broadcast_url: str | None = Field(default=None, max_length=500)
     helpdesk_phone: str | None = Field(default=None, max_length=40)
     payment_instructions: str | None = Field(default=None, max_length=4000)
     refund_policy: str | None = Field(default=None, max_length=4000)

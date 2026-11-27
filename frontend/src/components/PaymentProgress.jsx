@@ -65,7 +65,25 @@ export function PaymentProgress({ stage, amount, slow, title, subtitle }) {
           </div>
         ) : null}
 
-        {/* Stepped Progress Indicator */}
+        {/* Events-style hairline divider with faceted diamond */}
+        <div className="pay-progress-diamond-rule" aria-hidden="true">
+          <span className="pay-diamond-line" />
+          <svg viewBox="0 0 24 24" width="16" height="16" className="pay-diamond-svg">
+            <polygon
+              points="12,1.5 22.5,12 12,22.5 1.5,12"
+              fill="#12100b"
+              stroke="#d4af37"
+              strokeWidth="1.2"
+            />
+            <polygon points="12,3.5 18.5,12 12,12" fill="#fde68a" />
+            <polygon points="12,3.5 5.5,12 12,12" fill="#f5d061" />
+            <polygon points="5.5,12 12,20.5 12,12" fill="#b45309" />
+            <polygon points="18.5,12 12,20.5 12,12" fill="#d97706" />
+          </svg>
+          <span className="pay-diamond-line" />
+        </div>
+
+        {/* Stepped Timeline Indicator */}
         <ol className="pay-progress-stepper">
           {PAY_STEPS.map(([key, label], index) => {
             const done = isSuccess || index < activeIndex;
@@ -74,7 +92,7 @@ export function PaymentProgress({ stage, amount, slow, title, subtitle }) {
               <li key={key} className={`pay-step-row ${done ? 'is-done' : active ? 'is-active' : 'is-pending'}`}>
                 <div className="pay-step-badge">
                   {done ? (
-                    <Check size={12} strokeWidth={3} />
+                    <Check size={11} strokeWidth={3} />
                   ) : (
                     <span>{index + 1}</span>
                   )}

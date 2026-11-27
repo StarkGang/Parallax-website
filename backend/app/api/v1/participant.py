@@ -197,6 +197,21 @@ async def my_registrations(
     return {"data": [v.model_dump(by_alias=True) for v in views]}
 
 
+@router.post("/orders/{order_id}/release")
+async def release_unpaid_order(
+    edition_id: uuid.UUID,
+    order_id: uuid.UUID,
+    ctx: AuthContext = Depends(current_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await _edition(db, edition_id)
+    result = await pricing_service.release_unpaid_order(
+        db, user_id=ctx.user.id, order_id=order_id
+    )
+    await db.commit()
+    return {"data": result}
+
+
 @router.delete(
     "/registrations/{registration_id}",
     dependencies=[Depends(limiter("registration_cancel", 20, 60))],

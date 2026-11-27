@@ -131,6 +131,10 @@ def policy_public(policy: EditionPolicy) -> PolicyPublic:
         selection_change_deadline=aware(policy.selection_change_deadline),
         policy_version=policy.version,
         gst_note=policy.gst_note,
+        platform_fee_bps=int(getattr(policy, "platform_fee_bps", 0) or 0),
+        platform_fee_exempt_under_paise=int(
+            getattr(policy, "platform_fee_exempt_under_paise", 0) or 0
+        ),
     )
 
 
@@ -248,30 +252,20 @@ async def cancel_edition(
         order = await db.get(PaymentOrder, row.order_id)
         if order is None or order.status != "paid":
             continue
-        already = (
+        already_committed = (
             (
                 await db.execute(
                     select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
                         Refund.order_id == order.id,
-                        Refund.status == "processed",
+                        Refund.status.in_(["pending", "processing", "processed"]),
                     )
                 )
             )
             .scalars()
             .one()
         ) or 0
-        remaining = int(order.amount_paise) - int(already)
+        remaining = int(order.amount_paise) - int(already_committed)
         if remaining <= 0:
-            continue
-        existing = (
-            await db.execute(
-                select(Refund).where(
-                    Refund.order_id == order.id,
-                    Refund.status.in_(["pending", "processing"]),
-                )
-            )
-        ).scalars().first()
-        if existing is not None:
             continue
         db.add(
             Refund(
@@ -329,7 +323,10 @@ async def cancel_edition(
 
 
 def serialize_edition(
-    edition: ConventionEdition, policy: EditionPolicy | None = None
+    edition: ConventionEdition,
+    policy: EditionPolicy | None = None,
+    *,
+    helpdesk_phone: str | None = None,
 ) -> EditionPublic:
     return EditionPublic(
         id=edition.id,
@@ -347,6 +344,7 @@ def serialize_edition(
         registration_closes_at=aware(edition.registration_closes_at),
         status=edition.status,
         contact_email=edition.contact_email,
+        helpdesk_phone=helpdesk_phone,
         branding={"theme": edition.theme} if getattr(edition, "theme", None) else {},
         logo_icon_id=edition.logo_icon_id,
         policy=policy_public(policy) if policy else None,
@@ -388,8 +386,8 @@ async def check_policy(
         blocking.append("The pass price cannot be negative.")
 
     count = payload.get("included_event_count")
-    if count is not None and count < 0:
-        blocking.append("The included event count cannot be negative.")
+    if count is not None and count < -1:
+        blocking.append("The included event count must be -1 (unlimited) or at least 0.")
     cap = payload.get("included_value_cap_paise")
     if cap is not None and cap < 0:
         blocking.append("The included value cap cannot be negative.")
@@ -407,7 +405,7 @@ async def check_policy(
             )
         ).scalars()
     )
-    if count is not None and eligible and count > len(eligible):
+    if count is not None and count >= 0 and eligible and count > len(eligible):
         blocking.append(
             f"Only {len(eligible)} included-eligible events exist, so {count} cannot be selected."
         )
@@ -463,6 +461,7 @@ async def apply_policy(
         included_selection_mode=payload.get("included_selection_mode", "exact"),
         included_value_cap_paise=payload.get("included_value_cap_paise"),
         cap_inclusive=payload.get("cap_inclusive", True),
+        allowance_pack_order=int(payload.get("allowance_pack_order", 0) or 0),
         addon_requires_pass=payload.get("addon_requires_pass", True),
         team_members_require_pass=payload.get("team_members_require_pass", True),
         selection_change_deadline=payload.get("selection_change_deadline"),
@@ -470,6 +469,10 @@ async def apply_policy(
         hold_minutes=payload.get("hold_minutes", 15),
         refund_rules=payload.get("refund_rules", {}),
         gst_note=payload.get("gst_note"),
+        platform_fee_bps=int(payload.get("platform_fee_bps", 0) or 0),
+        platform_fee_exempt_under_paise=int(
+            payload.get("platform_fee_exempt_under_paise", 0) or 0
+        ),
         reason=payload.get("reason"),
     )
     db.add(new_p)
@@ -510,7 +513,7 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         await db.execute(
             select(func.sum(PaymentOrder.amount_paise)).where(
                 PaymentOrder.edition_id == edition_id,
-                PaymentOrder.status == "paid",
+                PaymentOrder.status.in_(["paid", "refunded"]),
             )
         )
     ).scalar() or 0
@@ -523,6 +526,45 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
             )
         )
     ).scalar() or 0
+
+    pending_refunds_row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(Refund.amount_paise), 0),
+                func.count(Refund.id),
+            )
+            .join(PaymentOrder, PaymentOrder.id == Refund.order_id)
+            .where(
+                PaymentOrder.edition_id == edition_id,
+                Refund.status.in_(["pending", "processing"]),
+            )
+        )
+    ).first()
+    pending_refunds_paise = int(pending_refunds_row[0] or 0) if pending_refunds_row else 0
+    pending_refunds_count = int(pending_refunds_row[1] or 0) if pending_refunds_row else 0
+
+    recent_refund_rows = (
+        await db.execute(
+            select(Refund)
+            .join(PaymentOrder, PaymentOrder.id == Refund.order_id)
+            .where(PaymentOrder.edition_id == edition_id)
+            .order_by(Refund.created_at.desc())
+            .limit(6)
+        )
+    ).scalars().all()
+    recent_refunds = [
+        {
+            "id": str(rf.id),
+            "orderId": str(rf.order_id),
+            "amountPaise": int(rf.amount_paise or 0),
+            "reasonCode": rf.reason_code,
+            "reasonNote": rf.reason_note,
+            "status": rf.status,
+            "createdAt": aware(rf.created_at).isoformat() if rf.created_at else None,
+            "processedAt": aware(rf.processed_at).isoformat() if rf.processed_at else None,
+        }
+        for rf in recent_refund_rows
+    ]
 
     reg_confirmed = (
         await db.execute(
@@ -737,7 +779,7 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
             )
             .where(
                 PaymentOrder.edition_id == edition_id,
-                PaymentOrder.status == "paid",
+                PaymentOrder.status.in_(["paid", "refunded"]),
             )
             .group_by(func.date(func.coalesce(PaymentOrder.paid_at, PaymentOrder.created_at)))
             .order_by(func.date(func.coalesce(PaymentOrder.paid_at, PaymentOrder.created_at)))
@@ -772,7 +814,10 @@ async def dashboard(db: AsyncSession, edition_id: uuid.UUID) -> DashboardStats:
         passes_sold=passes_sold,
         revenue_paise=revenue,
         refunded_paise=refunded,
-        net_revenue_paise=max(0, int(revenue or 0) - int(refunded or 0)),
+        net_revenue_paise=int(revenue or 0) - int(refunded or 0),
+        pending_refunds_paise=pending_refunds_paise,
+        pending_refunds_count=pending_refunds_count,
+        recent_refunds=recent_refunds,
         registrations_confirmed=reg_confirmed,
         registrations_pending=reg_pending,
         registrations_cancelled=reg_cancelled,

@@ -3062,8 +3062,11 @@ select option:disabled {
   margin-bottom: 18px;
 }
 
-.team-action-card {
+.team-action-grid > .team-action-card {
   height: 100%;
+}
+
+.team-action-card {
   display: flex;
   flex-direction: column;
   gap: 14px;

@@ -76,6 +76,7 @@ const lazyNamed = (load, name) =>
 
 const PortalLayout = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalLayout');
 const PortalProfile = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalProfile');
+const PortalInstructions = lazyNamed(() => import('./pages/Portal.jsx'), 'InstructionsPage');
 const PortalRegistrations = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalRegistrations');
 const PortalTeams = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalTeams');
 const PortalWorklist = lazyNamed(() => import('./pages/Worklist.jsx'), 'PortalWorklist');
@@ -525,6 +526,7 @@ export default function App() {
                 <Route path="registrations" element={<PortalRegistrations />} />
                 <Route path="tickets" element={<Navigate to="/portal/registration" replace />} />
                 <Route path="teams" element={<PortalTeams />} />
+                <Route path="instructions" element={<PortalInstructions />} />
                 <Route path="profile" element={<PortalProfile />} />
               </Route>
 

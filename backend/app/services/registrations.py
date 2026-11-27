@@ -15,6 +15,7 @@ from app.models.commerce import (
     IncludedEventSelection,
     PaymentOrder,
     PaymentTransaction,
+    Refund,
     Registration,
     Team,
     TeamMember,
@@ -75,6 +76,66 @@ async def serialize_registrations(
 ) -> list[RegistrationView]:
     if not registrations:
         return []
+    order_ids = list({r.order_id for r in registrations if r.order_id is not None})
+    refunds_by_order: dict[uuid.UUID, list[Refund]] = {}
+    if order_ids:
+        rf_rows = list(
+            (
+                await db.execute(
+                    select(Refund)
+                    .where(Refund.order_id.in_(order_ids))
+                    .order_by(Refund.created_at.asc())
+                )
+            ).scalars()
+        )
+        for rf in rf_rows:
+            refunds_by_order.setdefault(rf.order_id, []).append(rf)
+
+    # Allocate order-level refunds per registration so multi-seat orders never
+    # show an active sibling as refunded or inflate per-row refund amounts.
+    status_rank = {"processed": 0, "processing": 1, "pending": 2, "failed": 3}
+    reg_refund_info: dict[uuid.UUID, tuple[str | None, int]] = {}
+    regs_by_order: dict[uuid.UUID, list[Registration]] = {}
+    for r in registrations:
+        if r.order_id is not None and int(r.fee_paise or 0) > 0:
+            regs_by_order.setdefault(r.order_id, []).append(r)
+
+    for oid, o_regs in regs_by_order.items():
+        rfs = [
+            rf
+            for rf in refunds_by_order.get(oid, [])
+            if rf.status in status_rank and int(rf.amount_paise or 0) > 0
+        ]
+        if not rfs:
+            continue
+        rfs.sort(key=lambda rf: status_rank.get(rf.status, 9))
+        # Prefer cancelled registrations on this order; fall back to all billable ones
+        # only if none are cancelled (e.g. a manual partial refund on an active order).
+        targets = [r for r in o_regs if r.status == "cancelled"] or o_regs
+        # Track remaining refund pool per status priority
+        pool: list[tuple[str, int]] = [(rf.status, int(rf.amount_paise)) for rf in rfs]
+        for r in targets:
+            cap = int(r.fee_paise or 0)
+            if cap <= 0:
+                continue
+            taken = 0
+            best_status: str | None = None
+            new_pool: list[tuple[str, int]] = []
+            for st, amt in pool:
+                if amt <= 0:
+                    continue
+                if taken < cap:
+                    slice_amt = min(cap - taken, amt)
+                    taken += slice_amt
+                    amt -= slice_amt
+                    if best_status is None or status_rank.get(st, 9) < status_rank.get(best_status, 9):
+                        best_status = st
+                if amt > 0:
+                    new_pool.append((st, amt))
+            pool = new_pool
+            if best_status is not None and taken > 0:
+                reg_refund_info[r.id] = (best_status, taken)
+
     items = []
     for r in registrations:
         event = await db.get(Event, r.event_id)
@@ -104,6 +165,12 @@ async def serialize_registrations(
             payer_id = getattr(team, "paid_by_user_id", None)
         elif order is not None:
             payer_id = order.user_id
+
+        refund_status, refunded_paise = reg_refund_info.get(r.id, (None, 0))
+        if order is not None and order.status == "refunded" and billable:
+            refund_status = "processed"
+            refunded_paise = int(r.fee_paise or 0)
+
         items.append(
             RegistrationView(
                 id=r.id,
@@ -121,6 +188,7 @@ async def serialize_registrations(
                 team_name=team.name if team else None,
                 reservation_expires_at=aware(r.reservation_expires_at),
                 order_id=r.order_id,
+                order_platform_fee_paise=int(getattr(order, "platform_fee_paise", 0) or 0),
                 event_starts_at=aware(event.starts_at) if event else None,
                 event_status=event.status if event else None,
                 cancelled_at=aware(r.cancelled_at) if r.cancelled_at else None,
@@ -130,6 +198,8 @@ async def serialize_registrations(
                 payment_id=txn.gateway_payment_id if txn else None,
                 paid_at=aware(paid_at) if paid_at else None,
                 payment_status=order.status if order else None,
+                refund_status=refund_status,
+                refunded_paise=refunded_paise,
                 billable=billable,
                 billing_role=(
                     "payer"
@@ -291,11 +361,15 @@ async def create_addon_registrations(
         await issue_for_registration(db, r)
 
     if total_paise > 0:
+        from app.services.payments import attach_gateway_order, calculate_platform_fee
+
+        platform_fee, total_payable = calculate_platform_fee(total_paise, policy)
         order = PaymentOrder(
             edition_id=edition.id,
             user_id=user_id,
             purpose="registration",
-            amount_paise=total_paise,
+            amount_paise=total_payable,
+            platform_fee_paise=platform_fee,
             status="created",
         )
         db.add(order)
@@ -303,8 +377,6 @@ async def create_addon_registrations(
         for r in paid_regs:
             r.order_id = order.id
         await db.flush()
-        from app.services.payments import attach_gateway_order
-
         await attach_gateway_order(db, order)
 
     cache_delete_pattern("public:*")
@@ -407,27 +479,30 @@ async def cancel_registration(
                         )
                     ).scalar() or 0
                     shared_with_team = remaining > 0
-            if shared_with_team:
-                already = None
-            else:
-                already = (
-                    await db.execute(
-                        select(RefundRow).where(
-                            RefundRow.order_id == order.id,
-                            RefundRow.status.in_(["pending", "processing", "processed"]),
+            if not shared_with_team:
+                already_committed = int(
+                    (
+                        await db.execute(
+                            select(func.coalesce(func.sum(RefundRow.amount_paise), 0)).where(
+                                RefundRow.order_id == order.id,
+                                RefundRow.status.in_(["pending", "processing", "processed"]),
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                available = max(0, int(order.amount_paise) - already_committed)
+                refund_amt = min(int(reg.fee_paise), available)
+                if refund_amt > 0:
+                    db.add(
+                        RefundRow(
+                            order_id=order.id,
+                            amount_paise=refund_amt,
+                            reason_code="attendee_cancelled",
+                            reason_note=reason or "Cancelled by attendee before the deadline",
+                            status="pending",
                         )
                     )
-                ).scalars().first()
-            if already is None:
-                db.add(
-                    RefundRow(
-                        order_id=order.id,
-                        amount_paise=min(int(reg.fee_paise), int(order.amount_paise)),
-                        reason_code="attendee_cancelled",
-                        reason_note=reason or "Cancelled by attendee before the deadline",
-                        status="pending",
-                    )
-                )
     if reg.team_id is not None:
         from app.services.teams import on_team_registration_cancelled
         await on_team_registration_cancelled(db, reg)
