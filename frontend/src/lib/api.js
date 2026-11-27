@@ -421,6 +421,10 @@ export const adminApi = {
       method: 'POST',
       body: payload,
     }),
+  approveEventRegistration: (editionId, registrationId) =>
+    api(`${adminBase(editionId)}/registrations/${registrationId}/approve`, {
+      method: 'POST',
+    }),
   refundEventRegistration: (editionId, registrationId, payload) =>
     api(`${adminBase(editionId)}/registrations/${registrationId}/refund`, {
       method: 'POST',

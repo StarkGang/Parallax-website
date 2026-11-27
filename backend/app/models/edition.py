@@ -194,6 +194,8 @@ class Announcement(Base, UUIDPrimaryKey, Timestamps):
     body_md: Mapped[str] = mapped_column(Text, nullable=False)
     body_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
     audience: Mapped[str] = mapped_column(String(20), default="public", nullable=False)
+    banner_url: Mapped[str | None] = mapped_column(String(500))
+    show_on_home: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

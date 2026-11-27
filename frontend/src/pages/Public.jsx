@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { fallbackImageUrl, resolveImageUrl } from '../lib/imageUrl.js';
+import { EventGeneratedPoster } from '../components/EventGeneratedPoster.jsx';
+import {
+  EventsColumnsPicker,
+  useEventGridColumns,
+} from '../components/EventsColumnsPicker.jsx';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -32,7 +38,7 @@ import { publicApi } from '../lib/api.js';
 import { gsap, ScrollTrigger, useCardTilt } from '../lib/motion.js';
 
 import { useSite } from '../lib/site.jsx';
-import { date, dateRange, dayLabel, money, time, weekday } from '../lib/format.js';
+import { date, dateRange, dateTime, dayLabel, money, time, weekday } from '../lib/format.js';
 import { eventListPricePaise } from '../lib/pricing.js';
 import {
   Badge,
@@ -232,6 +238,7 @@ function posterBackdrop(event) {
 
 export function EventCard({ event, index = 0 }) {
   const navigate = useNavigate();
+  const [bannerFailed, setBannerFailed] = useState(false);
   const isTeam = event.format === 'team';
   const accent = getEventAccent(event);
   const formatLabel = isTeam
@@ -271,34 +278,28 @@ export function EventCard({ event, index = 0 }) {
       data-mascot-featured={event.isFeatured ? 'true' : undefined}
     >
       <div className="exc-poster">
-        {event.bannerUrl ? (
+        {event.bannerUrl && !bannerFailed ? (
           <img
-            src={event.bannerUrl}
+            src={resolveImageUrl(event.bannerUrl, 960)}
             alt=""
             className="exc-poster-img"
+            referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
             width={480}
             height={320}
+            onError={(e) => {
+              const alt = fallbackImageUrl(event.bannerUrl, 960);
+              if (alt && e.currentTarget.dataset.retried !== '1') {
+                e.currentTarget.dataset.retried = '1';
+                e.currentTarget.src = alt;
+                return;
+              }
+              setBannerFailed(true);
+            }}
           />
         ) : (
-          <div className="exc-poster-fallback">
-            <img
-              src={posterBackdrop(event)}
-              alt=""
-              className="exc-poster-bg"
-              loading="lazy"
-              decoding="async"
-            />
-            <div className="exc-poster-tint" />
-            <div className="exc-poster-glyph">
-              <EventIcon
-                iconId={event.iconId}
-                category={event.categorySlug || event.categoryName}
-                size={42}
-              />
-            </div>
-          </div>
+          <EventGeneratedPoster event={event} index={index} />
         )}
 
         <div className="exc-hud-top">
@@ -352,17 +353,13 @@ export function EventCard({ event, index = 0 }) {
         {event.registrationOpen ? (
           <Link
             className="exc-action is-primary"
-            to={isTeam ? '/portal/teams' : '/portal/events'}
-            aria-label={isTeam ? `Create or join team for ${title}` : `Register for ${title}`}
+            to={event.slug ? `/portal/events/${event.slug}` : '/portal/events'}
+            aria-label={`Register for ${title}`}
             onPointerEnter={() =>
-              mascotSay(
-                isTeam
-                  ? `Round up your squad for ${title}, slots go fast.`
-                  : `Ready to lock in ${title}? This is the button.`,
-              )
+              mascotSay(`Ready to lock in ${title}? This is the button.`)
             }
           >
-            <span>{isTeam ? 'Join team' : 'Register'}</span>
+            <span>Register</span>
             <ArrowRight size={11} strokeWidth={2.4} aria-hidden="true" />
           </Link>
         ) : (
@@ -1007,29 +1004,73 @@ export function Home() {
         </div>
       </section>
 
-      {announcements.length ? (
+      {announcements.filter((item) => item.showOnHome).map((item) => (
+        <section
+          key={item.id}
+          className="px-about-visual-band"
+          aria-label={`Announcement: ${item.title}`}
+          onPointerEnter={() => mascotSay('Fresh from the organisers, worth a skim.')}
+        >
+          <div className="px-about-container px-about-visual-grid">
+            <div className="px-about-visual-media">
+              <img
+                src={resolveImageUrl(item.bannerUrl, 1200) || ABOUT_VISUAL}
+                alt={item.title}
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = ABOUT_VISUAL;
+                }}
+              />
+            </div>
+            <div className="px-about-visual-copy">
+              <div className="px-about-visual-brand">
+                <img src={NSSCE} alt="" />
+                <div>
+                  <span className="px-about-acid-tag">
+                    ANNOUNCEMENT &middot; {date(item.publishedAt)}
+                  </span>
+                  <h3>{item.title}</h3>
+                </div>
+              </div>
+              <div
+                className="rich-text"
+                style={{ color: 'rgba(246, 244, 239, 0.78)', lineHeight: 1.65 }}
+                dangerouslySetInnerHTML={{
+                  __html: item.bodyHtml || item.bodyMd,
+                }}
+              />
+            </div>
+          </div>
+        </section>
+      ))}
+
+      {announcements.some((item) => !item.showOnHome) ? (
         <section
           className="section news-section"
           onPointerEnter={() => mascotSay('Fresh from the organisers, worth a skim.')}
         >
           <SectionHead kicker="Bulletin" title="From the organisers" />
           <div className="news-grid">
-            {announcements.map((item, index) => (
-              <Panel
-                key={item.id}
-                className="news-card rise"
-                style={{ animationDelay: `${index * 80}ms` }}
-              >
-                <span className="mono-note">{date(item.publishedAt)}</span>
-                <h3>{item.title}</h3>
-                <div
-                  className="rich-text"
-                  dangerouslySetInnerHTML={{
-                    __html: item.bodyHtml || item.bodyMd,
-                  }}
-                />
-              </Panel>
-            ))}
+            {announcements
+              .filter((item) => !item.showOnHome)
+              .map((item, index) => (
+                <Panel
+                  key={item.id}
+                  className="news-card rise"
+                  style={{ animationDelay: `${index * 80}ms` }}
+                >
+                  <span className="mono-note">{date(item.publishedAt)}</span>
+                  <h3>{item.title}</h3>
+                  <div
+                    className="rich-text"
+                    dangerouslySetInnerHTML={{
+                      __html: item.bodyHtml || item.bodyMd,
+                    }}
+                  />
+                </Panel>
+              ))}
           </div>
         </section>
       ) : null}
@@ -1270,6 +1311,9 @@ export function EventsPage() {
   const [category, setCategory] = useState('');
   const [format, setFormat] = useState('');
   const [page, setPage] = useState(1);
+  const { activeCols, colOptions, handleColsChange } = useEventGridColumns(
+    'parallax.events.cols.v1',
+  );
 
   const categories = useAsync(() => publicApi.categories(slug), [slug], {
     enabled: Boolean(slug),
@@ -1363,10 +1407,17 @@ export function EventsPage() {
               <span>·</span>
               page {meta.page} of {lastPage}
             </span>
-            <span className="results-sort">
-              <Clock3 size={12} strokeWidth={1.8} aria-hidden="true" />
-              Programme order
-            </span>
+            <div className="results-controls">
+              <EventsColumnsPicker
+                activeCols={activeCols}
+                colOptions={colOptions}
+                onChange={handleColsChange}
+              />
+              <span className="results-sort">
+                <Clock3 size={12} strokeWidth={1.8} aria-hidden="true" />
+                Programme order
+              </span>
+            </div>
           </div>
           {list.loading ? (
             <Loading label="Loading the catalogue" rows={2} />
@@ -1392,7 +1443,7 @@ export function EventsPage() {
                       {group.events.length} {group.events.length === 1 ? 'event' : 'events'}
                     </span>
                   </header>
-                  <div className="exc-grid">
+                  <div className="exc-grid" data-cols={activeCols}>
                     {group.events.map((event, index) => (
                       <EventCard key={event.id} event={event} index={index} />
                     ))}
@@ -1445,6 +1496,10 @@ export function EventsPage() {
 export function EventDetail() {
   const { slug } = useSite();
   const { eventSlug } = useParams();
+  const [bannerFailed, setBannerFailed] = useState(false);
+  useEffect(() => {
+    setBannerFailed(false);
+  }, [eventSlug]);
   const detail = useAsync(() => publicApi.event(slug, eventSlug), [slug, eventSlug], {
     enabled: Boolean(slug && eventSlug),
   });
@@ -1555,16 +1610,32 @@ export function EventDetail() {
       >
         <div className="px-about-container px-about-visual-grid">
           <div className="px-about-visual-media">
-            <img
-              src={event.bannerUrl || PARALLAX_BG_VAULT}
-              alt={`${event.title} banner`}
-              loading="lazy"
-            />
+            {event.bannerUrl && !bannerFailed ? (
+              <img
+                src={resolveImageUrl(event.bannerUrl)}
+                alt={`${event.title} banner`}
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                onError={(e) => {
+              const alt = fallbackImageUrl(event.bannerUrl, 960);
+              if (alt && e.currentTarget.dataset.retried !== '1') {
+                e.currentTarget.dataset.retried = '1';
+                e.currentTarget.src = alt;
+                return;
+              }
+              setBannerFailed(true);
+            }}
+              />
+            ) : (
+              <div style={{ width: '100%', height: '100%' }}>
+                <EventGeneratedPoster event={event} />
+              </div>
+            )}
           </div>
           <div className="px-about-visual-copy">
             <div className="px-about-visual-brand">
               <img
-                src={event.iconId ? publicApi.iconUrl(event.iconId) : PARALLAX_BG_VAULT}
+                src={event.iconId ? publicApi.iconUrl(event.iconId) : PARALLAX_MARK}
                 alt=""
                 loading="lazy"
               />
@@ -1619,16 +1690,12 @@ export function EventDetail() {
             <div className="px-about-row-actions">
               <Link
                 className="px-about-pill-btn"
-                to={isTeam ? '/portal/teams' : `/portal/events/${event.slug}`}
+                to={`/portal/events/${event.slug}`}
                 data-mascot-target="event-plan"
-                data-mascot-label={isTeam ? 'Create or join team' : 'Plan this event'}
-                data-mascot-hover={
-                  isTeam
-                    ? 'Round up your squad before slots fill up!'
-                    : 'Ready to lock this one in?'
-                }
+                data-mascot-label="Register in portal"
+                data-mascot-hover="Ready to lock this one in?"
               >
-                {isTeam ? 'Create or join team' : 'Plan this event'}
+                Register in portal
               </Link>
               <Link
                 to="/events"
@@ -1660,6 +1727,7 @@ export function EventDetail() {
 
           <div className="px-event-brief">
             <div className="px-event-brief-main">
+              <span className="px-about-acid-tag">OVERVIEW &amp; GUIDELINES</span>
               {event.descriptionHtml ? (
                 <div
                   className="rich-text"
@@ -1668,6 +1736,25 @@ export function EventDetail() {
               ) : (
                 <p>{event.summary}</p>
               )}
+
+              <div className="px-event-brief-specs">
+                <div>
+                  <span>Schedule</span>
+                  <b>{event.startsAt ? dateTime(event.startsAt) : 'To be announced'}</b>
+                </div>
+                <div>
+                  <span>Venue</span>
+                  <b>{event.venueRoom || 'NSSCE Campus, Palakkad'}</b>
+                </div>
+                <div>
+                  <span>Entry format</span>
+                  <b>{isTeam ? `Team (${event.teamMinSize || 2}–${event.teamMaxSize || 4})` : 'Individual (Solo)'}</b>
+                </div>
+                <div>
+                  <span>Confirmation</span>
+                  <b>{event.requiresApproval ? 'Coordinator approval' : 'Instant on registration'}</b>
+                </div>
+              </div>
 
           {isTeam || event.soloGuideHtml ? (
             <div className="px-event-guide-grid">
@@ -1692,6 +1779,14 @@ export function EventDetail() {
             </div>
           ) : null}
 
+              <div className="px-event-brief-cta">
+                <Link className="px-about-pill-btn" to={`/portal/events/${event.slug}`}>
+                  {event.registrationOpen ? 'Register for this event' : 'Open event in portal'}
+                </Link>
+                <Link className="px-about-inline-link" to="/events">
+                  Browse all events <ArrowUpRight size={14} strokeWidth={2} />
+                </Link>
+              </div>
             </div>
 
             <aside className="px-event-brief-side">

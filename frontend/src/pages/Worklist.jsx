@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -15,6 +15,12 @@ import {
   Users,
 } from 'lucide-react';
 import { portalApi, publicApi } from '../lib/api.js';
+import { resolveImageUrl } from '../lib/imageUrl.js';
+import { EventGeneratedPoster } from '../components/EventGeneratedPoster.jsx';
+import {
+  EventsColumnsPicker,
+  useEventGridColumns,
+} from '../components/EventsColumnsPicker.jsx';
 import { payOrder } from '../lib/pay.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
@@ -87,7 +93,7 @@ function formatLabel(row) {
 }
 
 
-function PortalPlanCard({
+const PortalPlanCard = memo(function PortalPlanCard({
   row,
   selected,
   blocked,
@@ -101,17 +107,12 @@ function PortalPlanCard({
   const detailPath = `/portal/events/${row.slug}`;
   const confirmed = row.seat?.status === 'confirmed';
   const due = Number(row.price?.duePaise || 0);
+  const listPaise = Number(row.price?.listPaise || 0);
   const inBasket = selected;
   const isTeam = row.format === 'team';
   const canAdd = (row.actions || []).includes('add');
   const canPay = (row.actions || []).includes('pay') && row.payment;
   const canTicket = (row.actions || []).includes('ticket');
-  const priceLabel =
-    row.price?.basis === 'included'
-      ? 'Included with pass'
-      : due > 0
-        ? `${money(due)} due`
-        : 'Free';
   const stateLabel = confirmed
     ? 'Confirmed'
     : inBasket
@@ -139,32 +140,17 @@ function PortalPlanCard({
       <div className="exc-poster">
         {row.bannerUrl ? (
           <img
-            src={row.bannerUrl}
+            src={resolveImageUrl(row.bannerUrl, 960)}
             alt=""
             className="exc-poster-img"
+            referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
             width={480}
             height={320}
           />
         ) : (
-          <div className="exc-poster-fallback">
-            <img src={planBackdrop(row)} alt="" className="exc-poster-bg" loading="lazy" />
-            <div className="exc-poster-tint" />
-            <div className="exc-poster-glyph">
-              {row.iconId ? (
-                <img
-                  src={publicApi.iconUrl(row.iconId)}
-                  alt=""
-                  width={52}
-                  height={52}
-                  loading="lazy"
-                />
-              ) : (
-                <span className="wl-plan-glyph">{title.slice(0, 1)}</span>
-              )}
-            </div>
-          </div>
+          <EventGeneratedPoster event={row} />
         )}
       </div>
 
@@ -216,9 +202,8 @@ function PortalPlanCard({
             type="button"
             className="exc-action"
             onClick={() => onToggle(row)}
-            disabled={busy === `toggle-${row.eventId}`}
           >
-            <span>{busy === `toggle-${row.eventId}` ? 'Saving' : 'Remove'}</span>
+            <span>Remove</span>
             <Check size={11} strokeWidth={2.4} aria-hidden="true" />
           </button>
         ) : (
@@ -226,22 +211,40 @@ function PortalPlanCard({
             type="button"
             className="exc-action is-primary"
             onClick={() => onToggle(row)}
-            disabled={blocked || !canAdd || busy === `toggle-${row.eventId}`}
+            disabled={blocked || !canAdd}
           >
-            <span>{busy === `toggle-${row.eventId}` ? 'Saving' : 'Add event'}</span>
+            <span>Add event</span>
             <Plus size={11} strokeWidth={2.4} aria-hidden="true" />
           </button>
         )}
       </div>
 
       <p className="exc-plaque">
-        <b>{priceLabel}</b>
+        <b>
+          {row.price?.basis === 'included' ? (
+            listPaise > 0 ? (
+              <>
+                <s className="exc-was">{money(listPaise)}</s>
+                ₹0
+              </>
+            ) : (
+              'Included with pass'
+            )
+          ) : due > 0 ? (
+            <>
+              {listPaise > due ? <s className="exc-was">{money(listPaise)}</s> : null}
+              {`${money(due)} due`}
+            </>
+          ) : (
+            'Free'
+          )}
+        </b>
         <span aria-hidden="true">·</span>
         <span className="exc-open">{stateLabel}</span>
       </p>
     </article>
   );
-}
+});
 
 function EventRow({
   row,
@@ -431,20 +434,49 @@ export function PortalWorklist() {
   const [joinCode, setJoinCode] = useState('');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const { activeCols, colOptions, handleColsChange } = useEventGridColumns(
+    'parallax.portal.events.cols.v1',
+  );
   const quoteKeys = useRef({});
 
-  // The basket is server state, shared with the event rooms. The page renders
-  // exactly what the server returns — it never keeps a second price.
+  const [optimisticSelected, setOptimisticSelected] = useState({});
+  const desiredMapRef = useRef(new Map());
+  const flushTimerRef = useRef(null);
+  const flushChainRef = useRef(Promise.resolve());
+
+  // The basket is server state, shared with the event rooms. Optimistic
+  // overrides layer on top for 0ms UI feedback and coalesce rapid clicks.
   const basket = payload?.basket || null;
   const basketLines = useMemo(
     () => (basket?.lines || []).filter((line) => line.action === 'create'),
     [basket],
   );
-  const selected = useMemo(
+  const serverSelected = useMemo(
     () => basketLines.map((line) => line.eventId),
     [basketLines],
   );
+  const serverSelectedSet = useMemo(() => new Set(serverSelected), [serverSelected]);
+  const selectedSet = useMemo(() => {
+    const next = new Set(serverSelected);
+    for (const [eventId, want] of Object.entries(optimisticSelected)) {
+      if (want) next.add(eventId);
+      else next.delete(eventId);
+    }
+    return next;
+  }, [serverSelected, optimisticSelected]);
+  const selected = useMemo(() => Array.from(selectedSet), [selectedSet]);
   const quote = basket?.quoteId ? basket : null;
+
+  const serverSelectedRef = useRef(serverSelectedSet);
+  serverSelectedRef.current = serverSelectedSet;
+  const selectedSetRef = useRef(selectedSet);
+  selectedSetRef.current = selectedSet;
+
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    };
+  }, []);
 
   const teamsByEvent = useMemo(() => {
     const map = {};
@@ -452,89 +484,172 @@ export function PortalWorklist() {
     return map;
   }, [teams.data]);
 
-  const selectedRows = rows.filter((row) => selected.includes(row.eventId));
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedSet.has(row.eventId)),
+    [rows, selectedSet],
+  );
   const due = quote?.duePaise || 0;
 
-  const visible = rows.filter((row) => {
-    if (row.seat?.status === 'confirmed') {
-      return false;
-    }
-    if (search) {
-      const needle = search.toLowerCase();
-      if (
-        !`${row.title} ${row.category} ${row.summary || ''}`.toLowerCase().includes(needle)
-      ) {
-        return false;
-      }
-    }
-    if (filter === 'free') {
-      return row.price?.duePaise === 0 || row.state === 'free' || row.state === 'included_possible';
-    }
-    if (filter === 'due') {
-      return row.price?.duePaise > 0 || row.state === 'addon_unpaid' || row.state === 'team_unpaid';
-    }
-    if (filter === 'selected') {
-      return Boolean(row.seat) || selected.includes(row.eventId);
-    }
-    return true;
-  });
+  const visible = useMemo(
+    () =>
+      rows.filter((row) => {
+        if (row.seat?.status === 'confirmed') {
+          return false;
+        }
+        if (search) {
+          const needle = search.toLowerCase();
+          if (
+            !`${row.title} ${row.category} ${row.summary || ''}`.toLowerCase().includes(needle)
+          ) {
+            return false;
+          }
+        }
+        if (filter === 'free') {
+          return row.price?.duePaise === 0 || row.state === 'free' || row.state === 'included_possible';
+        }
+        if (filter === 'due') {
+          return row.price?.duePaise > 0 || row.state === 'addon_unpaid' || row.state === 'team_unpaid';
+        }
+        if (filter === 'selected') {
+          return Boolean(row.seat) || selectedSet.has(row.eventId);
+        }
+        return true;
+      }),
+    [rows, search, filter, selectedSet],
+  );
 
-  const individualRows = visible.filter((row) => row.format !== 'team');
-  const teamRows = visible.filter((row) => row.format === 'team');
+  const individualRows = useMemo(
+    () => visible.filter((row) => row.format !== 'team'),
+    [visible],
+  );
+  const teamRows = useMemo(
+    () => visible.filter((row) => row.format === 'team'),
+    [visible],
+  );
 
   const reloadAll = useCallback(async () => {
     await Promise.all([data.reload(), teams.reload()]);
   }, [data, teams]);
 
-  const toggle = async (row) => {
-    if (busy) return;
-    if (row.seat) {
-      setMessage({
-        tone: 'info',
-        text: 'This event is already confirmed on your list. Remove it first to change it.',
-      });
-      return;
-    }
-    setBusy(`toggle-${row.eventId}`);
-    setMessage(null);
-    try {
-      if (selected.includes(row.eventId)) {
-        await portalApi.removeFromBasket(editionId, row.eventId);
-      } else {
-        await portalApi.addToBasket(editionId, [row.eventId]);
-      }
-      await reloadAll();
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
+  const flushBasketQueue = useCallback(() => {
+    flushChainRef.current = flushChainRef.current.then(async () => {
+      const pending = Array.from(desiredMapRef.current.entries());
+      desiredMapRef.current.clear();
+      if (!pending.length) return;
 
-  const payRow = async (row) => {
-    setBusy(`pay-${row.eventId}`);
-    setMessage(null);
-    try {
-      const outcome = await payOrder(
-        editionId,
-        row.payment,
-        user,
-        row.title,
-      );
-      if (outcome.status === 'paid') {
-        await reloadAll();
-        setMessage({ tone: 'success', text: 'Payment confirmed. Your place and ticket are ready.' });
-      } else if (outcome.status === 'cancelled') {
-        setMessage({ tone: 'info', text: 'Payment cancelled. Your place is still held until the hold expires.' });
-      } else {
-        setMessage({ tone: 'error', text: outcome.message || 'Payment failed.' });
+      const serverSet = serverSelectedRef.current;
+      const toAdd = [];
+      const toRemove = [];
+      for (const [eventId, want] of pending) {
+        if (want && !serverSet.has(eventId)) toAdd.push(eventId);
+        else if (!want && serverSet.has(eventId)) toRemove.push(eventId);
       }
-    } catch (error) {
-      setMessage({ tone: 'error', text: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
+
+      if (!toAdd.length && !toRemove.length) {
+        setOptimisticSelected((prev) => {
+          const next = { ...prev };
+          for (const [eventId] of pending) delete next[eventId];
+          return next;
+        });
+        return;
+      }
+
+      try {
+        let latestBasket = null;
+        if (toAdd.length) {
+          const res = await portalApi.addToBasket(editionId, toAdd);
+          latestBasket = res?.data || latestBasket;
+        }
+        for (const eventId of toRemove) {
+          const res = await portalApi.removeFromBasket(editionId, eventId);
+          latestBasket = res?.data || latestBasket;
+        }
+
+        if (latestBasket) {
+          data.setData((prev) =>
+            prev?.data
+              ? { ...prev, data: { ...prev.data, basket: latestBasket } }
+              : prev,
+          );
+        }
+
+        // If no more clicks arrived while requests were in flight, sync full
+        // allowance & per-row pricing once in the background.
+        if (desiredMapRef.current.size === 0) {
+          const fresh = await portalApi.worklist(editionId);
+          if (desiredMapRef.current.size === 0 && fresh) {
+            data.setData(fresh);
+          }
+        }
+
+        setOptimisticSelected((prev) => {
+          const next = { ...prev };
+          for (const [eventId] of pending) {
+            if (!desiredMapRef.current.has(eventId)) delete next[eventId];
+          }
+          return next;
+        });
+      } catch (error) {
+        setOptimisticSelected((prev) => {
+          const next = { ...prev };
+          for (const [eventId] of pending) {
+            if (!desiredMapRef.current.has(eventId)) delete next[eventId];
+          }
+          return next;
+        });
+        setMessage({ tone: 'error', text: error.message });
+      }
+    });
+  }, [editionId, data]);
+
+  const toggle = useCallback(
+    (row) => {
+      if (row.seat) {
+        setMessage({
+          tone: 'info',
+          text: 'This event is already confirmed on your list. Remove it first to change it.',
+        });
+        return;
+      }
+      const nextWant = !selectedSetRef.current.has(row.eventId);
+      setMessage(null);
+      setOptimisticSelected((prev) => ({ ...prev, [row.eventId]: nextWant }));
+      desiredMapRef.current.set(row.eventId, nextWant);
+
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = setTimeout(() => {
+        flushTimerRef.current = null;
+        flushBasketQueue();
+      }, 80);
+    },
+    [flushBasketQueue],
+  );
+
+  const payRow = useCallback(
+    async (row) => {
+      setBusy(`pay-${row.eventId}`);
+      setMessage(null);
+      try {
+        const outcome = await payOrder(editionId, row.payment, user, row.title);
+        if (outcome.status === 'paid') {
+          await reloadAll();
+          setMessage({ tone: 'success', text: 'Payment confirmed. Your place and ticket are ready.' });
+        } else if (outcome.status === 'cancelled') {
+          setMessage({
+            tone: 'info',
+            text: 'Payment cancelled. Your place is still held until the hold expires.',
+          });
+        } else {
+          setMessage({ tone: 'error', text: outcome.message || 'Payment failed.' });
+        }
+      } catch (error) {
+        setMessage({ tone: 'error', text: error.message });
+      } finally {
+        setBusy('');
+      }
+    },
+    [editionId, user, reloadAll],
+  );
 
   const checkout = async () => {
     if (!quote) return;
@@ -786,7 +901,7 @@ export function PortalWorklist() {
     <>
       <SectionHead
         kicker="STEP 2 · CHOOSE YOUR EVENTS"
-        title="My Events"
+        title="Browse & Add Events"
         subtitle="Pick the events you want to take part in. Your pass covers what it can, and you pay any extra once, at the end."
       />
       <Feedback message={message} />
@@ -909,6 +1024,11 @@ export function PortalWorklist() {
               </button>
             ))}
           </div>
+          <EventsColumnsPicker
+            activeCols={activeCols}
+            colOptions={colOptions}
+            onChange={handleColsChange}
+          />
         </div>
 
         <div className="wl-section">
@@ -919,7 +1039,7 @@ export function PortalWorklist() {
             </span>
             <span className="wl-count">{individualRows.length}</span>
           </div>
-          <div className="exc-grid wl-plan-grid">
+          <div className="exc-grid wl-plan-grid" data-cols={activeCols}>
             {individualRows.length ? (
               individualRows.map((row) => (
                 <PortalPlanCard
@@ -933,6 +1053,10 @@ export function PortalWorklist() {
                   team={teamsByEvent[row.eventId]}
                 />
               ))
+            ) : !search && filter === 'all' && rows.some((r) => r.format !== 'team' && r.seat?.status === 'confirmed') ? (
+              <div className="wl-empty">
+                You&apos;re already registered for all available individual events.
+              </div>
             ) : (
               <div className="wl-empty">No individual events match this filter.</div>
             )}
@@ -948,7 +1072,7 @@ export function PortalWorklist() {
             </span>
             <span className="wl-count">{teamRows.length}</span>
           </div>
-          <div className="exc-grid wl-plan-grid">
+          <div className="exc-grid wl-plan-grid" data-cols={activeCols}>
             {teamRows.length ? (
               teamRows.map((row) => (
                 <PortalPlanCard
@@ -962,6 +1086,10 @@ export function PortalWorklist() {
                   team={teamsByEvent[row.eventId]}
                 />
               ))
+            ) : !search && filter === 'all' && rows.some((r) => r.format === 'team' && r.seat?.status === 'confirmed') ? (
+              <div className="wl-empty">
+                You&apos;re already registered for all available team events.
+              </div>
             ) : (
               <div className="wl-empty">No team events match this filter.</div>
             )}
@@ -1006,6 +1134,16 @@ export function PortalWorklist() {
             </div>
           </div>
         ) : null}
+
+        <div className="wl-cross-nav">
+          <p className="wl-cross-nav-note">
+            Already registered? View your confirmed events, tickets, and receipts.
+          </p>
+          <Link to="/portal/registrations" className="login-machined-btn is-gold">
+            <span>View My Events &amp; Bills</span>
+            <ArrowRight size={14} strokeWidth={2} />
+          </Link>
+        </div>
       </div>
 
       {/* ---------------------------------------------------------------- quote */}

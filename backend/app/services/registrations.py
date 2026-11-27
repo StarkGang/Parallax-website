@@ -261,6 +261,11 @@ async def create_addon_registrations(
 
         fee = e.addon_price_paise
         is_free = fee == 0
+        initial_status = (
+            ("pending" if e.requires_approval else "confirmed")
+            if is_free
+            else "reserved"
+        )
         total_paise += fee
         reg = Registration(
             edition_id=edition.id,
@@ -268,7 +273,7 @@ async def create_addon_registrations(
             event_id=e.id,
             kind="addon",
             fee_paise=fee,
-            status="confirmed" if is_free else "reserved",
+            status=initial_status,
             registration_number=_number("addon"),
             reservation_expires_at=None if is_free else (datetime.now(UTC) + timedelta(minutes=policy.hold_minutes)),
         )
@@ -279,10 +284,10 @@ async def create_addon_registrations(
 
     order = None
     paid_regs = [r for r in regs if r.fee_paise > 0]
-    free_regs = [r for r in regs if r.fee_paise == 0]
+    confirmed_free_regs = [r for r in regs if r.fee_paise == 0 and r.status == "confirmed"]
 
-    # Free add-on events are confirmed immediately and tickets issued without blocking on payment
-    for r in free_regs:
+    # Free add-on events without manual approval are confirmed immediately and tickets issued
+    for r in confirmed_free_regs:
         await issue_for_registration(db, r)
 
     if total_paise > 0:

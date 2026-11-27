@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
 import { ArrowUpRight, LogIn, Menu, X } from 'lucide-react';
 import { useAuth } from './lib/auth.jsx';
 import { useSite } from './lib/site.jsx';
@@ -25,38 +33,84 @@ import {
   TeamPage,
   VenuePage,
 } from './pages/Public.jsx';
-import {
-  PortalLayout,
-  PortalProfile,
-  PortalRegistrations,
-  PortalTeams,
-} from './pages/Portal.jsx';
-import { PortalWorklist } from './pages/Worklist.jsx';
-import { EventRoom } from './pages/EventRoom.jsx';
-import { TeamInvite } from './pages/TeamInvite.jsx';
-import { PortalRegistration } from './pages/PortalRegistration.jsx';
-import {
-  AdminAnnouncements,
-  AdminAttendance,
-  AdminAudit,
-  AdminCheckin,
-  AdminDbPlayground,
-  AdminEvents,
-  AdminLayout,
-  AdminOverview,
-  AdminPayments,
-  AdminPolicy,
-  AdminRegistrations,
-  AdminSettings,
-  AdminTeams,
-  AdminUsers,
-} from './pages/Admin.jsx';
-import {
-  AdminCollegeRegistrations,
-  AdminRegistrationSettings,
-} from './pages/AdminRegistration.jsx';
-import AdminIdCardStudio from './pages/AdminIdCardStudio.jsx';
-import Login from './pages/Login.jsx';
+
+// Route-level code splitting: the heavy portal + admin surfaces (and their
+// large CSS) are downloaded only when a user actually visits them, keeping the
+// public landing bundle — and first load on mobile — small.
+// If a rebuild/deploy invalidated an open tab's old chunk hashes, reload once
+// cleanly instead of crashing into the error boundary.
+const CHUNK_RELOAD_KEY = 'parallax.chunk.reloaded.v1';
+
+function isChunkLoadError(error) {
+  const msg = String(error?.message || error || '');
+  return (
+    msg.includes('Failed to fetch dynamically imported module') ||
+    msg.includes('Importing a module script failed') ||
+    msg.includes('ChunkLoadError') ||
+    msg.includes('Loading chunk')
+  );
+}
+
+function lazyWithRetry(load) {
+  return lazy(() =>
+    load().catch((error) => {
+      if (isChunkLoadError(error) && typeof window !== 'undefined') {
+        try {
+          const last = Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0);
+          if (!last || Date.now() - last > 10000) {
+            window.sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+            window.location.reload();
+            return new Promise(() => {});
+          }
+        } catch {
+          // Ignore storage errors and fall through to error boundary.
+        }
+      }
+      throw error;
+    }),
+  );
+}
+
+const lazyNamed = (load, name) =>
+  lazyWithRetry(() => load().then((m) => ({ default: m[name] })));
+
+const PortalLayout = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalLayout');
+const PortalProfile = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalProfile');
+const PortalRegistrations = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalRegistrations');
+const PortalTeams = lazyNamed(() => import('./pages/Portal.jsx'), 'PortalTeams');
+const PortalWorklist = lazyNamed(() => import('./pages/Worklist.jsx'), 'PortalWorklist');
+const EventRoom = lazyNamed(() => import('./pages/EventRoom.jsx'), 'EventRoom');
+const TeamInvite = lazyNamed(() => import('./pages/TeamInvite.jsx'), 'TeamInvite');
+const PortalRegistration = lazyNamed(
+  () => import('./pages/PortalRegistration.jsx'),
+  'PortalRegistration',
+);
+
+const AdminLayout = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminLayout');
+const AdminOverview = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminOverview');
+const AdminEvents = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminEvents');
+const AdminRegistrations = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminRegistrations');
+const AdminTeams = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminTeams');
+const AdminAnnouncements = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminAnnouncements');
+const AdminAttendance = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminAttendance');
+const AdminAudit = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminAudit');
+const AdminCheckin = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminCheckin');
+const AdminDbPlayground = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminDbPlayground');
+const AdminPayments = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminPayments');
+const AdminPolicy = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminPolicy');
+const AdminSettings = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminSettings');
+const AdminUsers = lazyNamed(() => import('./pages/Admin.jsx'), 'AdminUsers');
+
+const AdminCollegeRegistrations = lazyNamed(
+  () => import('./pages/AdminRegistration.jsx'),
+  'AdminCollegeRegistrations',
+);
+const AdminRegistrationSettings = lazyNamed(
+  () => import('./pages/AdminRegistration.jsx'),
+  'AdminRegistrationSettings',
+);
+const AdminIdCardStudio = lazyWithRetry(() => import('./pages/AdminIdCardStudio.jsx'));
+const Login = lazyWithRetry(() => import('./pages/Login.jsx'));
 
 const PUBLIC_NAV = [
   ['About', '/about'],
@@ -234,7 +288,13 @@ export default function App() {
     const decodeImg = (src) =>
       new Promise((resolve) => {
         const img = new Image();
-        img.onload = () => (img.decode ? img.decode().catch(() => {}).finally(resolve) : resolve());
+        img.onload = () =>
+          img.decode
+            ? img
+                .decode()
+                .catch(() => {})
+                .finally(resolve)
+            : resolve();
         img.onerror = resolve;
         img.src = src;
       });
@@ -246,10 +306,7 @@ export default function App() {
 
     const timeout = new Promise((resolve) => setTimeout(resolve, 2200));
 
-    Promise.race([
-      Promise.all([...urls.map(decodeImg), fontsReady]),
-      timeout,
-    ]).then(() => {
+    Promise.race([Promise.all([...urls.map(decodeImg), fontsReady]), timeout]).then(() => {
       if (!cancelled) setAssetsReady(true);
     });
 
@@ -268,7 +325,9 @@ export default function App() {
       <SamaritanBootLoader
         isReady={isReady}
         onComplete={() => {
-          try { sessionStorage.setItem('px_booted', '1'); } catch {}
+          try {
+            sessionStorage.setItem('px_booted', '1');
+          } catch {}
           setBooted(true);
         }}
       />
@@ -294,11 +353,7 @@ export default function App() {
         }
       >
         <div className="state-actions">
-          <button
-            type="button"
-            className="lusion-btn lusion-btn-primary"
-            onClick={site.refresh}
-          >
+          <button type="button" className="lusion-btn lusion-btn-primary" onClick={site.refresh}>
             <span>Try again</span>
           </button>
         </div>
@@ -329,8 +384,7 @@ export default function App() {
             <span className="nav-wing is-right" aria-hidden="true" />
             <ul className="nav-links">
               {PUBLIC_NAV.map(([label, to]) => {
-                const isActive =
-                  location.pathname === to || location.pathname.startsWith(`${to}/`);
+                const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`);
                 return (
                   <li key={to}>
                     <Link to={to} aria-current={isActive ? 'page' : undefined}>
@@ -403,8 +457,7 @@ export default function App() {
           <nav aria-label="Mobile navigation">
             <ul className="nav-overlay-links">
               {PUBLIC_NAV.map(([label, to]) => {
-                const isActive =
-                  location.pathname === to || location.pathname.startsWith(`${to}/`);
+                const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`);
                 return (
                   <li key={to}>
                     <Link
@@ -433,74 +486,79 @@ export default function App() {
 
       <main id="main">
         <AppErrorBoundary key={location.pathname}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/events" element={<EventsPage />} />
-          <Route path="/events/:eventSlug" element={<EventDetail />} />
-          <Route path="/pass" element={<PassPage />} />
-          <Route path="/schedule" element={<SchedulePage />} />
-          <Route path="/venue" element={<VenuePage />} />
-          <Route path="/faq" element={<FAQPage />} />
-          <Route path="/contact" element={<ContactPage />} />
-          <Route path="/team" element={<TeamPage />} />
-          <Route path="/team/:code" element={<TeamInvite />} />
-          <Route path="/join/:code" element={<JoinRedirect />} />
+          <Suspense fallback={<Loading label="Loading…" rows={0} fullPage />}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/events" element={<EventsPage />} />
+              <Route path="/events/:eventSlug" element={<EventDetail />} />
+              <Route path="/pass" element={<PassPage />} />
+              <Route path="/schedule" element={<SchedulePage />} />
+              <Route path="/venue" element={<VenuePage />} />
+              <Route path="/faq" element={<FAQPage />} />
+              <Route path="/contact" element={<ContactPage />} />
+              <Route path="/team" element={<TeamPage />} />
+              <Route path="/team/:code" element={<TeamInvite />} />
+              <Route path="/join/:code" element={<JoinRedirect />} />
 
-          <Route path="/login" element={<Login />} />
-          <Route path="/google/callback" element={<GoogleCallback />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/google/callback" element={<GoogleCallback />} />
 
-          <Route
-            path="/portal"
-            element={
-              <RequireAuth>
-                <PortalLayout />
-              </RequireAuth>
-            }
-          >
-            <Route index element={<Navigate to="/portal/registration" replace />} />
-            <Route path="registration" element={<PortalRegistration />} />
-            <Route path="pass" element={<Navigate to="/portal/registration" replace />} />
-            <Route path="verification" element={<Navigate to="/portal/registration" replace />} />
-            <Route path="events" element={<PortalWorklist />} />
-            <Route path="events/:eventSlug" element={<EventRoom />} />
-            <Route path="select-events" element={<Navigate to="/portal/events" replace />} />
-            <Route path="registrations" element={<PortalRegistrations />} />
-            <Route path="tickets" element={<Navigate to="/portal/registration" replace />} />
-            <Route path="teams" element={<PortalTeams />} />
-            <Route path="profile" element={<PortalProfile />} />
-          </Route>
+              <Route
+                path="/portal"
+                element={
+                  <RequireAuth>
+                    <PortalLayout />
+                  </RequireAuth>
+                }
+              >
+                <Route index element={<Navigate to="/portal/registration" replace />} />
+                <Route path="registration" element={<PortalRegistration />} />
+                <Route path="pass" element={<Navigate to="/portal/registration" replace />} />
+                <Route
+                  path="verification"
+                  element={<Navigate to="/portal/registration" replace />}
+                />
+                <Route path="events" element={<PortalWorklist />} />
+                <Route path="events/:eventSlug" element={<EventRoom />} />
+                <Route path="select-events" element={<Navigate to="/portal/events" replace />} />
+                <Route path="registrations" element={<PortalRegistrations />} />
+                <Route path="tickets" element={<Navigate to="/portal/registration" replace />} />
+                <Route path="teams" element={<PortalTeams />} />
+                <Route path="profile" element={<PortalProfile />} />
+              </Route>
 
-          <Route
-            path="/manage"
-            element={
-              <RequireStaff>
-                <AdminLayout />
-              </RequireStaff>
-            }
-          >
-            <Route index element={<AdminOverview />} />
-            <Route path="events" element={<AdminEvents />} />
-            <Route path="registrations" element={<AdminRegistrations />} />
-            <Route path="teams" element={<AdminTeams />} />
-            <Route path="registration" element={<AdminCollegeRegistrations />} />
-            <Route path="registration-settings" element={<AdminRegistrationSettings />} />
-            <Route path="id-cards" element={<AdminIdCardStudio />} />
-            <Route path="attendance" element={<AdminAttendance />} />
-            <Route path="check-in" element={<AdminCheckin />} />
-            <Route path="policy" element={<AdminPolicy />} />
-            <Route path="users" element={<AdminUsers />} />
-            <Route path="payments" element={<AdminPayments />} />
-            <Route path="announcements" element={<AdminAnnouncements />} />
-            <Route path="audit" element={<AdminAudit />} />
-            <Route path="database" element={<AdminDbPlayground />} />
-            <Route path="db-playground" element={<AdminDbPlayground />} />
-            <Route path="settings" element={<AdminSettings />} />
-          </Route>
+              <Route
+                path="/manage"
+                element={
+                  <RequireStaff>
+                    <AdminLayout />
+                  </RequireStaff>
+                }
+              >
+                <Route index element={<AdminOverview />} />
+                <Route path="events" element={<AdminEvents />} />
+                <Route path="registrations" element={<AdminRegistrations />} />
+                <Route path="teams" element={<AdminTeams />} />
+                <Route path="registration" element={<AdminCollegeRegistrations />} />
+                <Route path="registration-settings" element={<AdminRegistrationSettings />} />
+                <Route path="id-cards" element={<AdminIdCardStudio />} />
+                <Route path="attendance" element={<AdminAttendance />} />
+                <Route path="check-in" element={<AdminCheckin />} />
+                <Route path="policy" element={<AdminPolicy />} />
+                <Route path="users" element={<AdminUsers />} />
+                <Route path="payments" element={<AdminPayments />} />
+                <Route path="announcements" element={<AdminAnnouncements />} />
+                <Route path="audit" element={<AdminAudit />} />
+                <Route path="database" element={<AdminDbPlayground />} />
+                <Route path="db-playground" element={<AdminDbPlayground />} />
+                <Route path="settings" element={<AdminSettings />} />
+              </Route>
 
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-        <StepUpGate />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
+          <StepUpGate />
         </AppErrorBoundary>
       </main>
 
@@ -510,7 +568,9 @@ export default function App() {
         <SamaritanBootLoader
           isReady={isReady}
           onComplete={() => {
-            try { sessionStorage.setItem('px_booted', '1'); } catch {}
+            try {
+              sessionStorage.setItem('px_booted', '1');
+            } catch {}
             setBooted(true);
           }}
         />

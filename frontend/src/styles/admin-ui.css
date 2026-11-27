@@ -1627,7 +1627,9 @@
 }
 
 .adm-spin {
-  animation: adm-spin 0.9s linear infinite;
+  display: inline-block;
+  transform-origin: center;
+  animation: adm-spin 0.75s linear infinite;
 }
 
 .adm-skel {

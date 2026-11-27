@@ -1,0 +1,93 @@
+/*
+ * Android / touch polish. Every rule is gated behind `pointer: coarse`,
+ * `hover: none`, `max-width`, or safe-area support so the widescreen
+ * (fine-pointer) experience is completely unchanged.
+ */
+
+/* --- Touch ergonomics --------------------------------------------------- */
+@media (pointer: coarse) {
+  /* Kill the grey flash on tap and use the brand accent instead. */
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Hover-only affordances must not stick after a tap on touch. */
+  .lusion-btn:hover,
+  .nav-cta:hover,
+  .event-card:hover,
+  .pass-tier-card:hover {
+    transform: none;
+  }
+
+  /* Anything interactive should feel instant and never trigger double-tap zoom. */
+  a,
+  button,
+  .lusion-btn,
+  .nav-cta,
+  [role='button'] {
+    touch-action: manipulation;
+  }
+
+  /* Comfortable minimum thumb target. */
+  .nav-burger {
+    min-width: 48px;
+    min-height: 48px;
+  }
+}
+
+/* --- Safe areas (Android gesture bar / notches) ------------------------- */
+@supports (padding: max(0px)) {
+  .nav {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .site-footer,
+  footer {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  /* Keep the fixed starfield clear of the gesture bar. */
+  .px-starfield-canvas {
+    height: 100svh;
+  }
+}
+
+/* --- Portrait hero recomposition --------------------------------------- */
+@media (max-width: 720px) and (orientation: portrait) {
+  .ho-container {
+    padding-bottom: max(2rem, env(safe-area-inset-bottom));
+  }
+
+  /* Let the display rows breathe and stack cleanly instead of squeezing. */
+  .ho-row {
+    flex-wrap: wrap;
+    row-gap: 0.25em;
+  }
+
+  .ho-media-mask {
+    flex: 1 1 100%;
+    max-height: 22vh;
+  }
+
+  .ho-meta {
+    margin-top: 1.25rem;
+  }
+
+  .ho-stats {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+}
+
+/* --- Expensive effects: give Android a cheaper path -------------------- */
+@media (pointer: coarse) {
+  /* backdrop-filter is costly on mobile GPUs; fall back to a solid veil. */
+  .nav.is-scrolled,
+  .nav-overlay {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

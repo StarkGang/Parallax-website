@@ -25,6 +25,8 @@ import './Worklist.css';
 import './EventCard.css';
 
 import { PORTAL_AVATARS, usePortalAvatar } from '../lib/portalAvatar.js';
+import { resolveImageUrl } from '../lib/imageUrl.js';
+import { EventGeneratedPoster } from '../components/EventGeneratedPoster.jsx';
 import {
   BRANCH_SUGGESTIONS,
   COLLEGE_SUGGESTIONS,
@@ -109,9 +111,9 @@ async function payOrder(editionId, order, user, title) {
 
 const PORTAL_NAV = [
   ['My Pass & Ticket', '/portal/registration'],
-  ['My Events', '/portal/events'],
+  ['Browse Events', '/portal/events'],
   ['Teams & Invites', '/portal/teams'],
-  ['My Registrations & Bills', '/portal/registrations'],
+  ['My Events & Bills', '/portal/registrations'],
   ['Profile & Settings', '/portal/profile'],
 ];
 
@@ -954,14 +956,7 @@ export function PortalRegistrations() {
     <>
           <SectionHead
             kicker="Selection Record"
-            title="My registrations"
-            action={
-              !isSuspended ? (
-                <Button to="/portal/events" variant="ghost" icon={Plus}>
-                  Open event worklist
-                </Button>
-              ) : null
-            }
+            title="My events & bills"
           />
           <Feedback message={message} />
           {myTeams.length && !hasVisitedTeamsPortal ? (
@@ -979,9 +974,10 @@ export function PortalRegistrations() {
           {!regs.loading && !rows.length ? (
             <Empty title="No registrations yet" desc="Included selections and add-on events appear here.">
               {!isSuspended ? (
-                <Button to="/portal/events" icon={ArrowRight}>
-                  Choose events
-                </Button>
+                <Link to="/portal/events" className="login-machined-btn is-gold">
+                  <span>Browse &amp; Add Events</span>
+                  <ArrowRight size={14} strokeWidth={2} />
+                </Link>
               ) : null}
             </Empty>
           ) : null}
@@ -1045,8 +1041,8 @@ export function PortalRegistrations() {
                           })
                         : 'Time TBA';
 
-                      const bannerSrc =
-                        ev?.posterUrl || ev?.bannerUrl || ev?.imageUrl || regBackdrop(row.category);
+                      const rawBanner = ev?.posterUrl || ev?.bannerUrl || ev?.imageUrl;
+                      const bannerSrc = resolveImageUrl(rawBanner, 800);
                       const venue = ev?.venue || ev?.room || null;
                       const formatLabel = ev?.teamMode === 'team' ? 'Team Event' : 'Solo Entry';
 
@@ -1149,7 +1145,20 @@ export function PortalRegistrations() {
                           </div>
 
                           <div className="reg-tl-banner">
-                            <img src={bannerSrc} alt={title} loading="lazy" />
+                            {bannerSrc ? (
+                              <img
+                                src={bannerSrc}
+                                alt={title}
+                                referrerPolicy="no-referrer"
+                                loading="lazy"
+                                onError={(e) => {
+                                  e.currentTarget.onerror = null;
+                                  e.currentTarget.src = regBackdrop(row.category);
+                                }}
+                              />
+                            ) : (
+                              <EventGeneratedPoster event={ev || row} />
+                            )}
                           </div>
                         </article>
                       );
@@ -1157,6 +1166,17 @@ export function PortalRegistrations() {
                   </div>
                 </section>
               ))}
+            </div>
+          ) : null}
+          {rows.length && !isSuspended ? (
+            <div className="wl-cross-nav">
+              <p className="wl-cross-nav-note">
+                Want to add more competitions or use remaining pass allowance?
+              </p>
+              <Link to="/portal/events" className="login-machined-btn is-gold">
+                <span>Browse &amp; Add Events</span>
+                <ArrowRight size={14} strokeWidth={2} />
+              </Link>
             </div>
           ) : null}
           <Sheet open={Boolean(confirm)} title="Cancel registration" onClose={() => setConfirm(null)}>
@@ -1401,6 +1421,7 @@ export function PortalTeams() {
   const regs = useAsync(() => portalApi.registrations(editionId), [editionId], { enabled: Boolean(editionId) });
   const catalogue = useAsync(() => publicApi.events(slug, { format: 'team', pageSize: 100 }), [slug], {
     enabled: Boolean(slug),
+    ttlMs: 300000,
   });
   const [form, setForm] = useState({ eventId: requestedEventId, name: '' });
   const [joinCode, setJoinCode] = useState('');
@@ -1410,6 +1431,7 @@ export function PortalTeams() {
   // separate, explicit choice, so the prompt offers both.
   const [confirmLeave, setConfirmLeave] = useState(null);
 
+  const loadingTeamEvents = (regs.loading && !regs.data) || (catalogue.loading && !catalogue.data);
   const allTeamEvents = catalogue.data?.data || [];
   const registeredEventIds = new Set(
     (regs.data?.data || [])
@@ -1493,14 +1515,14 @@ export function PortalTeams() {
             <Users size={15} strokeWidth={1.8} />
           </div>
           <h3>Create a team</h3>
-          {!regs.loading && !teamEvents.length ? (
+          {!loadingTeamEvents && !teamEvents.length ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
               <p className="team-action-note">
-                Register for a team event in My Events first before creating a team.
+                Register for a team event in Browse Events first before creating a team.
               </p>
               <div style={{ marginTop: 'auto' }}>
                 <Link to="/portal/events" className="login-machined-btn is-gold">
-                  <span>Go to My Events</span>
+                  <span>Browse Events</span>
                   <ArrowRight size={14} strokeWidth={2} />
                 </Link>
               </div>
@@ -1510,17 +1532,26 @@ export function PortalTeams() {
               <FieldGrid>
                 <Field label="Registered team event">
                   <select
-                    value={form.eventId}
+                    value={loadingTeamEvents && !teamEvents.length ? '' : form.eventId}
+                    disabled={loadingTeamEvents && !teamEvents.length}
                     onChange={(event) => setForm({ ...form, eventId: event.target.value })}
                   >
-                    {teamEvents.map((event) => (
-                      <option key={event.id} value={event.id} disabled={joinedEventIds.has(event.id)}>
-                        {event.title} ({event.teamMinSize}-{event.teamMaxSize})
-                        {joinedEventIds.has(event.id) ? ' — Already in a team' : ''}
-                      </option>
-                    ))}
+                    {loadingTeamEvents && !teamEvents.length ? (
+                      <option value="">Loading registered team events…</option>
+                    ) : (
+                      teamEvents.map((event) => (
+                        <option key={event.id} value={event.id} disabled={joinedEventIds.has(event.id)}>
+                          {event.title} ({event.teamMinSize}-{event.teamMaxSize})
+                          {joinedEventIds.has(event.id) ? ' — Already in a team' : ''}
+                        </option>
+                      ))
+                    )}
                   </select>
-                  {selectedEvent ? (
+                  {loadingTeamEvents && !teamEvents.length ? (
+                    <small className="muted" style={{ display: 'block', marginTop: '6px' }}>
+                      Loading your registered team events…
+                    </small>
+                  ) : selectedEvent ? (
                     <small className="muted" style={{ display: 'block', marginTop: '6px' }}>
                       {selectedEvent.addonPricePaise > 0
                         ? selectedEvent.teamFeeBasis === 'per_team'
@@ -1576,7 +1607,12 @@ export function PortalTeams() {
                     if (ok) setForm((f) => ({ ...f, name: '' }));
                   })
                 }
-                disabled={busy === 'create' || !form.eventId || form.name.trim().length < 2}
+                disabled={
+                  (loadingTeamEvents && !teamEvents.length) ||
+                  busy === 'create' ||
+                  !form.eventId ||
+                  form.name.trim().length < 2
+                }
               >
                 <Users size={14} strokeWidth={2} />
                 <span>{busy === 'create' ? 'Creating…' : 'Create team'}</span>
@@ -1828,13 +1864,12 @@ export function PortalTeams() {
             <>
               You are the leader of <b>{confirmLeave?.name}</b>. Leaving will promote{' '}
               <b>{confirmLeave.members.find((member) => !member.isLeader)?.fullName || 'the next member'}</b>{' '}
-              to team leader so your teammates keep their event registrations — or you can disband
-              the entire team.
+              to team leader — or you can disband the team. Everyone keeps their event registration.
             </>
           ) : (
             <>
-              You are the only member of <b>{confirmLeave?.name}</b>. Leaving will disband the team
-              and cancel its event registration.
+              You are the only member of <b>{confirmLeave?.name}</b>. Disbanding will remove the
+              team, and your event registration will stay active.
             </>
           )}
         </p>
@@ -1866,7 +1901,7 @@ export function PortalTeams() {
               await run(
                 `leave-${team.id}`,
                 () => portalApi.leaveTeam(editionId, team.id, { disband: true }),
-                'Team disbanded. Its event registration was cancelled.',
+                'Team disbanded. Your event registration stays active.',
               );
             }}
           >

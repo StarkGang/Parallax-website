@@ -380,8 +380,12 @@ async def mark_order_paid(
                 if r.status == "cancelled" and r.fee_paise > 0:
                     stranded_paise += int(r.fee_paise)
                 continue
-            r.status = "confirmed"
-            await issue_for_registration(db, r)
+            seat_event = await db.get(Event, r.event_id)
+            if seat_event and seat_event.requires_approval:
+                r.status = "pending"
+            else:
+                r.status = "confirmed"
+                await issue_for_registration(db, r)
         if stranded_paise > 0:
             db.add(
                 Refund(

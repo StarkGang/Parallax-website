@@ -117,6 +117,8 @@ class AnnouncementPublic(CamelModel):
     body_html: str
     published_at: datetime | None = None
     audience: str
+    banner_url: str | None = None
+    show_on_home: bool = False
     event_id: uuid.UUID | None = None
 
 

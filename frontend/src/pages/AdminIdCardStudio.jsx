@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import '../styles/admin-ui.css';
 import {
   CreditCard,
   Download,
@@ -29,7 +30,6 @@ function newCredentialId() {
   return `PX-27-${block}`;
 }
 
-
 export default function AdminIdCardStudio() {
   const { user, roles = [], isStaff } = useAuth();
   const site = useSite();
@@ -58,15 +58,18 @@ export default function AdminIdCardStudio() {
         ? adminApi.customCredentials(edition.id)
         : Promise.resolve({ data: [] }),
     [edition?.id, hasAccess, listVersion],
-    { enabled: Boolean(edition?.id && hasAccess) }
+    { enabled: Boolean(edition?.id && hasAccess) },
   );
   const savedCards = savedQuery.data?.data || [];
 
   // Registered attendees query to load real attendee data for card generation
   const registeredQuery = useAsync(
-    () => (edition?.id ? adminApi.collegeRegistrations(edition.id, { pageSize: 200 }) : Promise.resolve({ data: [] })),
+    () =>
+      edition?.id
+        ? adminApi.collegeRegistrations(edition.id, { pageSize: 200 })
+        : Promise.resolve({ data: [] }),
     [edition?.id],
-    { enabled: Boolean(edition?.id && hasAccess) }
+    { enabled: Boolean(edition?.id && hasAccess) },
   );
   const registeredAttendees = registeredQuery.data?.data?.items || registeredQuery.data?.data || [];
 
@@ -124,8 +127,14 @@ export default function AdminIdCardStudio() {
     setActivePresetKey(preset.key);
     setSavedCredential(null);
     setCardMessage(null);
-    const college = preset.college || (preset.sub?.includes('·') ? preset.sub.split('·')[1].trim() : 'NSS College of Engineering, Palakkad');
-    const branch = preset.branch || (preset.sub?.includes('·') ? preset.sub.split('·')[0].trim() : preset.sub || '');
+    const college =
+      preset.college ||
+      (preset.sub?.includes('·')
+        ? preset.sub.split('·')[1].trim()
+        : 'NSS College of Engineering, Palakkad');
+    const branch =
+      preset.branch ||
+      (preset.sub?.includes('·') ? preset.sub.split('·')[0].trim() : preset.sub || '');
     const name = preset.name || '';
     const id = preset.id || newCredentialId();
     setFormData({
@@ -206,7 +215,10 @@ export default function AdminIdCardStudio() {
       return;
     }
     const college = att.collegeName || 'NSS College of Engineering, Palakkad';
-    const branch = [att.branch || att.course || 'Engineering', att.yearOfStudy ? normalizeYear(att.yearOfStudy) : null]
+    const branch = [
+      att.branch || att.course || 'Engineering',
+      att.yearOfStudy ? normalizeYear(att.yearOfStudy) : null,
+    ]
       .filter(Boolean)
       .join(' · ');
     // The list only ships the passport-photo document id; the bytes are served
@@ -355,8 +367,7 @@ export default function AdminIdCardStudio() {
           const cards = Array.isArray(refreshed?.data) ? refreshed.data : [];
           const match = cards.find(
             (card) =>
-              card.status === 'active' &&
-              card.code === (formData.id || '').trim().toUpperCase(),
+              card.status === 'active' && card.code === (formData.id || '').trim().toUpperCase(),
           );
           setListVersion((value) => value + 1);
           if (match) {
@@ -413,22 +424,49 @@ export default function AdminIdCardStudio() {
   };
 
   return (
-    <div className="admin-page-container" style={{ padding: '24px 16px 60px', maxWidth: '1180px', margin: '0 auto' }}>
+    <div
+      className="admin-page-container"
+      style={{ padding: '24px 16px 60px', maxWidth: '1180px', margin: '0 auto' }}
+    >
       {/* Studio Header */}
       <div className="no-print" style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '16px',
+          }}
+        >
           <div>
             <Eyebrow>CREDENTIAL ENGINE &bull; CR80 SPECIFICATION</Eyebrow>
-            <h1 style={{ fontSize: '26px', fontWeight: '800', letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+            <h1
+              style={{
+                fontSize: '26px',
+                fontWeight: '800',
+                letterSpacing: '-0.02em',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginTop: '4px',
+              }}
+            >
               <CreditCard size={26} color="#6366f1" />
               Official ID Card Studio & Generator
             </h1>
             <p style={{ opacity: 0.75, fontSize: '14px', marginTop: '4px' }}>
-              Standard Waves design with matching tone-on-tone color systems for Parallax 2027 credentials.
+              Standard Waves design with matching tone-on-tone color systems for Parallax 2027
+              credentials.
             </p>
           </div>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <Button variant="accent" onClick={handleSaveCard} disabled={savingCard || !hasAccess} icon={FileCheck2}>
+            <Button
+              variant="accent"
+              onClick={handleSaveCard}
+              disabled={savingCard || !hasAccess}
+              icon={FileCheck2}
+            >
               {savingCard ? 'Saving…' : savedCredential ? 'Save changes' : 'Save card'}
             </Button>
             <Button onClick={handlePrint} icon={Printer} variant="info">
@@ -440,7 +478,7 @@ export default function AdminIdCardStudio() {
         <Feedback message={cardMessage} />
         <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.65 }}>
           {formData.registrationId
-            ? 'This card is linked to a registration. Its QR is that attendee\'s own pass: it admits exactly what their registration already allows, and prints only once the pass is issued.'
+            ? "This card is linked to a registration. Its QR is that attendee's own pass: it admits exactly what their registration already allows, and prints only once the pass is issued."
             : savedCredential
               ? `Editing ${savedCredential.code}. Field changes apply to the saved card and its QR reuses the same signed token.`
               : 'Nothing prints until the card is saved: the QR must carry a token this server issued, or the registration desk cannot verify it.'}
@@ -463,7 +501,10 @@ export default function AdminIdCardStudio() {
             }}
           >
             <ShieldAlert size={18} />
-            <span>View-only mode: Full card generation & custom token override requires Super Admin or Edition Admin authorization.</span>
+            <span>
+              View-only mode: Full card generation & custom token override requires Super Admin or
+              Edition Admin authorization.
+            </span>
           </div>
         )}
       </div>
@@ -479,7 +520,16 @@ export default function AdminIdCardStudio() {
           marginBottom: '28px',
         }}
       >
-        <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65, marginBottom: '10px' }}>
+        <div
+          style={{
+            fontSize: '11px',
+            fontWeight: '700',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            opacity: 0.65,
+            marginBottom: '10px',
+          }}
+        >
           Official Presets &amp; Roles
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -508,12 +558,20 @@ export default function AdminIdCardStudio() {
                         key={p.key}
                         type="button"
                         onClick={() => handleSelectPreset(p)}
-                        title={p.name ? `Load the demo card for ${p.name}` : `Start a ${p.label} card, then type the name`}
+                        title={
+                          p.name
+                            ? `Load the demo card for ${p.name}`
+                            : `Start a ${p.label} card, then type the name`
+                        }
                         style={{
                           padding: '7px 14px',
                           borderRadius: '99px',
-                          border: isActive ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
-                          background: isActive ? '#6366f1' : 'var(--surface-hover, rgba(255, 255, 255, 0.06))',
+                          border: isActive
+                            ? '1px solid #6366f1'
+                            : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
+                          background: isActive
+                            ? '#6366f1'
+                            : 'var(--surface-hover, rgba(255, 255, 255, 0.06))',
                           color: isActive ? '#fff' : 'inherit',
                           fontSize: '12px',
                           fontWeight: '600',
@@ -548,7 +606,10 @@ export default function AdminIdCardStudio() {
               style={{
                 padding: '7px 14px',
                 borderRadius: '99px',
-                border: activePresetKey === 'custom' ? '1px solid #6366f1' : '1px dashed var(--border, rgba(255, 255, 255, 0.2))',
+                border:
+                  activePresetKey === 'custom'
+                    ? '1px solid #6366f1'
+                    : '1px dashed var(--border, rgba(255, 255, 255, 0.2))',
                 background: activePresetKey === 'custom' ? '#6366f1' : 'transparent',
                 color: 'inherit',
                 fontSize: '12px',
@@ -563,8 +624,23 @@ export default function AdminIdCardStudio() {
 
         {/* Load From Live Registered Attendees */}
         {registeredAttendees.length > 0 && (
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))' }}>
-            <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65, marginBottom: '6px' }}>
+          <div
+            style={{
+              marginTop: '12px',
+              paddingTop: '12px',
+              borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))',
+            }}
+          >
+            <div
+              style={{
+                fontSize: '11px',
+                fontWeight: '700',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                opacity: 0.65,
+                marginBottom: '6px',
+              }}
+            >
               Load From Registered Attendees ({registeredAttendees.length})
             </div>
             <select
@@ -602,16 +678,39 @@ export default function AdminIdCardStudio() {
           marginBottom: '28px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div
+            style={{
+              fontSize: '11px',
+              fontWeight: '700',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              opacity: 0.65,
+            }}
+          >
             Saved cards ({savedCards.length})
           </div>
-          <Button size="small" variant="ghost" onClick={() => setListVersion((value) => value + 1)} icon={RefreshCw}>
+          <Button
+            size="small"
+            variant="ghost"
+            onClick={() => setListVersion((value) => value + 1)}
+            icon={RefreshCw}
+          >
             Refresh
           </Button>
         </div>
         {savedQuery.loading ? (
-          <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.6 }}>Loading saved cards…</p>
+          <p style={{ margin: '10px 0 0', fontSize: '12.5px', opacity: 0.6 }}>
+            Loading saved cards…
+          </p>
         ) : savedQuery.error ? (
           <p style={{ margin: '10px 0 0', fontSize: '12.5px', color: '#ef4444' }}>
             Could not load saved cards: {savedQuery.error.message}
@@ -633,15 +732,20 @@ export default function AdminIdCardStudio() {
                   padding: '9px 12px',
                   borderRadius: '10px',
                   border: '1px solid var(--border, rgba(255, 255, 255, 0.1))',
-                  background: savedCredential?.id === card.id ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
+                  background:
+                    savedCredential?.id === card.id ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
                   opacity: card.status === 'active' ? 1 : 0.55,
                 }}
               >
-                <code style={{ fontSize: '12px', fontWeight: '700', minWidth: '96px' }}>{card.code}</code>
+                <code style={{ fontSize: '12px', fontWeight: '700', minWidth: '96px' }}>
+                  {card.code}
+                </code>
                 <span style={{ fontSize: '13px', fontWeight: '600' }}>{card.name}</span>
                 <span style={{ fontSize: '12px', opacity: 0.7 }}>{card.role}</span>
                 {card.status !== 'active' ? (
-                  <span style={{ fontSize: '11px', fontWeight: '700', color: '#ef4444' }}>REVOKED</span>
+                  <span style={{ fontSize: '11px', fontWeight: '700', color: '#ef4444' }}>
+                    REVOKED
+                  </span>
                 ) : null}
                 <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
                   <Button size="small" variant="ghost" onClick={() => applySavedCard(card)}>
@@ -694,22 +798,44 @@ export default function AdminIdCardStudio() {
             gap: '20px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border, rgba(255, 255, 255, 0.08))', paddingBottom: '12px' }}>
-            <span style={{ fontSize: '14px', fontWeight: '700', letterSpacing: '-0.01em' }}>Card Parameters</span>
-            <span style={{ fontSize: '11px', opacity: 0.6, fontWeight: '600' }}>CR80 &bull; 54 &times; 86 MM</span>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              borderBottom: '1px solid var(--border, rgba(255, 255, 255, 0.08))',
+              paddingBottom: '12px',
+            }}
+          >
+            <span style={{ fontSize: '14px', fontWeight: '700', letterSpacing: '-0.01em' }}>
+              Card Parameters
+            </span>
+            <span style={{ fontSize: '11px', opacity: 0.6, fontWeight: '600' }}>
+              CR80 &bull; 54 &times; 86 MM
+            </span>
           </div>
 
           {/* Text Fields */}
           <div className="idc-field-grid">
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 FULL NAME
               </label>
               <input
                 ref={nameInputRef}
                 type="text"
                 value={formData.name}
-                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value.toUpperCase() }))}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, name: e.target.value.toUpperCase() }))
+                }
                 placeholder="Type the holder's full name"
                 disabled={!hasAccess}
                 style={{
@@ -726,7 +852,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 ROLE / DESIGNATION
               </label>
               <input
@@ -748,7 +882,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 PASS TIER
               </label>
               <input
@@ -770,7 +912,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 COLLEGE / UNIVERSITY DETAILS
               </label>
               <input
@@ -800,7 +950,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 DEPARTMENT &amp; BRANCH / STREAM
               </label>
               <input
@@ -830,13 +988,23 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 CREDENTIAL ID
               </label>
               <input
                 type="text"
                 value={formData.id}
-                onChange={(e) => setFormData((prev) => ({ ...prev, id: e.target.value.toUpperCase() }))}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, id: e.target.value.toUpperCase() }))
+                }
                 placeholder="PX-27-XXXXXX"
                 disabled={!hasAccess}
                 style={{
@@ -853,10 +1021,27 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 VERIFIED STATUS
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '38px', fontSize: '13px', cursor: 'pointer' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  height: '38px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={formData.isVerified}
@@ -868,7 +1053,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 GENDER
               </label>
               <select
@@ -885,7 +1078,15 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 MEAL PREFERENCE
               </label>
               <select
@@ -902,10 +1103,27 @@ export default function AdminIdCardStudio() {
             </div>
 
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '4px' }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  opacity: 0.7,
+                  marginBottom: '4px',
+                }}
+              >
                 ACCOMMODATION
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '38px', fontSize: '13px', cursor: 'pointer' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  height: '38px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
                 <input
                   type="checkbox"
                   aria-label="Needs hostel accommodation"
@@ -922,7 +1140,15 @@ export default function AdminIdCardStudio() {
 
           {/* Photo Management */}
           <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', opacity: 0.7, marginBottom: '6px' }}>
+            <label
+              style={{
+                display: 'block',
+                fontSize: '11px',
+                fontWeight: '700',
+                opacity: 0.7,
+                marginBottom: '6px',
+              }}
+            >
               PROFILE PHOTO
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -942,7 +1168,13 @@ export default function AdminIdCardStudio() {
               >
                 <Upload size={14} />
                 Upload Photo
-                <input type="file" accept="image/*" onChange={handlePhotoUpload} disabled={!hasAccess} hidden />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  disabled={!hasAccess}
+                  hidden
+                />
               </label>
               <button
                 type="button"
@@ -964,9 +1196,28 @@ export default function AdminIdCardStudio() {
           </div>
 
           {/* Matching Tone-on-tone Color System */}
-          <div style={{ borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))', paddingTop: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          <div
+            style={{
+              borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))',
+              paddingTop: '16px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '8px',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                }}
+              >
                 Matching Tone-on-Tone Palette
               </span>
               <span style={{ fontSize: '11px', opacity: 0.6 }}>High contrast triad</span>
@@ -985,7 +1236,10 @@ export default function AdminIdCardStudio() {
                   style={{
                     padding: '6px 10px',
                     borderRadius: '8px',
-                    border: !useCustomColor && paletteIdx === idx ? '2px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
+                    border:
+                      !useCustomColor && paletteIdx === idx
+                        ? '2px solid #6366f1'
+                        : '1px solid var(--border, rgba(255, 255, 255, 0.12))',
                     background: 'var(--surface-hover, rgba(255, 255, 255, 0.06))',
                     color: 'inherit',
                     fontSize: '11px',
@@ -1017,11 +1271,29 @@ export default function AdminIdCardStudio() {
                 padding: '12px 14px',
                 borderRadius: '12px',
                 background: 'var(--surface-hover, rgba(255, 255, 255, 0.04))',
-                border: useCustomColor ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.08))',
+                border: useCustomColor
+                  ? '1px solid #6366f1'
+                  : '1px solid var(--border, rgba(255, 255, 255, 0.08))',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                  }}
+                >
                   <input
                     type="color"
                     value={customHex}
@@ -1059,32 +1331,116 @@ export default function AdminIdCardStudio() {
               </div>
 
               {computedCustomPalette && (
-                <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', opacity: 0.8 }}>
-                    <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: computedCustomPalette.dark, border: '1px solid rgba(255,255,255,0.2)' }} />
+                <div
+                  style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '10px',
+                      opacity: 0.8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '3px',
+                        background: computedCustomPalette.dark,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                      }}
+                    />
                     <span>Dark</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', opacity: 0.8 }}>
-                    <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: computedCustomPalette.mid, border: '1px solid rgba(255,255,255,0.2)' }} />
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '10px',
+                      opacity: 0.8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '3px',
+                        background: computedCustomPalette.mid,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                      }}
+                    />
                     <span>Mid</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', opacity: 0.8 }}>
-                    <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: computedCustomPalette.light, border: '1px solid rgba(255,255,255,0.2)' }} />
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '10px',
+                      opacity: 0.8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '3px',
+                        background: computedCustomPalette.light,
+                        border: '1px solid rgba(255,255,255,0.2)',
+                      }}
+                    />
                     <span>Light</span>
                   </div>
-                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#10b981', fontWeight: '600' }}>✓ Matched</span>
+                  <span
+                    style={{
+                      marginLeft: 'auto',
+                      fontSize: '10px',
+                      color: '#10b981',
+                      fontWeight: '600',
+                    }}
+                  >
+                    ✓ Matched
+                  </span>
                 </div>
               )}
             </div>
           </div>
 
           {/* Art Pattern Geometry */}
-          <div style={{ borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))', paddingTop: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          <div
+            style={{
+              borderTop: '1px solid var(--border, rgba(255, 255, 255, 0.08))',
+              paddingTop: '16px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '8px',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                }}
+              >
                 Pattern Geometry
               </span>
-              <span style={{ fontSize: '11px', color: kind === 'waves' ? '#10b981' : 'inherit', fontWeight: '600' }}>
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: kind === 'waves' ? '#10b981' : 'inherit',
+                  fontWeight: '600',
+                }}
+              >
                 {kind === 'waves' ? '★ Standard Waves' : kind}
               </span>
             </div>
@@ -1097,7 +1453,10 @@ export default function AdminIdCardStudio() {
                   style={{
                     padding: '5px 10px',
                     borderRadius: '6px',
-                    border: kind === k ? '1px solid #6366f1' : '1px solid var(--border, rgba(255, 255, 255, 0.1))',
+                    border:
+                      kind === k
+                        ? '1px solid #6366f1'
+                        : '1px solid var(--border, rgba(255, 255, 255, 0.1))',
                     background: kind === k ? '#6366f1' : 'transparent',
                     color: kind === k ? '#fff' : 'inherit',
                     fontSize: '11px',
@@ -1114,7 +1473,10 @@ export default function AdminIdCardStudio() {
         </div>
 
         {/* Right Side: Live CR80 Parallax Pass Preview */}
-        <div className="admin-id-preview-col" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+        <div
+          className="admin-id-preview-col"
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}
+        >
           <div
             className="px-idcard-modal-content px-printable-target"
             style={{
@@ -1148,7 +1510,8 @@ export default function AdminIdCardStudio() {
               lineHeight: 1.5,
             }}
           >
-            Hover or tilt pointer over the cards to experience real-time 3D parallax depth. Clicking print outputs front and back aligned to physical CR80 dimensions.
+            Hover or tilt pointer over the cards to experience real-time 3D parallax depth. Clicking
+            print outputs front and back aligned to physical CR80 dimensions.
           </div>
         </div>
       </div>

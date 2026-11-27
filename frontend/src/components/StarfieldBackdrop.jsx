@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 
-
 export default function StarfieldBackdrop() {
   const canvasRef = useRef(null);
 
@@ -15,9 +14,25 @@ export default function StarfieldBackdrop() {
       window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+    // Device tier: weak / data-saver Android devices get a cheaper field so the
+    // backdrop never costs battery or jank on the phones that can least afford it.
+    const lowPower = (() => {
+      if (typeof navigator === 'undefined') return false;
+      try {
+        const conn = navigator.connection;
+        const saveData = Boolean(conn?.saveData);
+        const cores = navigator.hardwareConcurrency || 8;
+        const memory = navigator.deviceMemory || 8;
+        return saveData || cores <= 4 || memory <= 4;
+      } catch {
+        return false;
+      }
+    })();
+    const dprCap = lowPower ? 1 : 1.5;
+
     let width = window.innerWidth;
     let height = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    let dpr = Math.min(window.devicePixelRatio || 1, dprCap);
 
     const makeRng = (initialSeed) => {
       let seed = initialSeed;
@@ -99,7 +114,10 @@ export default function StarfieldBackdrop() {
       backdropCtx.globalCompositeOperation = 'source-over';
 
       // Dense pinpoint micro-star field (~1,100–1,450 tiny background stars)
-      const microCount = Math.min(1450, Math.max(750, Math.round((width * height) / 1450)));
+      const microCount = Math.min(
+        lowPower ? 700 : 1450,
+        Math.max(lowPower ? 360 : 750, Math.round((width * height) / 1450)),
+      );
       const cosA = Math.cos(bandAngle);
       const sinA = Math.sin(bandAngle);
 
@@ -134,7 +152,10 @@ export default function StarfieldBackdrop() {
 
     // Animated twinkling star field
     const rand = makeRng(42027);
-    const starCount = Math.min(260, Math.max(150, Math.round((width * height) / 7800)));
+    const starCount = Math.min(
+      lowPower ? 110 : 260,
+      Math.max(lowPower ? 70 : 150, Math.round((width * height) / 7800)),
+    );
     const stars = Array.from({ length: starCount }, (_, i) => {
       const layer = i % 3;
       const color = pickStarColor(rand());
@@ -162,7 +183,7 @@ export default function StarfieldBackdrop() {
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      dpr = Math.min(window.devicePixelRatio || 1, dprCap);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
@@ -223,13 +244,11 @@ export default function StarfieldBackdrop() {
         // Multi-harmonic twinkle for organic sparkle
         const wave =
           0.5 +
-          0.5 *
-            Math.sin(t * s.speed + s.phase) *
-            (0.65 + 0.35 * Math.cos(t * s.speed2 + s.phase2));
-        const twinkle = reducedMotion ? 1 : 0.32 + 0.68 * Math.pow(wave, 1.3);
+          0.5 * Math.sin(t * s.speed + s.phase) * (0.65 + 0.35 * Math.cos(t * s.speed2 + s.phase2));
+        const twinkle = reducedMotion || lowPower ? 1 : 0.32 + 0.68 * Math.pow(wave, 1.3);
         const alpha = Math.min(1, s.baseAlpha * twinkle);
 
-        if (s.isHero) {
+        if (s.isHero && !lowPower) {
           const haloR = s.radius * 3.8;
           const halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, haloR);
           halo.addColorStop(0, `rgba(${s.color}, ${(alpha * 0.42).toFixed(3)})`);
@@ -248,15 +267,55 @@ export default function StarfieldBackdrop() {
       }
     };
 
+    // The loop only runs while the canvas is actually on screen and the tab is
+    // visible. Offscreen (most inner pages scroll past it) or backgrounded, the
+    // RAF is cancelled so the backdrop costs nothing — key for Android battery.
+    let running = false;
+    let onScreen = true;
+
+    const startLoop = () => {
+      if (running || reducedMotion || !onScreen || document.hidden) return;
+      running = true;
+      rafId = requestAnimationFrame(draw);
+    };
+
+    const stopLoop = () => {
+      running = false;
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    };
+
+    let io = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver(
+        ([entry]) => {
+          onScreen = entry.isIntersecting;
+          if (onScreen) startLoop();
+          else stopLoop();
+        },
+        { threshold: 0 },
+      );
+      io.observe(canvas);
+    }
+
     if (reducedMotion) {
       draw(performance.now());
       cancelAnimationFrame(rafId);
+      rafId = 0;
     } else {
-      rafId = requestAnimationFrame(draw);
+      document.addEventListener('visibilitychange', onVisibility);
+      startLoop();
     }
 
     return () => {
-      cancelAnimationFrame(rafId);
+      stopLoop();
+      io?.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', resize);
       window.removeEventListener('pointermove', onPointerMove);
     };

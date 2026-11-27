@@ -12,6 +12,8 @@ import {
   Users,
 } from 'lucide-react';
 import { portalApi, publicApi } from '../lib/api.js';
+import { fallbackImageUrl, resolveImageUrl } from '../lib/imageUrl.js';
+import { EventGeneratedPoster } from '../components/EventGeneratedPoster.jsx';
 import { payOrder } from '../lib/pay.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
@@ -99,6 +101,7 @@ export function EventRoom() {
     ? Number(basketLine.duePaise || 0)
     : Number(row?.price?.duePaise || 0);
 
+  const [bannerFailed, setBannerFailed] = useState(false);
   const reload = useCallback(async () => {
     await Promise.all([detail.reload(), work.reload(), teams.reload()]);
   }, [detail, work, teams]);
@@ -258,28 +261,28 @@ export function EventRoom() {
 
       <Feedback message={message} />
 
-      {event.bannerUrl ? (
+      {event.bannerUrl && !bannerFailed ? (
         <div className="room-banner">
-          <img className="room-banner-image" src={event.bannerUrl} alt="" loading="lazy" />
+          <img
+            className="room-banner-image"
+            src={resolveImageUrl(event.bannerUrl)}
+            alt=""
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            onError={(e) => {
+              const alt = fallbackImageUrl(event.bannerUrl, 1200);
+              if (alt && e.currentTarget.dataset.retried !== '1') {
+                e.currentTarget.dataset.retried = '1';
+                e.currentTarget.src = alt;
+                return;
+              }
+              setBannerFailed(true);
+            }}
+          />
         </div>
       ) : (
-        <div
-          className="room-banner"
-          style={{
-            '--accent-soft': `${
-              { cyan: '#38bdf8', amber: '#fbbf24', orange: '#fb923c', violet: '#a78bfa', lime: '#a3e635', rose: '#fb7185', ice: '#7dd3fc' }[
-                event.accent || 'cyan'
-              ] || '#38bdf8'
-            }33`,
-          }}
-        >
-          <div className="room-banner-fallback">
-            {event.iconId ? (
-              <img src={publicApi.iconUrl(event.iconId)} alt="" loading="lazy" />
-            ) : (
-              <span className="room-kicker">{event.category}</span>
-            )}
-          </div>
+        <div className="room-banner">
+          <EventGeneratedPoster event={event} />
         </div>
       )}
 

@@ -1,5 +1,6 @@
 """Admin schemas for dashboard, events, policies, checkin and users."""
 
+import re
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -7,6 +8,28 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from app.schemas.common import CamelModel, StrictCamelModel
+
+
+_GDRIVE_URL_PATTERNS = (
+    r"^https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)",
+    r"^https?://drive\.google\.com/open\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)",
+    r"^https?://drive\.google\.com/uc\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)",
+    r"^https?://drive\.google\.com/thumbnail\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)",
+    r"^https?://drive\.usercontent\.google\.com/download\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)",
+)
+
+
+def normalize_media_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    for pattern in _GDRIVE_URL_PATTERNS:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return f"https://drive.google.com/thumbnail?id={match.group(1)}&sz=w1600"
+    return raw
 
 
 class Metric(CamelModel):
@@ -125,6 +148,11 @@ class EventUpsert(StrictCamelModel):
     sort_order: int = 0
     status: str = Field(default="draft", pattern="^(draft|published|open|closed|cancelled)$")
     change_reason: str | None = None
+
+    @field_validator("banner_url", mode="before")
+    @classmethod
+    def _normalize_banner_url(cls, value: str | None) -> str | None:
+        return normalize_media_url(value)
 
 
 class EventAdminView(CamelModel):
@@ -260,8 +288,15 @@ class AnnouncementUpsert(StrictCamelModel):
     title: str
     body_md: str
     audience: str = Field(default="public", pattern="^(public|participants|staff)$")
+    banner_url: str | None = None
+    show_on_home: bool = False
     event_id: uuid.UUID | None = None
     status: str = Field(default="draft", pattern="^(draft|published)$")
+
+    @field_validator("banner_url", mode="before")
+    @classmethod
+    def _normalize_banner_url(cls, value: str | None) -> str | None:
+        return normalize_media_url(value)
 
 
 class AnnouncementAdminView(CamelModel):
@@ -270,6 +305,8 @@ class AnnouncementAdminView(CamelModel):
     body_md: str
     body_html: str
     audience: str
+    banner_url: str | None = None
+    show_on_home: bool = False
     status: str
     event_id: uuid.UUID | None = None
     published_at: datetime | None = None

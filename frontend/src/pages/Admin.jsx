@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
+import '../styles/admin-ui.css';
 import { usePortalAvatar } from '../lib/portalAvatar.js';
-import { Link, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { resolveImageUrl } from '../lib/imageUrl.js';
+import {
+  Link,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom';
 import jsQR from 'jsqr';
 import {
   ArrowUpRight,
@@ -140,12 +149,7 @@ const ROLE_LABELS = {
 
 // Roles the staff API accepts on a grant or invite (MembershipGrant pattern).
 // ``owner`` is only a legacy label for a super admin; sending it is a 422.
-const GRANTABLE_ROLES = [
-  'edition_admin',
-  'finance_admin',
-  'event_coordinator',
-  'checkin_staff',
-];
+const GRANTABLE_ROLES = ['edition_admin', 'finance_admin', 'event_coordinator', 'checkin_staff'];
 
 // Highest privilege first: when an account still carries stacked roles from
 // before grants became one-per-account, this is the one that describes them.
@@ -196,7 +200,10 @@ function readRail() {
 
 function initialsOf(email) {
   const value = String(email || 'staff');
-  const base = value.split('@')[0].replace(/[^a-zA-Z0-9]+/g, ' ').trim();
+  const base = value
+    .split('@')[0]
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim();
   const parts = base.split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
   return base.slice(0, 2).toUpperCase() || 'PX';
@@ -219,7 +226,10 @@ function navItemActive(to, pathname, searchParams) {
 function pageLabelFor(pathname, searchParams) {
   for (const group of NAV_GROUPS) {
     for (const [label, to] of group.items) {
-      if (navItemActive(to, pathname, searchParams) && !(to === '/manage' && pathname !== '/manage')) {
+      if (
+        navItemActive(to, pathname, searchParams) &&
+        !(to === '/manage' && pathname !== '/manage')
+      ) {
         return label;
       }
     }
@@ -239,6 +249,7 @@ export function AdminLayout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [pageKey, setPageKey] = useState(0);
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
@@ -284,12 +295,15 @@ export function AdminLayout() {
   }, [toast]);
 
   const handleForceRefresh = async () => {
+    if (syncing) return;
     setSyncing(true);
     setToast(null);
+    const minSpin = new Promise((resolve) => setTimeout(resolve, 650));
     try {
-      if (editionId) {
-        await adminApi.sync(editionId);
-      }
+      await Promise.all([
+        editionId ? adminApi.sync(editionId) : Promise.resolve(),
+        minSpin,
+      ]);
       clearAsyncCache();
       try {
         sessionStorage.removeItem('px_cached_edition');
@@ -298,8 +312,10 @@ export function AdminLayout() {
         /* private mode */
       }
       site.refresh();
-      setToast('Server caches purged. Public pages can lag up to 60s at the edge.');
+      setPageKey((k) => k + 1);
+      setToast('Server caches purged and module reloaded.');
     } catch {
+      await minSpin;
       clearAsyncCache();
       try {
         sessionStorage.removeItem('px_cached_edition');
@@ -308,6 +324,7 @@ export function AdminLayout() {
         /* private mode */
       }
       site.refresh();
+      setPageKey((k) => k + 1);
       setToast('Client cache purged and reloaded.');
     } finally {
       setSyncing(false);
@@ -389,10 +406,7 @@ export function AdminLayout() {
     ));
 
   return (
-    <div
-      className={`adm adm-scope ${collapsed ? 'is-collapsed' : ''}`.trim()}
-      data-lenis-prevent
-    >
+    <div className={`adm adm-scope ${collapsed ? 'is-collapsed' : ''}`.trim()} data-lenis-prevent>
       <aside className="adm-sidebar">
         <div className="adm-sidebar-head">
           <Link to="/manage" className="adm-brand" aria-label="Staff operations home">
@@ -473,17 +487,13 @@ export function AdminLayout() {
             </button>
             <button
               type="button"
-              className="adm-icon-btn adm-hide-xs"
+              className="adm-icon-btn"
               title="Refresh server caches"
               aria-label="Refresh server caches"
               onClick={handleForceRefresh}
               disabled={syncing}
             >
-              <RefreshCw
-                size={15}
-                strokeWidth={1.7}
-                className={syncing ? 'adm-spin' : ''}
-              />
+              <RefreshCw size={15} strokeWidth={1.7} className={syncing ? 'adm-spin' : ''} />
             </button>
             <Link
               to="/"
@@ -510,7 +520,9 @@ export function AdminLayout() {
                 aria-haspopup="menu"
                 onClick={() => setAccountOpen((value) => !value)}
               >
-                <span className={`adm-avatar is-round ${activeAvatar.kind === 'glyph' ? 'is-glyph' : ''}`}>
+                <span
+                  className={`adm-avatar is-round ${activeAvatar.kind === 'glyph' ? 'is-glyph' : ''}`}
+                >
                   <img src={activeAvatar.src} alt={activeAvatar.label || roleLabel} />
                 </span>
                 <ChevronDown size={14} strokeWidth={1.8} />
@@ -549,8 +561,8 @@ export function AdminLayout() {
         </header>
 
         <main className="adm-content" id="admin-main" data-lenis-prevent>
-          <AdminErrorBoundary key={location.pathname}>
-            <Outlet />
+          <AdminErrorBoundary key={`${location.pathname}:${pageKey}`}>
+            <Outlet key={pageKey} />
           </AdminErrorBoundary>
         </main>
       </div>
@@ -560,11 +572,7 @@ export function AdminLayout() {
           <div className="adm-drawer-backdrop" onClick={() => setMobileOpen(false)} />
           <div className="adm-drawer" role="dialog" aria-modal="true" aria-label="Staff modules">
             <div className="adm-sidebar-head">
-              <Link
-                to="/manage"
-                className="adm-brand"
-                onClick={() => setMobileOpen(false)}
-              >
+              <Link to="/manage" className="adm-brand" onClick={() => setMobileOpen(false)}>
                 <img src={LOGO} alt="" className="adm-brand-logo" />
                 <span className="adm-brand-text">
                   <b>{edition?.name || 'Parallax'}</b>
@@ -736,7 +744,12 @@ function Sparkline({ values, color = 'var(--adm-chart, #7dd3fc)' }) {
     .map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`)
     .join(' ');
   return (
-    <svg className="adm-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+    <svg
+      className="adm-spark"
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
       <path d={path} fill="none" stroke={color} strokeWidth="1.75" strokeLinecap="round" />
     </svg>
   );
@@ -794,7 +807,12 @@ function Donut({ segments, total, centerLabel = 'total' }) {
 
 function Breakdown({ items, emptyLabel = 'No data yet.', centerLabel = 'total' }) {
   const total = items.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
-  if (!total) return <p className="muted" style={{ margin: 0 }}>{emptyLabel}</p>;
+  if (!total)
+    return (
+      <p className="muted" style={{ margin: 0 }}>
+        {emptyLabel}
+      </p>
+    );
   return (
     <div className="adm-donut-wrap">
       <Donut segments={items} total={total} centerLabel={centerLabel} />
@@ -819,7 +837,11 @@ function Breakdown({ items, emptyLabel = 'No data yet.', centerLabel = 'total' }
 function SalesChart({ rows }) {
   const raw = (rows || []).slice(-14);
   if (!raw.length) {
-    return <p className="muted" style={{ margin: 0 }}>No paid orders recorded yet.</p>;
+    return (
+      <p className="muted" style={{ margin: 0 }}>
+        No paid orders recorded yet.
+      </p>
+    );
   }
 
   // Pad to at least 7 days ending on the latest recorded day so single-day
@@ -865,7 +887,12 @@ function SalesChart({ rows }) {
   return (
     <>
       <div className="adm-chart">
-        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Paid revenue per day">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="Paid revenue per day"
+        >
           <defs>
             <linearGradient id="adm-area" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#7dd3fc" stopOpacity="0.24" />
@@ -879,7 +906,13 @@ function SalesChart({ rows }) {
           <path d={area} fill="url(#adm-area)" />
           <path d={line} className="adm-chart-line" />
           {points.map(([x, y], index) => (
-            <circle key={index} className="adm-chart-dot" cx={x} cy={y} r={series.length > 10 ? 2 : 2.6} />
+            <circle
+              key={index}
+              className="adm-chart-dot"
+              cx={x}
+              cy={y}
+              r={series.length > 10 ? 2 : 2.6}
+            />
           ))}
         </svg>
       </div>
@@ -925,7 +958,9 @@ export function AdminOverview() {
   const checkRate = passesSold ? Math.round((checkedIn / passesSold) * 100) : 0;
   const seatsTaken = data?.seatsTaken ?? 0;
   const seatsCapacity = data?.seatsCapacity ?? 0;
-  const capacityPct = seatsCapacity ? Math.min(100, Math.round((seatsTaken / seatsCapacity) * 100)) : 0;
+  const capacityPct = seatsCapacity
+    ? Math.min(100, Math.round((seatsTaken / seatsCapacity) * 100))
+    : 0;
   const units = Object.entries(data?.seatsTakenByUnit || {});
   const genderSplit = data?.genderSplit || [];
   const foodSplit = data?.foodSplit || [];
@@ -947,9 +982,6 @@ export function AdminOverview() {
           </p>
         </div>
         <div className="adm-head-actions">
-          <Button variant="outline" icon={RefreshCw} onClick={stats.reload} loading={stats.loading}>
-            Refresh
-          </Button>
           <Button to="/manage/check-in" icon={ClipboardCheck}>
             Open check-in
           </Button>
@@ -1067,8 +1099,7 @@ export function AdminOverview() {
             items={foodSplit.map((row) => ({
               label: row.label,
               count: row.count || 0,
-              color:
-                row.key === 'veg' ? '#4ade80' : row.key === 'non_veg' ? '#f87171' : '#404040',
+              color: row.key === 'veg' ? '#4ade80' : row.key === 'non_veg' ? '#f87171' : '#404040',
             }))}
           />
         </div>
@@ -1150,8 +1181,8 @@ export function AdminOverview() {
           )}
           {eventRegistrations.length ? (
             <div className="adm-table-empty" style={{ borderTop: '1px solid var(--adm-border)' }}>
-              Showing all {eventRegistrations.length} events, including events with no
-              registrations yet.
+              Showing all {eventRegistrations.length} events, including events with no registrations
+              yet.
             </div>
           ) : null}
         </div>
@@ -1199,9 +1230,7 @@ export function AdminOverview() {
               <p>Latest {recent.length} passes and event sign-ups.</p>
             </div>
             <div className="adm-head-actions">
-              <Badge tone="muted">
-                {data?.registrationsConfirmed ?? 0} confirmed
-              </Badge>
+              <Badge tone="muted">{data?.registrationsConfirmed ?? 0} confirmed</Badge>
               <Link className="text-link" to="/manage/registrations">
                 View all →
               </Link>
@@ -1222,7 +1251,9 @@ export function AdminOverview() {
                     <tr key={`${row.id || row.registrationNumber || index}`}>
                       <td>
                         <b>{row.userName || row.participantName || row.name || 'Participant'}</b>
-                        <div className="table-sub">{row.registrationNumber || 'Convention pass'}</div>
+                        <div className="table-sub">
+                          {row.registrationNumber || 'Convention pass'}
+                        </div>
                       </td>
                       <td>{row.eventTitle || row.event || 'Convention pass'}</td>
                       <td>
@@ -1294,7 +1325,9 @@ export function AdminOverview() {
             </div>
             {units.map(([unit, taken]) => {
               const unitCapacity = data?.capacityByUnit?.[unit] ?? 0;
-              const pct = unitCapacity ? Math.min(100, Math.round((taken / unitCapacity) * 100)) : 0;
+              const pct = unitCapacity
+                ? Math.min(100, Math.round((taken / unitCapacity) * 100))
+                : 0;
               return (
                 <div className="adm-progress-row" key={unit} style={{ marginTop: 12 }}>
                   <div className="adm-progress-meta">
@@ -1534,7 +1567,7 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           fromLocalInput(form.registrationClosesAt) || fromLocalInput(form.startsAt),
         requiresApproval: form.requiresApproval,
         iconId: form.iconId || null,
-        bannerUrl: form.bannerUrl?.trim() || null,
+        bannerUrl: resolveImageUrl(form.bannerUrl) || null,
         accent: form.accent,
         isFeatured: form.isFeatured,
         sortOrder: Number(form.sortOrder) || 0,
@@ -1588,14 +1621,14 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
           </select>
         </Field>
         <Field
-          label="Event Banner (Supabase Storage or Custom URL)"
-          hint="Upload image or paste image link (16:9 recommended)"
+          label="Event Banner (Supabase, Google Drive, or Custom URL)"
+          hint="Upload image or paste a direct image or Google Drive share link (16:10 / 16:9 landscape recommended)"
         >
           <div className="banner-input-wrap">
             <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
               <input
                 type="url"
-                placeholder="https://... or click Upload Banner"
+                placeholder="https://drive.google.com/file/d/... or https://..."
                 value={form.bannerUrl || ''}
                 onChange={(e) => set('bannerUrl', e.target.value)}
                 style={{ flex: 1 }}
@@ -1640,8 +1673,9 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
                 }}
               >
                 <img
-                  src={form.bannerUrl}
+                  src={resolveImageUrl(form.bannerUrl)}
                   alt="Banner preview"
+                  referrerPolicy="no-referrer"
                   style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }}
                   onError={(e) => {
                     e.target.style.display = 'none';
@@ -2137,8 +2171,9 @@ export function AdminEvents() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 {row.bannerUrl ? (
                   <img
-                    src={row.bannerUrl}
+                    src={resolveImageUrl(row.bannerUrl, 400)}
                     alt=""
+                    referrerPolicy="no-referrer"
                     style={{
                       width: '44px',
                       height: '28px',
@@ -2259,7 +2294,7 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
 
   const toggleEvent = (eid) => {
     setSelectedEvents((prev) =>
-      prev.includes(eid) ? prev.filter((id) => id !== eid) : [...prev, eid]
+      prev.includes(eid) ? prev.filter((id) => id !== eid) : [...prev, eid],
     );
   };
 
@@ -2280,7 +2315,9 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
       return;
     }
     if (!reason.trim()) {
-      setError('A valid audit reason is required (e.g., Bank transaction verified on Razorpay dashboard)');
+      setError(
+        'A valid audit reason is required (e.g., Bank transaction verified on Razorpay dashboard)',
+      );
       return;
     }
 
@@ -2309,8 +2346,8 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
         <div>
           <Eyebrow>DANGER ZONE</Eyebrow>
           <p className="muted" style={{ marginTop: 4 }}>
-            Resolve payment gateway disconnects where an attendee paid via Razorpay but webhooks
-            or the redirect failed to activate their pass or confirm event add-ons. Every change is
+            Resolve payment gateway disconnects where an attendee paid via Razorpay but webhooks or
+            the redirect failed to activate their pass or confirm event add-ons. Every change is
             recorded in the permanent audit log and broadcast to the Telegram ops channel.
           </p>
         </div>
@@ -2350,7 +2387,10 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
         </FieldGrid>
 
         <FieldGrid>
-          <Field label="Razorpay payment ID / transaction ref" hint="Optional — helps the auditor match the payment.">
+          <Field
+            label="Razorpay payment ID / transaction ref"
+            hint="Optional — helps the auditor match the payment."
+          >
             <input
               type="text"
               value={paymentRef}
@@ -2359,7 +2399,10 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
             />
           </Field>
 
-          <Field label="Justification / audit reason" hint="Required. Shown in the audit log and ops channel.">
+          <Field
+            label="Justification / audit reason"
+            hint="Required. Shown in the audit log and ops channel."
+          >
             <input
               type="text"
               value={reason}
@@ -2378,10 +2421,7 @@ function DbPlaygroundSection({ editionId, events = [], onSeeded }) {
         />
 
         {target !== 'pass' && events.length > 0 ? (
-          <Field
-            label="Events to seed / confirm"
-            hint={`${selectedEvents.length} selected`}
-          >
+          <Field label="Events to seed / confirm" hint={`${selectedEvents.length} selected`}>
             <div className="db-event-picker">
               {events.map((ev) => (
                 <label key={ev.id} className="db-event-option">
@@ -2716,7 +2756,9 @@ export function AdminPolicy() {
             </td>
             <td>{money(row.passPricePaise)}</td>
             <td>{row.includedEventCount}</td>
-            <td>{row.includedValueCapPaise != null ? money(row.includedValueCapPaise) : 'No cap'}</td>
+            <td>
+              {row.includedValueCapPaise != null ? money(row.includedValueCapPaise) : 'No cap'}
+            </td>
             <td>{row.includedSelectionMode}</td>
             <td>{date(row.createdAt)}</td>
             <td>{row.reason || '-'}</td>
@@ -2769,7 +2811,11 @@ export function AdminTeams() {
   };
 
   const disband = async (team) => {
-    if (!window.confirm(`Disband team "${team.name}"? All members' seats and tickets will be revoked and paid fees refunded.`)) {
+    if (
+      !window.confirm(
+        `Disband team "${team.name}"? All members' seats and tickets will be revoked and paid fees refunded.`,
+      )
+    ) {
       return;
     }
     setBusy(`disband-${team.id}`);
@@ -2791,7 +2837,12 @@ export function AdminTeams() {
         kicker="Team Events"
         title="Teams & rosters"
         action={
-          <Button variant="ghost" icon={RefreshCw} onClick={() => teams.reload()}>
+          <Button
+            variant="ghost"
+            icon={RefreshCw}
+            onClick={() => teams.reload()}
+            loading={teams.refreshing || teams.loading}
+          >
             Refresh
           </Button>
         }
@@ -3044,10 +3095,7 @@ export function AdminRegistrations() {
           />
         </Field>
         <Field label="Filter by Event">
-          <select
-            value={selectedEventId}
-            onChange={(e) => updateFilters(status, e.target.value)}
-          >
+          <select value={selectedEventId} onChange={(e) => updateFilters(status, e.target.value)}>
             <option value="">All Events</option>
             {eventsList.map((ev) => (
               <option key={ev.id} value={ev.id}>
@@ -3069,7 +3117,12 @@ export function AdminRegistrations() {
             ))}
           </select>
         </Field>
-        <Button variant="ghost" onClick={rows.reload} icon={RefreshCw}>
+        <Button
+          variant="ghost"
+          onClick={rows.reload}
+          icon={RefreshCw}
+          loading={rows.refreshing || rows.loading}
+        >
           Refresh
         </Button>
         <Button
@@ -3153,6 +3206,13 @@ export function AdminRegistrations() {
           Reserved
         </Button>
         <Button
+          variant={status === 'pending' ? 'primary' : 'ghost'}
+          className="adm-chip-warn"
+          onClick={() => updateFilters('pending', selectedEventId)}
+        >
+          Pending approval
+        </Button>
+        <Button
           variant={status === 'cancelled' ? 'primary' : 'ghost'}
           className="adm-chip-bad"
           icon={X}
@@ -3174,94 +3234,119 @@ export function AdminRegistrations() {
           head={['Reg #', 'Participant', 'Event', 'Type', 'Fee', 'Status', 'Date', 'Actions']}
           empty={!list.length && !rows.loading ? 'No registrations match.' : null}
         >
-        {list.map((row) => (
-          <tr key={row.id}>
-            <td className="mono-note">{row.registrationNumber}</td>
-            <td>
-              <b>{row.userName}</b>
-              <div className="table-sub">{row.userEmail}</div>
-              {row.userCollege ? (
-                <div className="table-sub" style={{ opacity: 0.8 }}>
-                  🏛️ {row.userCollege}
-                </div>
-              ) : null}
-            </td>
-            <td>
-              <b>{row.eventTitle}</b>
-              {row.venueRoom ? <div className="table-sub">📍 Room {row.venueRoom}</div> : null}
-            </td>
-            <td>
-              {row.isIncluded ? (
-                <Badge tone="muted">Included (Free)</Badge>
-              ) : (
-                <Badge tone="accent">Paid Add-on</Badge>
-              )}
-            </td>
-            <td>
-              <b>{money(row.feePaise)}</b>
-              {row.refundedAmountPaise > 0 ? (
-                <div className="table-sub" style={{ color: 'var(--color-good, #2bb673)' }}>
-                  Refunded: {money(row.refundedAmountPaise)}
-                </div>
-              ) : null}
-            </td>
-            <td>
-              {row.status === 'confirmed' ? (
-                <Badge tone="good">Confirmed</Badge>
-              ) : row.status === 'reserved' ? (
-                <Badge tone="warn">Reserved</Badge>
-              ) : row.status === 'cancelled' ? (
-                <div>
-                  {row.cancelledBy === 'admin' ? (
-                    <Badge tone="bad">Removed by Admin</Badge>
-                  ) : (
-                    <Badge tone="muted">Cancelled by User</Badge>
-                  )}
-                  {row.cancellationReason ? (
-                    <div className="table-sub" style={{ fontSize: '11px', marginTop: '2px' }}>
-                      {row.cancellationReason}
-                    </div>
+          {list.map((row) => (
+            <tr key={row.id}>
+              <td className="mono-note">{row.registrationNumber}</td>
+              <td>
+                <b>{row.userName}</b>
+                <div className="table-sub">{row.userEmail}</div>
+                {row.userCollege ? (
+                  <div className="table-sub" style={{ opacity: 0.8 }}>
+                    🏛️ {row.userCollege}
+                  </div>
+                ) : null}
+              </td>
+              <td>
+                <b>{row.eventTitle}</b>
+                {row.venueRoom ? <div className="table-sub">📍 Room {row.venueRoom}</div> : null}
+              </td>
+              <td>
+                {row.isIncluded ? (
+                  <Badge tone="muted">Included (Free)</Badge>
+                ) : (
+                  <Badge tone="accent">Paid Add-on</Badge>
+                )}
+              </td>
+              <td>
+                <b>{money(row.feePaise)}</b>
+                {row.refundedAmountPaise > 0 ? (
+                  <div className="table-sub" style={{ color: 'var(--color-good, #2bb673)' }}>
+                    Refunded: {money(row.refundedAmountPaise)}
+                  </div>
+                ) : null}
+              </td>
+              <td>
+                {row.status === 'confirmed' ? (
+                  <Badge tone="good">Confirmed</Badge>
+                ) : row.status === 'reserved' ? (
+                  <Badge tone="warn">Reserved</Badge>
+                ) : row.status === 'cancelled' ? (
+                  <div>
+                    {row.cancelledBy === 'admin' ? (
+                      <Badge tone="bad">Removed by Admin</Badge>
+                    ) : (
+                      <Badge tone="muted">Cancelled by User</Badge>
+                    )}
+                    {row.cancellationReason ? (
+                      <div className="table-sub" style={{ fontSize: '11px', marginTop: '2px' }}>
+                        {row.cancellationReason}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <StatusBadge status={row.status} />
+                )}
+              </td>
+              <td>{date(row.createdAt)}</td>
+              <td>
+                <div
+                  style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}
+                >
+                  {row.canApprove ? (
+                    <button
+                      type="button"
+                      className="table-action"
+                      style={{ color: '#2bb673' }}
+                      onClick={async () => {
+                        setActionBusy(true);
+                        setActionMessage(null);
+                        try {
+                          await adminApi.approveEventRegistration(editionId, row.id);
+                          setActionMessage({ tone: 'success', text: `Approved ${row.userName} for ${row.eventTitle}.` });
+                          rows.reload();
+                        } catch (err) {
+                          setActionMessage({ tone: 'error', text: err.message });
+                        } finally {
+                          setActionBusy(false);
+                        }
+                      }}
+                    >
+                      Approve
+                    </button>
+                  ) : null}
+
+                  {row.canCancel ? (
+                    <button
+                      type="button"
+                      className="table-action"
+                      style={{ color: '#f87171' }}
+                      onClick={() => openForceCancel(row)}
+                    >
+                      Force Remove
+                    </button>
+                  ) : null}
+
+                  {row.status === 'cancelled' && row.isRefundable ? (
+                    <button
+                      type="button"
+                      className="table-action"
+                      style={{ color: '#38bdf8' }}
+                      onClick={() => openRefund(row)}
+                    >
+                      Issue Refund
+                    </button>
+                  ) : null}
+
+                  {row.status === 'cancelled' && row.isIncluded ? (
+                    <span className="mono-note" style={{ fontSize: '11px', opacity: 0.6 }}>
+                      Free (Seat Freed)
+                    </span>
                   ) : null}
                 </div>
-              ) : (
-                <StatusBadge status={row.status} />
-              )}
-            </td>
-            <td>{date(row.createdAt)}</td>
-            <td>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {row.canCancel ? (
-                  <button
-                    type="button"
-                    className="table-action"
-                    style={{ color: '#f87171' }}
-                    onClick={() => openForceCancel(row)}
-                  >
-                    Force Remove
-                  </button>
-                ) : null}
-
-                {row.status === 'cancelled' && row.isRefundable ? (
-                  <button
-                    type="button"
-                    className="table-action"
-                    style={{ color: '#38bdf8' }}
-                    onClick={() => openRefund(row)}
-                  >
-                    Issue Refund
-                  </button>
-                ) : null}
-
-                {row.status === 'cancelled' && row.isIncluded ? (
-                  <span className="mono-note" style={{ fontSize: '11px', opacity: 0.6 }}>
-                    Free (Seat Freed)
-                  </span>
-                ) : null}
-              </div>
-            </td>
-          </tr>
-        ))}
-      </DataTable>
+              </td>
+            </tr>
+          ))}
+        </DataTable>
       )}
 
       {/* Force Cancel Sheet */}
@@ -3317,8 +3402,22 @@ export function AdminRegistrations() {
             </div>
 
             {forceCancelTarget?.isRefundable ? (
-              <div style={{ marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+              <div
+                style={{
+                  marginTop: '12px',
+                  borderTop: '1px solid rgba(255,255,255,0.08)',
+                  paddingTop: '10px',
+                }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
                   <input
                     type="checkbox"
                     checked={forceCancelForm.issueRefund}
@@ -3332,7 +3431,14 @@ export function AdminRegistrations() {
                 {forceCancelForm.issueRefund ? (
                   <div style={{ marginTop: '12px', paddingLeft: '24px' }}>
                     <div style={{ display: 'flex', gap: '16px', marginBottom: '10px' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: 'pointer',
+                        }}
+                      >
                         <input
                           type="radio"
                           name="refundMode"
@@ -3343,7 +3449,14 @@ export function AdminRegistrations() {
                         />
                         <span>Full refund ({money(forceCancelTarget.refundableAmountPaise)})</span>
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: 'pointer',
+                        }}
+                      >
                         <input
                           type="radio"
                           name="refundMode"
@@ -3398,7 +3511,8 @@ export function AdminRegistrations() {
                   </div>
                 ) : (
                   <p className="table-sub" style={{ margin: '8px 0 0 24px', color: '#f59e0b' }}>
-                    ⚠️ No refund will be issued immediately. You can still issue a refund later from the registrations list.
+                    ⚠️ No refund will be issued immediately. You can still issue a refund later from
+                    the registrations list.
                   </p>
                 )}
               </div>
@@ -3416,9 +3530,7 @@ export function AdminRegistrations() {
         >
           <input
             value={forceCancelForm.reason}
-            onChange={(e) =>
-              setForceCancelForm({ ...forceCancelForm, reason: e.target.value })
-            }
+            onChange={(e) => setForceCancelForm({ ...forceCancelForm, reason: e.target.value })}
             placeholder="Reason for removal..."
             required
           />
@@ -3474,16 +3586,12 @@ export function AdminRegistrations() {
           ) : null}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
             <span className="muted">Max Refundable Amount:</span>
-            <b style={{ color: '#38bdf8' }}>
-              {money(refundTarget?.refundableAmountPaise || 0)}
-            </b>
+            <b style={{ color: '#38bdf8' }}>{money(refundTarget?.refundableAmountPaise || 0)}</b>
           </div>
         </div>
 
         <Field
-          label={`Refund Amount in ₹ (Max: ₹${
-            (refundTarget?.refundableAmountPaise || 0) / 100
-          })`}
+          label={`Refund Amount in ₹ (Max: ₹${(refundTarget?.refundableAmountPaise || 0) / 100})`}
           hint="Defaults to full refundable amount. Strictly capped at paid fee."
         >
           <input
@@ -3613,11 +3721,23 @@ export function AdminUsers() {
       {users.loading ? <Loading label="Loading users" rows={2} /> : null}
       {users.error ? <ErrorBox error={users.error} onRetry={users.reload} /> : null}
       <DataTable
-        head={['User & Contact', 'College & Profile', 'Roles', 'Pass & Events', 'Last Sign-In', 'Status', '']}
+        head={[
+          'User & Contact',
+          'College & Profile',
+          'Roles',
+          'Pass & Events',
+          'Last Sign-In',
+          'Status',
+          '',
+        ]}
         empty={!rows.length && !users.loading ? 'No users match.' : null}
       >
         {rows.map((row) => {
-          const academic = [row.course, row.branch, row.yearOfStudy ? `Yr ${row.yearOfStudy}` : null]
+          const academic = [
+            row.course,
+            row.branch,
+            row.yearOfStudy ? `Yr ${row.yearOfStudy}` : null,
+          ]
             .filter(Boolean)
             .join(' · ');
           const location = [row.city, row.state].filter(Boolean).join(', ');
@@ -3638,16 +3758,33 @@ export function AdminUsers() {
                   'Participant'}
               </td>
               <td>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
-                  {row.passStatus ? <StatusBadge status={row.passStatus} /> : <span className="table-sub">No pass</span>}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  {row.passStatus ? (
+                    <StatusBadge status={row.passStatus} />
+                  ) : (
+                    <span className="table-sub">No pass</span>
+                  )}
                   {row.eventCount > 0 ? (
-                    <span className="table-sub">{row.eventCount} event{row.eventCount === 1 ? '' : 's'}</span>
+                    <span className="table-sub">
+                      {row.eventCount} event{row.eventCount === 1 ? '' : 's'}
+                    </span>
                   ) : null}
                 </div>
               </td>
               <td>
                 <span className="table-sub">
-                  {row.lastLoginAt ? dateTime(row.lastLoginAt) : row.createdAt ? dateTime(row.createdAt) : '-'}
+                  {row.lastLoginAt
+                    ? dateTime(row.lastLoginAt)
+                    : row.createdAt
+                      ? dateTime(row.createdAt)
+                      : '-'}
                 </span>
               </td>
               <td>
@@ -3678,13 +3815,17 @@ export function AdminUsers() {
               <li>Revoke their convention pass &amp; door check-in QR</li>
               <li>Cancel all booked event registrations and release their seats</li>
               <li>Queue refunds for any paid add-on event bookings</li>
-              <li>Remove them from team rosters (if they lead a team, leadership is transferred to another member)</li>
+              <li>
+                Remove them from team rosters (if they lead a team, leadership is transferred to
+                another member)
+              </li>
               <li>Terminate active login sessions across all devices</li>
             </ul>
           </InlineMessage>
         ) : (
           <InlineMessage tone="info">
-            Reactivating this account restores login access and pass status. Cancelled event seats will need to be re-selected if still available.
+            Reactivating this account restores login access and pass status. Cancelled event seats
+            will need to be re-selected if still available.
           </InlineMessage>
         )}
         <Field label="Reason">
@@ -3898,7 +4039,7 @@ export function AdminCheckin() {
   const eventsList = useAsync(
     () => (slug ? publicApi.events(slug, { pageSize: 100 }) : Promise.resolve({ data: [] })),
     [slug],
-    { enabled: Boolean(slug) }
+    { enabled: Boolean(slug) },
   );
 
   const recent = useAsync(() => adminApi.recentCheckins(editionId), [editionId], {
@@ -3914,7 +4055,7 @@ export function AdminCheckin() {
         ? adminApi.eventRoster(editionId, selectedEventId, { day })
         : Promise.resolve({ data: null }),
     [editionId, selectedEventId, day],
-    { enabled: Boolean(editionId && selectedEventId) }
+    { enabled: Boolean(editionId && selectedEventId) },
   );
 
   const performCheckin = async (rawToken) => {
@@ -4062,9 +4203,7 @@ export function AdminCheckin() {
         }
 
         const nativeDetector =
-          'BarcodeDetector' in window
-            ? new window.BarcodeDetector({ formats: ['qr_code'] })
-            : null;
+          'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
         if (!canvasRef.current) {
           canvasRef.current = document.createElement('canvas');
         }
@@ -4113,10 +4252,7 @@ export function AdminCheckin() {
 
           if (decoded) {
             const now = Date.now();
-            if (
-              lastScannedRef.current.code === decoded &&
-              now - lastScannedRef.current.at < 2500
-            ) {
+            if (lastScannedRef.current.code === decoded && now - lastScannedRef.current.at < 2500) {
               return;
             }
             lastScannedRef.current = { code: decoded, at: now };
@@ -4332,11 +4468,11 @@ export function AdminCheckin() {
             hint="Pick an event for workshop / competition verification, or General Pass for door turnstile admission."
           >
             <select value={selectedEventId} onChange={(e) => setSelectedEventId(e.target.value)}>
-
               <option value="">🎟️ General Fest Turnstile Admission (All Passes)</option>
               {(eventsList.data?.data || []).map((ev) => (
                 <option key={ev.id} value={ev.id}>
-                  🎯 {ev.title} {ev.venueRoom ? `· Room ${ev.venueRoom}` : ''} ({ev.categoryName || ev.category})
+                  🎯 {ev.title} {ev.venueRoom ? `· Room ${ev.venueRoom}` : ''} (
+                  {ev.categoryName || ev.category})
                 </option>
               ))}
             </select>
@@ -4362,7 +4498,12 @@ export function AdminCheckin() {
             <input type="date" value={day} onChange={(event) => setDay(event.target.value)} />
           </Field>
 
-          <Button type="submit" variant="success" disabled={busy || !token.trim()} icon={ClipboardCheck}>
+          <Button
+            type="submit"
+            variant="success"
+            disabled={busy || !token.trim()}
+            icon={ClipboardCheck}
+          >
             {busy ? 'Verifying…' : 'Admit & Check-in'}
           </Button>
         </form>
@@ -4459,8 +4600,7 @@ export function AdminCheckin() {
 
             <p>
               {result.eventTitle || 'Convention Pass'} ·{' '}
-              {result.registrationNumber || 'Registered Attendee'} ·{' '}
-              {dateTime(result.checkedInAt)}
+              {result.registrationNumber || 'Registered Attendee'} · {dateTime(result.checkedInAt)}
             </p>
             {result.message ? <p className="muted">{result.message}</p> : null}
           </div>
@@ -4500,7 +4640,13 @@ export function AdminCheckin() {
                   {rosterData.totalAttended} / {rosterData.totalRegistered}
                 </b>
               </div>
-              <Button variant="ghost" size="small" onClick={() => rosterAsync.reload()} icon={RefreshCw}>
+              <Button
+                variant="ghost"
+                size="small"
+                onClick={() => rosterAsync.reload()}
+                icon={RefreshCw}
+                loading={rosterAsync.refreshing || rosterAsync.loading}
+              >
                 Refresh
               </Button>
             </div>
@@ -4676,13 +4822,22 @@ export function AdminAnnouncements() {
   const [confirm, setConfirm] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ title: '', bodyMd: '', audience: 'public', status: 'draft' });
+  const [form, setForm] = useState({
+    title: '',
+    bodyMd: '',
+    bannerUrl: '',
+    showOnHome: false,
+    audience: 'public',
+    status: 'draft',
+  });
 
   useEffect(() => {
     if (!sheet) return;
     setForm({
       title: sheet.title || '',
       bodyMd: sheet.bodyMd || '',
+      bannerUrl: sheet.bannerUrl || '',
+      showOnHome: Boolean(sheet.showOnHome),
       audience: sheet.audience || 'public',
       status: sheet.status || 'draft',
     });
@@ -4693,7 +4848,11 @@ export function AdminAnnouncements() {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = { ...form };
+      const payload = {
+        ...form,
+        bannerUrl: resolveImageUrl(form.bannerUrl) || null,
+        showOnHome: Boolean(form.showOnHome),
+      };
       if (sheet?.id) await adminApi.updateAnnouncement(editionId, sheet.id, payload);
       else await adminApi.createAnnouncement(editionId, payload);
       setSheet(null);
@@ -4741,8 +4900,32 @@ export function AdminAnnouncements() {
         {list.map((row) => (
           <tr key={row.id}>
             <td>
-              <b>{row.title}</b>
-              <div className="table-sub">{row.bodyMd?.slice(0, 90)}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {row.bannerUrl ? (
+                  <img
+                    src={resolveImageUrl(row.bannerUrl, 400)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    style={{
+                      width: '44px',
+                      height: '28px',
+                      objectFit: 'cover',
+                      borderRadius: '4px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : null}
+                <div>
+                  <b>{row.title}</b>
+                  {row.showOnHome ? (
+                    <span style={{ marginLeft: '8px' }}>
+                      <Badge tone="accent">Home</Badge>
+                    </span>
+                  ) : null}
+                  <div className="table-sub">{row.bodyMd?.slice(0, 90)}</div>
+                </div>
+              </div>
             </td>
             <td>{row.audience}</td>
             <td>
@@ -4783,6 +4966,50 @@ export function AdminAnnouncements() {
               required
             />
           </Field>
+          <Field
+            label="Banner URL (Direct or Google Drive link)"
+            hint="Optional 16:9 banner shown when featured on the home screen"
+          >
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="url"
+                placeholder="https://drive.google.com/file/d/... or https://..."
+                value={form.bannerUrl || ''}
+                onChange={(event) => setForm({ ...form, bannerUrl: event.target.value })}
+                style={{ flex: 1 }}
+              />
+              {form.bannerUrl ? (
+                <button
+                  type="button"
+                  className="table-action"
+                  onClick={() => setForm({ ...form, bannerUrl: '' })}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            {form.bannerUrl ? (
+              <img
+                src={resolveImageUrl(form.bannerUrl)}
+                alt="Announcement banner preview"
+                referrerPolicy="no-referrer"
+                style={{
+                  marginTop: '8px',
+                  width: '100%',
+                  maxHeight: '120px',
+                  objectFit: 'cover',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(255,255,255,0.14)',
+                }}
+              />
+            ) : null}
+          </Field>
+          <Toggle
+            checked={Boolean(form.showOnHome)}
+            onChange={(value) => setForm({ ...form, showOnHome: value })}
+            label="Show on home screen"
+            hint="Highlights this announcement with its banner in a clean showcase on the home page"
+          />
           <FieldGrid>
             <Field label="Audience">
               <select
@@ -4844,7 +5071,7 @@ export function AdminAttendance() {
   const eventsList = useAsync(
     () => (slug ? publicApi.events(slug, { pageSize: 100 }) : Promise.resolve({ data: [] })),
     [slug],
-    { enabled: Boolean(slug) }
+    { enabled: Boolean(slug) },
   );
 
   const rows = useAsync(
@@ -4857,7 +5084,7 @@ export function AdminAttendance() {
     [editionId, day, selectedEventId, debounced],
     {
       enabled: Boolean(editionId),
-    }
+    },
   );
   const list = rows.data?.data || [];
 
@@ -4884,10 +5111,7 @@ export function AdminAttendance() {
           />
         </Field>
         <Field label="Event / Station Filter">
-          <select
-            value={selectedEventId}
-            onChange={(e) => setSelectedEventId(e.target.value)}
-          >
+          <select value={selectedEventId} onChange={(e) => setSelectedEventId(e.target.value)}>
             <option value="">All Stations &amp; Events</option>
             {(eventsList.data?.data || []).map((ev) => (
               <option key={ev.id} value={ev.id}>
@@ -4899,14 +5123,28 @@ export function AdminAttendance() {
         <Field label="Day">
           <input type="date" value={day} onChange={(event) => setDay(event.target.value)} />
         </Field>
-        <Button variant="ghost" onClick={rows.reload} icon={RefreshCw}>
+        <Button
+          variant="ghost"
+          onClick={rows.reload}
+          icon={RefreshCw}
+          loading={rows.refreshing || rows.loading}
+        >
           Refresh
         </Button>
       </div>
       {rows.loading ? <Loading label="Loading attendance" rows={2} /> : null}
       {rows.error ? <ErrorBox error={rows.error} onRetry={rows.reload} /> : null}
       <DataTable
-        head={['Participant', 'Station / Event', 'Room / Venue', 'Day', 'Result', 'Checked In', 'Host / Staff', 'Actions']}
+        head={[
+          'Participant',
+          'Station / Event',
+          'Room / Venue',
+          'Day',
+          'Result',
+          'Checked In',
+          'Host / Staff',
+          'Actions',
+        ]}
         empty={!list.length && !rows.loading ? 'No attendance records match.' : null}
       >
         {list.map((row) => (
@@ -5075,9 +5313,9 @@ export function AdminSettings() {
       setMessage({
         tone: 'success',
         text: replaced.length
-          ? `Staff role granted as ${ROLE_LABELS[staffForm.role] || staffForm.role}. Replaced ${
-              replaced.map((role) => ROLE_LABELS[role] || role).join(', ')
-            }.`
+          ? `Staff role granted as ${ROLE_LABELS[staffForm.role] || staffForm.role}. Replaced ${replaced
+              .map((role) => ROLE_LABELS[role] || role)
+              .join(', ')}.`
           : 'Staff role granted.',
       });
     } catch (error) {
@@ -5276,8 +5514,9 @@ export function AdminSettings() {
                   <small>{row.email}</small>
                   {row.staleRoles?.length ? (
                     <small className="muted">
-                      Also holds {row.staleRoles.map((role) => ROLE_LABELS[role] || role).join(', ')}{' '}
-                      from an older grant. Grant one role again to collapse it.
+                      Also holds{' '}
+                      {row.staleRoles.map((role) => ROLE_LABELS[role] || role).join(', ')} from an
+                      older grant. Grant one role again to collapse it.
                     </small>
                   ) : null}
                 </div>
@@ -5330,7 +5569,8 @@ export function AdminSettings() {
               <button
                 className="table-action danger"
                 onClick={async () => {
-                  if (!window.confirm(`Archive the icon "${icon.name}"? Pages stop showing it.`)) return;
+                  if (!window.confirm(`Archive the icon "${icon.name}"? Pages stop showing it.`))
+                    return;
                   try {
                     await adminApi.archiveIcon(editionId, icon.id);
                     await icons.reload();

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import '../styles/admin-ui.css';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -116,9 +117,7 @@ function Pill({ value, labels = STATE_LABELS }) {
 }
 
 function isPdfDocument(document) {
-  return (
-    document?.mime === 'application/pdf' || /\.pdf$/i.test(document?.originalName || '')
-  );
+  return document?.mime === 'application/pdf' || /\.pdf$/i.test(document?.originalName || '');
 }
 
 function AdminDocRow({ document, onOpen, downloadUrl }) {
@@ -532,18 +531,15 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
       <Feedback message={message} />
       {isIste ? (
         <InlineMessage tone="warn">
-          ISTE tier ({money(data.feePaise)}). Payment is not proof of membership — manually verify the
-          uploaded ISTE membership card before approving this registration.
+          ISTE tier ({money(data.feePaise)}). Payment is not proof of membership — manually verify
+          the uploaded ISTE membership card before approving this registration.
         </InlineMessage>
       ) : null}
       {data.compliance ? (
         <InlineMessage tone={data.compliance.enforced ? 'error' : 'warn'}>
           <b>{data.compliance.label}</b>
           {data.compliance.deadlineAt ? (
-            <>
-              {' '}
-              · deadline {dateTime(data.compliance.deadlineAt)}
-            </>
+            <> · deadline {dateTime(data.compliance.deadlineAt)}</>
           ) : null}
           {data.compliance.enforced
             ? ' · enforcement applied'
@@ -766,11 +762,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
             >
               Request documents
             </Button>
-            <Button
-              variant="ghost"
-              onClick={openEditDetails}
-              disabled={Boolean(busy)}
-            >
+            <Button variant="ghost" onClick={openEditDetails} disabled={Boolean(busy)}>
               Edit details
             </Button>
           </div>
@@ -979,7 +971,15 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
             </select>
           </Field>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', fontSize: '13px' }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginTop: '10px',
+            fontSize: '13px',
+          }}
+        >
           <input
             type="checkbox"
             checked={Boolean(editForm.needsAccommodation)}
@@ -994,7 +994,11 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           <Button
             variant="primary"
             onClick={saveEditDetails}
-            disabled={busy === 'edit-details' || editForm.fullName.trim().length < 2 || editForm.collegeName.trim().length < 2}
+            disabled={
+              busy === 'edit-details' ||
+              editForm.fullName.trim().length < 2 ||
+              editForm.collegeName.trim().length < 2
+            }
           >
             {busy === 'edit-details' ? 'Saving…' : 'Save details'}
           </Button>
@@ -1022,7 +1026,12 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           <Button variant="ghost" onClick={() => setDialog(null)}>
             Cancel
           </Button>
-          <Button variant="success" onClick={approve} disabled={busy === 'approve'} icon={BadgeCheck}>
+          <Button
+            variant="success"
+            onClick={approve}
+            disabled={busy === 'approve'}
+            icon={BadgeCheck}
+          >
             {busy === 'approve' ? 'Approving' : 'Approve registration'}
           </Button>
         </div>
@@ -1042,10 +1051,11 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           }}
         >
           <InlineMessage tone="warn">
-            Rejecting cancels the convention pass, revokes its QR ticket, releases all booked event seats,
-            and queues refunds for any paid add-on bookings. If the participant leads any teams, leadership is
-            transferred to co-members. The portal shows your reason and keeps payment receipts visible.
-            If you only need better documents, use &ldquo;Request documents&rdquo; instead.
+            Rejecting cancels the convention pass, revokes its QR ticket, releases all booked event
+            seats, and queues refunds for any paid add-on bookings. If the participant leads any
+            teams, leadership is transferred to co-members. The portal shows your reason and keeps
+            payment receipts visible. If you only need better documents, use &ldquo;Request
+            documents&rdquo; instead.
           </InlineMessage>
           <Field label="Rejection reason">
             <select
@@ -1451,7 +1461,10 @@ export function AdminCollegeRegistrations() {
                 <div className="table-sub">{row.rejectionReason.slice(0, 60)}</div>
               ) : null}
               {row.compliance ? (
-                <div className="table-sub" style={{ color: row.compliance.overdue ? '#ef4444' : '#f59e0b' }}>
+                <div
+                  className="table-sub"
+                  style={{ color: row.compliance.overdue ? '#ef4444' : '#f59e0b' }}
+                >
                   {row.compliance.enforced
                     ? 'Deadline passed · enforced'
                     : `Desk deadline ${row.compliance.hoursRemaining}h`}
@@ -1516,7 +1529,9 @@ function categoryToForm(category) {
       return {
         type,
         included: Boolean(existing),
-        required: existing ? existing.required !== false : (type === 'college_id' || type === 'photo'),
+        required: existing
+          ? existing.required !== false
+          : type === 'college_id' || type === 'photo',
         label: existing?.label || label,
       };
     }),
@@ -1771,7 +1786,12 @@ export function AdminRegistrationSettings() {
                         })
                       }
                     />
-                    <span>Require {DOC_OPTIONS.find(([type]) => type === document.type)?.[1] || document.label || document.type}</span>
+                    <span>
+                      Require{' '}
+                      {DOC_OPTIONS.find(([type]) => type === document.type)?.[1] ||
+                        document.label ||
+                        document.type}
+                    </span>
                   </label>
                   {document.included ? (
                     <div className="reg-doc-config-controls">

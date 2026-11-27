@@ -67,8 +67,15 @@ export function Button({
   const cls = `adm-btn ${VARIANT[variant] || 'is-primary'} ${size === 'small' ? 'is-sm' : ''} ${className}`.trim();
   const content = (
     <>
-      {loading ? <span className="adm-spinner" aria-hidden="true" /> : null}
-      {!loading && Icon ? <Icon aria-hidden="true" /> : null}
+      {loading ? (
+        Icon ? (
+          <Icon className="adm-spin" aria-hidden="true" />
+        ) : (
+          <span className="adm-spinner" aria-hidden="true" />
+        )
+      ) : Icon ? (
+        <Icon aria-hidden="true" />
+      ) : null}
       {children}
     </>
   );

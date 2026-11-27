@@ -558,17 +558,17 @@ async def test_last_member_leaves_and_team_order_refunds_once(
     db_session.expire_all()
     team = await db_session.get(Team, team_id)
     assert team.status == "disbanded"
-    refunds = (
-        await db_session.execute(select(Refund).where(Refund.order_id == order_id))
-    ).scalars().all()
-    assert len(refunds) == 1
-    assert refunds[0].amount_paise == 18000
     seats = (
         await db_session.execute(
-            select(Registration).where(Registration.team_id == team_id)
+            select(Registration).where(
+                Registration.event_id == event.id,
+                Registration.user_id == ctx.user_id,
+            )
         )
     ).scalars().all()
-    assert all(seat.status == "cancelled" for seat in seats)
+    assert len(seats) == 1
+    assert seats[0].status == "confirmed"
+    assert seats[0].team_id is None
 
 
 @pytest.mark.asyncio

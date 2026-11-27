@@ -549,7 +549,7 @@ async def _cancel_seat(
 
 
 async def _teardown_team(db: AsyncSession, team: Team, *, reason: str) -> int:
-    """Cancel every seat and clear the roster. Only for a team with no members."""
+    """Disband the team and detach member registrations without cancelling their events."""
     team.status = "disbanded"
     team.formation_state = "disbanded"
     seats = list(
@@ -559,9 +559,8 @@ async def _teardown_team(db: AsyncSession, team: Team, *, reason: str) -> int:
             )
         ).scalars()
     )
-    refunded_orders: set[uuid.UUID] = set()
     for seat in seats:
-        await _cancel_seat(db, seat, reason=reason, refunded_orders=refunded_orders)
+        seat.team_id = None
     members = list(
         (
             await db.execute(select(TeamMember).where(TeamMember.team_id == team.id))
@@ -569,40 +568,6 @@ async def _teardown_team(db: AsyncSession, team: Team, *, reason: str) -> int:
     )
     for row in members:
         await db.delete(row)
-    if team.order_id is not None:
-        order = await db.get(PaymentOrder, team.order_id)
-        if (
-            order is not None
-            and order.status == "paid"
-            and order.id not in refunded_orders
-        ):
-            try:
-                from app.services.payments import refund_order
-
-                await refund_order(
-                    db,
-                    order,
-                    amount_paise=int(order.amount_paise),
-                    reason_code="team_disbanded",
-                    reason_note=reason[:500],
-                )
-            except Exception as exc:
-                logger.warning(
-                    "team_order_refund_failed order=%s error=%s",
-                    order.id,
-                    str(exc)[:200],
-                )
-                db.add(
-                    Refund(
-                        order_id=order.id,
-                        amount_paise=int(order.amount_paise),
-                        reason_code="team_disbanded",
-                        reason_note=f"{reason} (gateway refund failed: {str(exc)[:200]})"[:500],
-                        status="pending",
-                    )
-                )
-        elif order is not None and order.status == "created":
-            order.status = "expired"
     await db.flush()
     _touch_caches()
     return len(seats)
@@ -746,7 +711,7 @@ async def create_team(
     seat = await _live_seat(db, user_id, event.id)
     if seat is None:
         raise ValidationFailed(
-            "Register for this event in My Events first before creating a team.",
+            "Register for this event in Browse Events first before creating a team.",
             code="REGISTRATION_REQUIRED",
         )
     seat, _ = await _attach_seat(
@@ -851,7 +816,7 @@ async def join_team(
     seat = await _live_seat(db, user_id, event.id)
     if seat is None:
         raise ValidationFailed(
-            "Register for this event in My Events first before joining a team.",
+            "Register for this event in Browse Events first before joining a team.",
             code="REGISTRATION_REQUIRED",
         )
     db.add(TeamMember(team_id=team.id, user_id=user_id, is_leader=False))
@@ -898,20 +863,8 @@ async def leave_team(
         _touch_caches()
         return None
 
-    others = (
-        await db.execute(
-            select(func.count(TeamMember.id)).where(
-                TeamMember.team_id == team_id,
-                TeamMember.user_id != user_id,
-            )
-        )
-    ).scalar() or 0
-    # When the team keeps running, its shared ``per_team`` order must survive
-    # the leaver's seat: only the roster row goes with them.
-    preserve = {team.order_id} if (others and team.order_id is not None) else set()
-
-    # The leaver's own seat goes with them. A member who never paid (per-team
-    # rider) simply loses the seat; a paid member keeps their money per policy.
+    # Detach the leaver's registration from the team while keeping their
+    # event registration in the same state as before they joined a team.
     mem_reg = (
         await db.execute(
             select(Registration).where(
@@ -921,13 +874,7 @@ async def leave_team(
         )
     ).scalars().first()
     if mem_reg is not None:
-        await _cancel_seat(
-            db,
-            mem_reg,
-            reason="Member left the team",
-            refunded_orders=set(),
-            preserve_orders=preserve,
-        )
+        mem_reg.team_id = None
 
     new_leader = await promote_or_disband(
         db,

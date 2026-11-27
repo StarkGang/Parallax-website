@@ -916,6 +916,12 @@
   scrollbar-width: none;
 }
 
+@media (min-width: 900px) {
+  .portal-mobile-tabs {
+    display: none;
+  }
+}
+
 .portal-mobile-tabs::-webkit-scrollbar {
   display: none;
 }

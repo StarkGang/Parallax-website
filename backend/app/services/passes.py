@@ -993,25 +993,30 @@ async def sync_included_registrations(
             await revoke_for_registration(db, row.id)
 
     for eid in keep:
+        event_obj = await db.get(Event, eid)
+        needs_approval = bool(event_obj and event_obj.requires_approval)
+        target_status = "pending" if needs_approval else "confirmed"
         row = by_event.get(eid)
         if row is not None:
             if row.status == "cancelled":
-                row.status = "confirmed"
+                row.status = target_status
                 row.cancelled_at = None
-            await issue_for_registration(db, row)
+            if row.status == "confirmed":
+                await issue_for_registration(db, row)
             continue
         existing_other = (
             await db.execute(
                 select(Registration).where(
                     Registration.user_id == user_pass.user_id,
                     Registration.event_id == eid,
-                    Registration.status.in_(["confirmed", "reserved"]),
+                    Registration.status.in_(["confirmed", "reserved", "pending"]),
                 )
             )
         ).scalars().first()
         if existing_other is not None:
             existing_other.kind = "included"
-            await issue_for_registration(db, existing_other)
+            if existing_other.status == "confirmed":
+                await issue_for_registration(db, existing_other)
             continue
 
         reg = Registration(
@@ -1020,12 +1025,13 @@ async def sync_included_registrations(
             event_id=eid,
             kind="included",
             fee_paise=0,
-            status="confirmed",
+            status=target_status,
             registration_number=f"INC-{uuid.uuid4().hex[:8].upper()}",
         )
         db.add(reg)
         await db.flush()
-        await issue_for_registration(db, reg)
+        if reg.status == "confirmed":
+            await issue_for_registration(db, reg)
     await db.flush()
 
 

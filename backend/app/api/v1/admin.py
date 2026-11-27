@@ -962,7 +962,8 @@ async def registrations(
                 "refundedAmountPaise": refunded_paise,
                 "isRefundable": is_refundable,
                 "refundableAmountPaise": max_refundable,
-                "canCancel": r.status in ("confirmed", "reserved"),
+                "canCancel": r.status in ("confirmed", "reserved", "pending"),
+                "canApprove": r.status == "pending",
             }
         )
 
@@ -972,6 +973,46 @@ async def registrations(
         "page": page,
         "pageSize": page_size,
     }
+
+
+@router.post("/registrations/{registration_id}/approve")
+async def approve_event_registration(
+    edition_id: uuid.UUID,
+    registration_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_any_permission("events.write")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Approve a pending event registration (for requires_approval events) and issue its ticket."""
+    from app.models.registration import Registration
+    from app.services.tickets import issue_for_registration
+    from app.core.cache import cache_delete_pattern
+    from app.services.audit import record
+
+    reg = await db.get(Registration, registration_id)
+    if reg is None or reg.edition_id != edition_id:
+        raise NotFound("Registration not found.")
+    if reg.status != "pending":
+        raise ValidationFailed("Only pending registrations can be approved.")
+
+    reg.status = "confirmed"
+    await db.flush()
+    await issue_for_registration(db, reg)
+
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=ctx.roles[0] if ctx.roles else None,
+        action="registration.approved",
+        resource_type="registration",
+        resource_id=str(reg.id),
+        after={"status": "confirmed"},
+    )
+    await db.commit()
+    cache_delete_pattern("public:*")
+    cache_delete_pattern("admin:dashboard:*")
+    return {"data": {"id": str(reg.id), "status": reg.status}}
 
 
 @router.post("/registrations/{registration_id}/force-cancel")

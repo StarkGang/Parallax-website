@@ -831,6 +831,7 @@ export function useAsync(loader, deps = [], { enabled = true, ttlMs = 60000 } = 
     return {
       key: cacheKey,
       loading: Boolean(enabled) && !cached,
+      refreshing: false,
       data: cached ? cached.data : null,
       error: null,
     };
@@ -854,19 +855,25 @@ export function useAsync(loader, deps = [], { enabled = true, ttlMs = 60000 } = 
 
     setState((previous) => {
       const data = cached ? cached.data : previous.key === cacheKey ? previous.data : null;
-      return { key: cacheKey, loading: !data, data, error: null };
+      return { key: cacheKey, loading: !data, refreshing: Boolean(forced), data, error: null };
     });
+
+    if (forced) {
+      ASYNC_CACHE.delete(cacheKey);
+      INFLIGHT.delete(cacheKey);
+    }
 
     loadShared(cacheKey, loader)
       .then((data) => {
         writeCache(cacheKey, data);
-        if (alive) setState({ key: cacheKey, loading: false, data, error: null });
+        if (alive) setState({ key: cacheKey, loading: false, refreshing: false, data, error: null });
       })
       .catch((error) => {
         if (!alive) return;
         setState((previous) => ({
           key: cacheKey,
           loading: false,
+          refreshing: false,
           data: previous.key === cacheKey ? previous.data : null,
           error: previous.key === cacheKey && previous.data ? null : error,
         }));
@@ -879,12 +886,32 @@ export function useAsync(loader, deps = [], { enabled = true, ttlMs = 60000 } = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, enabled, reloadToken]);
 
+  const setData = useCallback(
+    (updater) => {
+      if (!cacheKey) return;
+      setState((previous) => {
+        const current = previous.key === cacheKey ? previous.data : null;
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        writeCache(cacheKey, next);
+        return { key: cacheKey, loading: false, refreshing: false, data: next, error: null };
+      });
+    },
+    [cacheKey],
+  );
+
   const effective =
     state.key === cacheKey
       ? state
       : { key: cacheKey, loading: Boolean(enabled), data: null, error: null };
 
-  return { loading: effective.loading, data: effective.data, error: effective.error, reload };
+  return {
+    loading: effective.loading,
+    refreshing: effective.refreshing,
+    data: effective.data,
+    error: effective.error,
+    reload,
+    setData,
+  };
 }
 
 export function useDebounced(value, delay = 320) {

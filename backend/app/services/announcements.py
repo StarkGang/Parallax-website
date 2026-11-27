@@ -8,6 +8,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_delete_pattern
 from app.core.errors import NotFound
 from app.core.text import render_markdown
 from app.models.edition import Announcement, ConventionEdition
@@ -21,6 +22,8 @@ def serialize(a: Announcement) -> dict[str, Any]:
         "bodyMd": a.body_md,
         "bodyHtml": render_markdown(a.body_md),
         "audience": a.audience,
+        "bannerUrl": a.banner_url,
+        "showOnHome": bool(a.show_on_home),
         "status": a.status,
         "eventId": str(a.event_id) if a.event_id else None,
         "publishedAt": a.published_at.isoformat() if a.published_at else None,
@@ -87,7 +90,7 @@ async def upsert(
         a = Announcement(edition_id=edition_id)
         db.add(a)
 
-    for field in ["title", "body_md", "audience", "event_id", "status"]:
+    for field in ["title", "body_md", "audience", "banner_url", "show_on_home", "event_id", "status"]:
         if field in payload:
             setattr(a, field, payload[field])
 
@@ -102,9 +105,10 @@ async def upsert(
         action="announcement.upserted",
         resource_type="announcement",
         resource_id=str(a.id),
-        after={"title": a.title, "status": a.status},
+        after={"title": a.title, "status": a.status, "show_on_home": a.show_on_home},
     )
     await db.flush()
+    cache_delete_pattern("public:*")
     return a
 
 
@@ -130,6 +134,7 @@ async def delete(
     )
     await db.delete(a)
     await db.flush()
+    cache_delete_pattern("public:*")
 
 
 __all__ = ["serialize", "public_list", "list_admin", "upsert", "delete"]
