@@ -553,3 +553,199 @@ async def test_refund_order_second_over_cap_rejected(db_session: AsyncSession):
 
     with pytest.raises(ValidationFailed):
         await refund_order(db_session, order, 30000, reason_code="test")
+
+
+# --- Round 2: shared-order expiry helper across all three paths -------------
+
+async def _make_edition(db_session):
+    from app.models.edition import ConventionEdition
+
+    ed = ConventionEdition(
+        slug=f"ed-{uuid.uuid4().hex[:8]}",
+        name="Test Edition",
+        organizer="Org",
+        host="Host",
+        venue="Venue",
+        city="City",
+        starts_at=datetime.now(UTC),
+        ends_at=datetime.now(UTC),
+    )
+    db_session.add(ed)
+    await db_session.flush()
+    return ed
+
+
+async def _make_team_order(db_session, edition_id, order_id):
+    from app.models.commerce import Team
+
+    team = Team(
+        edition_id=edition_id,
+        event_id=uuid.uuid4(),
+        name="Team A",
+        leader_id=uuid.uuid4(),
+        invite_code="CODE1234",
+        invite_code_hash="hash",
+        order_id=order_id,
+    )
+    db_session.add(team)
+    await db_session.flush()
+    return team
+
+
+@pytest.mark.asyncio
+async def test_cancel_registration_solo_expires_order(db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+    from app.services.registrations import cancel_registration
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, user_id, "created")
+    reg = await _make_event_reg(db_session, edition_id, user_id, order.id, status="reserved")
+    await db_session.commit()
+    order_id, reg_id = order.id, reg.id
+
+    await cancel_registration(db_session, None, user_id, reg_id)
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_cancel_registration_shared_keeps_order(db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+    from app.services.registrations import cancel_registration
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, user_id, "created")
+    reg1 = await _make_event_reg(db_session, edition_id, user_id, order.id, status="reserved")
+    await _make_event_reg(db_session, edition_id, user_id, order.id, status="reserved")
+    await db_session.commit()
+    order_id, reg1_id = order.id, reg1.id
+
+    await cancel_registration(db_session, None, user_id, reg1_id)
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
+
+
+@pytest.mark.asyncio
+async def test_cancel_registration_team_order_kept(db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+    from app.services.registrations import cancel_registration
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, user_id, "created")
+    reg = await _make_event_reg(db_session, edition_id, user_id, order.id, status="reserved")
+    await _make_team_order(db_session, edition_id, order.id)
+    await db_session.commit()
+    order_id, reg_id = order.id, reg.id
+
+    await cancel_registration(db_session, None, user_id, reg_id)
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
+
+
+@pytest.mark.asyncio
+async def test_remove_seat_solo_expires_order(db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+    from app.services.pricing import remove_seat
+
+    edition = await _make_edition(db_session)
+    user_id = uuid.uuid4()
+    event_id = uuid.uuid4()
+    order = await _make_order(db_session, edition.id, user_id, "created")
+    reg = await _make_event_reg(db_session, edition.id, user_id, order.id, status="reserved")
+    reg.event_id = event_id
+    await db_session.commit()
+    order_id = order.id
+
+    await remove_seat(
+        db_session, request=None, user_id=user_id, edition=edition, event_id=event_id
+    )
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_remove_seat_shared_keeps_order(db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+    from app.services.pricing import remove_seat
+
+    edition = await _make_edition(db_session)
+    user_id = uuid.uuid4()
+    event1, event2 = uuid.uuid4(), uuid.uuid4()
+    order = await _make_order(db_session, edition.id, user_id, "created")
+    r1 = await _make_event_reg(db_session, edition.id, user_id, order.id, status="reserved")
+    r1.event_id = event1
+    r2 = await _make_event_reg(db_session, edition.id, user_id, order.id, status="reserved")
+    r2.event_id = event2
+    await db_session.commit()
+    order_id = order.id
+
+    await remove_seat(
+        db_session, request=None, user_id=user_id, edition=edition, event_id=event1
+    )
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_team_order_kept(admin_client: AsyncClient, db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, user_id, "created")
+    reg = await _make_event_reg(db_session, edition_id, user_id, order.id)
+    await _make_team_order(db_session, edition_id, order.id)
+    await db_session.commit()
+    reg_id, order_id = reg.id, order.id
+
+    resp = await _force_cancel(admin_client, edition_id, reg_id)
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
+
+
+@pytest.mark.asyncio
+async def test_verify_expired_order_revives_in_dev(participant_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "expired")
+    await db_session.commit()
+    order_id = order.id
+
+    resp = await _verify(participant_client, edition_id, order_id)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["paid"] is True
+    db_session.expire_all()
+    from app.models.commerce import PaymentOrder
+
+    assert (await db_session.get(PaymentOrder, order_id)).status == "paid"
+
+
+@pytest.mark.asyncio
+async def test_verify_expired_order_bad_signature_stays_expired(
+    participant_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.api.v1.participant.get_settings",
+        lambda: SimpleNamespace(payments_enabled=True, mock_payments_available=False),
+    )
+    monkeypatch.setattr(
+        "app.services.payments.verify_checkout_signature", lambda *a, **k: False
+    )
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "expired")
+    await db_session.commit()
+    order_id = order.id
+
+    resp = await _verify(participant_client, edition_id, order_id)
+    assert resp.status_code == 400, resp.text
+    db_session.expire_all()
+    from app.models.commerce import PaymentOrder
+
+    assert (await db_session.get(PaymentOrder, order_id)).status == "expired"

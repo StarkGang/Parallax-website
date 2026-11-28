@@ -787,10 +787,13 @@ async def remove_seat(
     await revoke_for_registration(db, reg.id)
 
     # A held (unpaid) seat closes its order so a late payment cannot revive it.
-    if reg.order_id is not None:
-        order = await db.get(PaymentOrder, reg.order_id)
-        if order is not None and order.status == "created":
-            order.status = "expired"
+    # A shared order (multi-event or per_team) is only expired when no other
+    # live seat still references it.
+    from app.services.payments import expire_order_if_unshared
+
+    await expire_order_if_unshared(
+        db, reg.order_id, exclude_registration_id=reg.id
+    )
 
     result = {
         "removed": True,

@@ -27,6 +27,7 @@ from app.models.commerce import (
     PaymentWebhookEvent,
     Refund,
     Registration,
+    Team,
 )
 from app.services.tickets import (
     issue_for_registration,
@@ -698,6 +699,48 @@ async def process_webhook(
             )
 
     await db.flush()
+
+
+async def expire_order_if_unshared(
+    db: AsyncSession,
+    order_id: uuid.UUID | None,
+    *,
+    exclude_registration_id: uuid.UUID,
+) -> bool:
+    """Expire an unpaid (created) order only when no other live seat needs it.
+
+    One order can pay for several seats (a multi-event add-on checkout or a
+    ``per_team`` booking). Expiring it while another non-cancelled registration
+    still references it would leave that seat unpayable, so the order is closed
+    only when the caller's seat is the last live one. Team-owned orders are
+    managed by the team lifecycle (``Team.order_id``) and are never expired here.
+    """
+    if order_id is None:
+        return False
+    order = await db.get(PaymentOrder, order_id)
+    if order is None or order.status != "created":
+        return False
+    team_owns = (
+        await db.execute(
+            select(func.count(Team.id)).where(Team.order_id == order_id)
+        )
+    ).scalar() or 0
+    if team_owns:
+        return False
+    other_live = (
+        await db.execute(
+            select(func.count(Registration.id)).where(
+                Registration.order_id == order_id,
+                Registration.id != exclude_registration_id,
+                Registration.status != "cancelled",
+            )
+        )
+    ).scalar() or 0
+    if other_live:
+        return False
+    order.status = "expired"
+    await db.flush()
+    return True
 
 
 async def refund_order(

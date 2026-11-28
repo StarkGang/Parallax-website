@@ -450,17 +450,20 @@ async def cancel_registration(
     reg.cancellation_reason = reason or "Cancelled by attendee"
     await revoke_for_registration(db, reg.id)
     # Close the unpaid checkout for this seat; otherwise it stayed payable and
-    # a late payment re-confirmed the cancelled booking.
-    if reg.order_id is not None:
-        order = await db.get(PaymentOrder, reg.order_id)
-        if order is not None and order.status == "created":
-            order.status = "expired"
-        if (
-            order is not None
-            and order.status == "paid"
-            and reg.fee_paise > 0
-            and refundable
-        ):
+    # a late payment re-confirmed the cancelled booking. Only expire a shared
+    # order when no other live seat still needs it.
+    order = await db.get(PaymentOrder, reg.order_id) if reg.order_id is not None else None
+    from app.services.payments import expire_order_if_unshared
+
+    await expire_order_if_unshared(
+        db, reg.order_id, exclude_registration_id=reg.id
+    )
+    if (
+        order is not None
+        and order.status == "paid"
+        and reg.fee_paise > 0
+        and refundable
+    ):
             from app.models.commerce import Refund as RefundRow
 
             # A ``per_team`` order belongs to the team. If teammates are still
