@@ -829,12 +829,13 @@ export function PortalRegistration() {
   }, [isPaid, broadcastUrl, editionId, registration?.id]);
   // Perks read as confirmed only once the desk approved the pass.
   const perksConfirmed = registration?.verificationStatus === 'approved';
-  const isRefundDone =
-    registration?.paymentStatus === 'refunded' || registration?.refundStatus === 'completed';
-  // A full rejection (or a completed refund) kills the pass: the backend has
-  // already cancelled it and revoked its ticket, so the portal must not render
-  // an entry card. The bill/receipt stays available either way.
-  const isRejected = registration?.verificationStatus === 'rejected' || isRefundDone;
+  // A full refund (paymentStatus="refunded") kills the pass.
+  // A partial refund (refundStatus="completed" but paymentStatus still "paid") does NOT —
+  // the attendee kept their entitlement for the unreturned portion.
+  const isFullyRefunded = registration?.paymentStatus === 'refunded';
+  const isRefundDone = isFullyRefunded; // kept for receipt/billing display
+  // A full rejection or a full refund kills the pass. Partial refunds do not.
+  const isRejected = registration?.verificationStatus === 'rejected' || isFullyRefunded;
   const needsResubmission = registration?.verificationStatus === 'resubmission_required';
   const compliance = registration?.compliance;
   const passStatus = passQuery.data?.data?.status;
