@@ -1,6 +1,7 @@
 """Tests for the audit HIGH fixes (approve import, ticket revoke, refund amount, etc.)."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -110,3 +111,116 @@ async def test_unknown_code_is_not_valid(client: AsyncClient):
     resp = await client.get("/api/v1/public/c/PX-DEADBEEF-0000")
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["valid"] is False
+
+
+async def _make_paid_college(db_session, edition_id, user_id, fee_paise):
+    from app.models.commerce import PaymentOrder
+
+    order = PaymentOrder(
+        edition_id=edition_id,
+        user_id=user_id,
+        purpose="college_registration",
+        amount_paise=fee_paise,
+        status="paid",
+        gateway_order_id=f"order_{uuid.uuid4().hex[:10]}",
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(order)
+    await db_session.flush()
+    reg = CollegeRegistration(
+        edition_id=edition_id,
+        user_id=user_id,
+        category_id=uuid.uuid4(),
+        category_code="C1",
+        category_name="General",
+        full_name="Refund User",
+        email=f"{user_id.hex[:8]}@test.local",
+        college_name="Test College",
+        payment_status="paid",
+        verification_status="approved",
+        fee_paise=fee_paise,
+        order_id=order.id,
+    )
+    db_session.add(reg)
+    await db_session.flush()
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_refund_amount_zero_is_rejected(db_session: AsyncSession):
+    """amountPaise: 0 must be rejected, not silently refund the full fee."""
+    from app.core.errors import ValidationFailed
+    from app.services import college_registrations as cr
+
+    reg = await _make_paid_college(db_session, uuid.uuid4(), uuid.uuid4(), 50000)
+    await db_session.commit()
+    with pytest.raises(ValidationFailed):
+        await cr.refund_action(
+            db_session, None, reg, None, None,
+            action="initiate", amount_paise=0, note=None, gateway_refund_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_refund_amount_negative_is_rejected(db_session: AsyncSession):
+    from app.core.errors import ValidationFailed
+    from app.services import college_registrations as cr
+
+    reg = await _make_paid_college(db_session, uuid.uuid4(), uuid.uuid4(), 50000)
+    await db_session.commit()
+    with pytest.raises(ValidationFailed):
+        await cr.refund_action(
+            db_session, None, reg, None, None,
+            action="initiate", amount_paise=-100, note=None, gateway_refund_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_refund_amount_omitted_refunds_full(db_session: AsyncSession):
+    from app.services import college_registrations as cr
+
+    reg = await _make_paid_college(db_session, uuid.uuid4(), uuid.uuid4(), 50000)
+    await db_session.commit()
+    refund = await cr.refund_action(
+        db_session, None, reg, None, None,
+        action="initiate", amount_paise=None, note=None, gateway_refund_id=None,
+    )
+    assert refund.amount_paise == 50000
+
+
+@pytest.mark.asyncio
+async def test_refund_amount_partial_is_exact(db_session: AsyncSession):
+    from app.services import college_registrations as cr
+
+    reg = await _make_paid_college(db_session, uuid.uuid4(), uuid.uuid4(), 50000)
+    await db_session.commit()
+    refund = await cr.refund_action(
+        db_session, None, reg, None, None,
+        action="initiate", amount_paise=20000, note=None, gateway_refund_id=None,
+    )
+    assert refund.amount_paise == 20000
+
+
+@pytest.mark.asyncio
+async def test_refund_amount_over_refundable_is_capped(db_session: AsyncSession):
+    from app.services import college_registrations as cr
+
+    reg = await _make_paid_college(db_session, uuid.uuid4(), uuid.uuid4(), 50000)
+    await db_session.commit()
+    refund = await cr.refund_action(
+        db_session, None, reg, None, None,
+        action="initiate", amount_paise=90000, note=None, gateway_refund_id=None,
+    )
+    assert refund.amount_paise == 50000
+
+
+def test_refund_action_schema_rejects_zero():
+    from pydantic import ValidationError
+
+    from app.schemas.registration import RefundAction
+
+    assert RefundAction(action="initiate").amount_paise is None
+    with pytest.raises(ValidationError):
+        RefundAction(action="initiate", amount_paise=0)
+    with pytest.raises(ValidationError):
+        RefundAction(action="initiate", amount_paise=-5)

@@ -70,7 +70,7 @@ class RegistrationNote(StrictCamelModel):
 
 class RefundAction(StrictCamelModel):
     action: Literal["initiate", "processing", "completed", "failed", "retry"]
-    amount_paise: int | None = Field(default=None, ge=0)
+    amount_paise: int | None = Field(default=None, gt=0)
     note: str | None = Field(default=None, max_length=2000)
     gateway_refund_id: str | None = Field(default=None, max_length=120)
 

@@ -3227,6 +3227,13 @@ async def refund_action(
 ) -> Refund:
     refund = await refund_for(db, row.id)
     if action == "initiate":
+        if amount_paise is not None and amount_paise <= 0:
+            raise ValidationFailed("The refund amount must be greater than zero.")
+        requested = (
+            amount_paise
+            if amount_paise is not None
+            else (row.refund_amount_paise or row.fee_paise)
+        )
         return await initiate_refund(
             db,
             request,
@@ -3234,7 +3241,7 @@ async def refund_action(
             actor,
             actor_role,
             amount_paise=min(
-                amount_paise or row.refund_amount_paise or row.fee_paise,
+                requested,
                 await _refundable_paise(db, row),
             ),
             note=note,
