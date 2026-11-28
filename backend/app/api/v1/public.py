@@ -608,7 +608,7 @@ Issued by the organising committee · not a participant registration</div>
     ticket_id = ticket_service.parse_ticket_token(normalized)
     if ticket_id is not None and ticket_service.token_is_valid(normalized, ticket_id):
         ticket = await db.get(Ticket, ticket_id)
-        if ticket is not None:
+        if ticket is not None and ticket.status in ("active", "valid"):
             reg = (
                 await db.execute(
                     select(CollegeRegistration)
