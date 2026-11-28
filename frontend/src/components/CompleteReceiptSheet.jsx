@@ -30,23 +30,14 @@ export function CompleteReceiptSheet({
     }));
 
   const extraPaymentsTotal = extraPayments.reduce((sum, t) => sum + (t.amountPaise || 0), 0);
-  // Platform fee follows the money: an order whose seats are all refunded must
-  // stop counting its fee as retained. Partial refunds still leave the fee on
-  // the bill (the charge was really collected and only part came back).
+  // Platform fees are non-refundable: even when all seats on an order are
+  // refunded, the collected platform fee remains retained on the bill.
   const extraPlatformFeePaise = (() => {
     const seenOrders = new Set();
     let total = 0;
     for (const r of eventRegistrations || []) {
       if ((r.feePaise || 0) <= 0 || !r.orderId || seenOrders.has(r.orderId)) continue;
       seenOrders.add(r.orderId);
-      const orderRows = (eventRegistrations || []).filter((row) => row.orderId === r.orderId);
-      const fullyRefunded =
-        orderRows.length > 0 &&
-        orderRows.every(
-          (row) =>
-            row.refundStatus === 'processed' || row.paymentStatus === 'refunded',
-        );
-      if (fullyRefunded) continue;
       total += Number(r.orderPlatformFeePaise || 0);
     }
     return total;
@@ -266,8 +257,8 @@ export function CompleteReceiptSheet({
                     <div>{attendeeName}</div>
                   </td>
                   <td>
-                    <span style={{ color: isRefundDone ? '#dc2626' : '#16a34a', fontWeight: '700' }}>
-                      {isRefundDone ? 'REFUNDED' : 'PAID'}
+                    <span style={{ color: '#16a34a', fontWeight: '700' }}>
+                      PAID
                     </span>
                   </td>
                   <td style={{ textAlign: 'right', fontWeight: '700' }}>

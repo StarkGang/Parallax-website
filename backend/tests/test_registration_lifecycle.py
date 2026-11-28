@@ -325,23 +325,37 @@ async def test_scenario_1c_reject_gateway_failure_retry_no_double_refund(
     rejected = await admin_reject(client, ctx, reg_id, initiate_refund=True)
     assert rejected.status_code == 200, rejected.text
     detail = rejected.json()["data"]
-    # Cancellation itself stuck; refund marked failed and retryable.
+    # Reject never calls the gateway directly: it queues a pending refund row.
     assert detail["verificationStatus"] == "rejected"
-    assert detail["refundStatus"] == "failed"
+    assert detail["refundStatus"] == "initiated"
+    assert detail["refund"]["status"] == "pending"
+    rf_id = detail["refund"]["id"]
+
+    # Finance desk attempts to process the pending refund while gateway is down.
+    failed_proc = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/admin/refunds/{rf_id}/process",
+    )
+    assert failed_proc.status_code == 502, failed_proc.text
+    marked_failed = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/admin/registration/{reg_id}/refund",
+        json={"action": "failed", "note": "Gateway down"},
+    )
+    assert marked_failed.status_code == 200, marked_failed.text
+    assert marked_failed.json()["data"]["refundStatus"] == "failed"
 
     await assert_invariants(
         db_session, ctx, user_id, email=email, label="1c refund failed"
     )
 
-    # The gateway recovers: retry starts a fresh refund (initiate), which settles
-    # once. Retrying must not double-refund.
+    # The gateway recovers: retry processes the refund once. Retrying must not
+    # double-refund.
     async def _ok(*args, **kwargs):
         return f"rfnd_ok_{uuid.uuid4().hex[:8]}"
 
     monkeypatch.setattr(pay, "gateway_refund", _ok, raising=False)
     initiated = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/admin/registration/{reg_id}/refund",
-        json={"action": "initiate", "amountPaise": collected},
+        json={"action": "retry", "amountPaise": collected},
     )
     assert initiated.status_code == 200, initiated.text
     completed = await client.post(
@@ -418,6 +432,19 @@ async def test_scenario_1e_known_flaw_o23_reject_failed_refund_still_paid_approv
     rejected = await admin_reject(client, ctx, reg_id, initiate_refund=True)
     assert rejected.status_code == 200
     detail = rejected.json()["data"]
+    # Reject queues a pending refund; finance desk hits the gateway failure.
+    assert detail["refundStatus"] == "initiated"
+    rf_id = detail["refund"]["id"]
+    failed_proc = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/admin/refunds/{rf_id}/process",
+    )
+    assert failed_proc.status_code == 502, failed_proc.text
+    marked_failed = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/admin/registration/{reg_id}/refund",
+        json={"action": "failed", "note": "Gateway down"},
+    )
+    assert marked_failed.status_code == 200, marked_failed.text
+    detail = marked_failed.json()["data"]
     # Known flaw: payment_status stays "paid" while verification is rejected.
     assert detail["paymentStatus"] == "paid"
     assert detail["refundStatus"] == "failed"

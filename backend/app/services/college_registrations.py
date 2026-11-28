@@ -2343,16 +2343,17 @@ async def _refund_or_park_pass(
             )
         ).scalars().first()
         if existing_request is None:
-            db.add(
-                Refund(
-                    order_id=row.order_id,
-                    amount_paise=pending_amount,
-                    reason_code=reason_code,
-                    reason_note=f"Rejection refund request: {full_reason[:200]}",
-                    status="pending",
-                    requested_by=actor.id if actor else None,
-                )
+            rf = Refund(
+                order_id=row.order_id,
+                amount_paise=pending_amount,
+                reason_code=reason_code,
+                reason_note=f"Rejection refund request: {full_reason[:200]}",
+                status="pending",
+                requested_by=actor.id if actor else None,
             )
+            db.add(rf)
+            await db.flush()
+            row.refund_id = rf.id
             row.refund_status = "initiated"
             await db.flush()
             await notify(
@@ -2435,10 +2436,9 @@ async def reject(
             actor_role,
             reason_code=code,
             full_reason=full_reason,
-            # The pass refund is still a gateway action when the operator may
-            # move money; only *event* refunds are always parked (see
-            # release_event_entitlements).
-            try_gateway=bool(can_initiate_refund),
+            # Never hit the gateway directly on reject; always queue a pending
+            # refund row so the finance desk approves it in the ledger.
+            try_gateway=False,
             amount_paise=refund_amount_paise,
         )
 
@@ -2770,7 +2770,7 @@ async def _enforce_compliance_row(
                 "system",
                 reason_code="resubmission_expired",
                 full_reason=reason,
-                try_gateway=True,
+                try_gateway=False,
             )
     else:
         reason = "24-hour category-change payment window expired"
