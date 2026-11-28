@@ -320,3 +320,46 @@ async def test_force_cancel_leaves_paid_order_untouched(admin_client: AsyncClien
     db_session.expire_all()
     stored = await db_session.get(PaymentOrder, order_id)
     assert stored.status == "paid"
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_drops_attendance(admin_client: AsyncClient, db_session: AsyncSession):
+    from app.models.commerce import AttendanceRecord
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    reg = await _make_event_reg(db_session, edition_id, user_id, None)
+    event_id = reg.event_id
+    db_session.add(
+        AttendanceRecord(
+            edition_id=edition_id,
+            user_id=user_id,
+            event_id=event_id,
+            scope="event",
+            day="1",
+            result="admitted",
+        )
+    )
+    await db_session.commit()
+    reg_id = reg.id
+
+    resp = await _force_cancel(admin_client, edition_id, reg_id)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    remaining = (
+        await db_session.execute(
+            select(AttendanceRecord).where(AttendanceRecord.user_id == user_id)
+        )
+    ).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_without_attendance_is_noop(admin_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    reg = await _make_event_reg(db_session, edition_id, uuid.uuid4(), None)
+    await db_session.commit()
+
+    resp = await _force_cancel(admin_client, edition_id, reg.id)
+    assert resp.status_code == 200, resp.text

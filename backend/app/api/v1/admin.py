@@ -1229,6 +1229,13 @@ async def force_cancel_registration(
     reg.cancelled_by = "admin"
     reg.cancellation_reason = payload.reason or "Removed from event by administration"
     await revoke_for_registration(db, reg.id)
+    # Drop any attendance record so the cancelled attendee is removed from the
+    # roster and day counters (a no-op when they never checked in).
+    from app.services.passes import drop_attendance
+
+    await drop_attendance(
+        db, user_id=reg.user_id, edition_id=reg.edition_id, event_id=reg.event_id
+    )
     if reg.team_id is not None:
         from app.services.teams import on_team_registration_cancelled
         await on_team_registration_cancelled(db, reg)
