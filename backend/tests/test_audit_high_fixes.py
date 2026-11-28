@@ -575,23 +575,6 @@ async def _make_edition(db_session):
     return ed
 
 
-async def _make_team_order(db_session, edition_id, order_id):
-    from app.models.commerce import Team
-
-    team = Team(
-        edition_id=edition_id,
-        event_id=uuid.uuid4(),
-        name="Team A",
-        leader_id=uuid.uuid4(),
-        invite_code="CODE1234",
-        invite_code_hash="hash",
-        order_id=order_id,
-    )
-    db_session.add(team)
-    await db_session.flush()
-    return team
-
-
 @pytest.mark.asyncio
 async def test_cancel_registration_solo_expires_order(db_session: AsyncSession):
     from app.models.commerce import PaymentOrder
@@ -623,24 +606,6 @@ async def test_cancel_registration_shared_keeps_order(db_session: AsyncSession):
     order_id, reg1_id = order.id, reg1.id
 
     await cancel_registration(db_session, None, user_id, reg1_id)
-    db_session.expire_all()
-    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
-
-
-@pytest.mark.asyncio
-async def test_cancel_registration_team_order_kept(db_session: AsyncSession):
-    from app.models.commerce import PaymentOrder
-    from app.services.registrations import cancel_registration
-
-    edition_id = uuid.uuid4()
-    user_id = uuid.uuid4()
-    order = await _make_order(db_session, edition_id, user_id, "created")
-    reg = await _make_event_reg(db_session, edition_id, user_id, order.id, status="reserved")
-    await _make_team_order(db_session, edition_id, order.id)
-    await db_session.commit()
-    order_id, reg_id = order.id, reg.id
-
-    await cancel_registration(db_session, None, user_id, reg_id)
     db_session.expire_all()
     assert (await db_session.get(PaymentOrder, order_id)).status == "created"
 
@@ -685,24 +650,6 @@ async def test_remove_seat_shared_keeps_order(db_session: AsyncSession):
     await remove_seat(
         db_session, request=None, user_id=user_id, edition=edition, event_id=event1
     )
-    db_session.expire_all()
-    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
-
-
-@pytest.mark.asyncio
-async def test_force_cancel_team_order_kept(admin_client: AsyncClient, db_session: AsyncSession):
-    from app.models.commerce import PaymentOrder
-
-    edition_id = uuid.uuid4()
-    user_id = uuid.uuid4()
-    order = await _make_order(db_session, edition_id, user_id, "created")
-    reg = await _make_event_reg(db_session, edition_id, user_id, order.id)
-    await _make_team_order(db_session, edition_id, order.id)
-    await db_session.commit()
-    reg_id, order_id = reg.id, order.id
-
-    resp = await _force_cancel(admin_client, edition_id, reg_id)
-    assert resp.status_code == 200, resp.text
     db_session.expire_all()
     assert (await db_session.get(PaymentOrder, order_id)).status == "created"
 

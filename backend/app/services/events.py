@@ -528,8 +528,6 @@ async def close_event(
         ).scalars()
     )
     for team in event_teams:
-        if team.order_id is not None:
-            order_ids.append(team.order_id)
         team.status = "disbanded"
         team.formation_state = "disbanded"
         await db.execute(delete(TeamMember).where(TeamMember.team_id == team.id))

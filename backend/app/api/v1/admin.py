@@ -2766,13 +2766,10 @@ async def list_teams(
             ).all()
         )
         order_ids = [row.order_id for row in seat_rows if row.order_id is not None]
-        team_order_ids = [t.order_id for t, _, _ in rows if t.order_id is not None]
-        if order_ids or team_order_ids:
+        if order_ids:
             for order in (
                 await db.execute(
-                    select(PaymentOrder).where(
-                        PaymentOrder.id.in_(order_ids + team_order_ids)
-                    )
+                    select(PaymentOrder).where(PaymentOrder.id.in_(order_ids))
                 )
             ).scalars():
                 order_status[order.id] = order.status
@@ -2801,8 +2798,6 @@ async def list_teams(
     policy = await edition_service.current_policy(db, edition_id)
 
     def _payment_status(team: Team) -> str:
-        if team.order_id is not None:
-            return "paid" if order_status.get(team.order_id) == "paid" else "pending"
         seats = seats_by_team.get(team.id, [])
         if not seats:
             return "none"

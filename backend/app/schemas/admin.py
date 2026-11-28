@@ -111,7 +111,7 @@ class PolicyUpdate(StrictCamelModel):
     selection_change_deadline: datetime | None = None
     addon_requires_pass: bool = True
     team_members_require_pass: bool = True
-    team_fee_basis_default: str = Field(default="per_participant", pattern="^(per_team|per_participant)$")
+    team_fee_basis_default: str = Field(default="per_participant", pattern="^per_participant$")
     hold_minutes: int = 15
     refund_rules: dict = {}
     gst_note: str | None = None

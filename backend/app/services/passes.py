@@ -385,23 +385,6 @@ async def release_event_entitlements(
         order = await db.get(PaymentOrder, order_id)
         if order is None or order.status != "paid":
             continue
-        # A ``per_team`` order pays for the whole roster. Refunding it because
-        # the payer's pass lapsed would leave the remaining teammates holding
-        # seats nobody paid for, so the order stays with a team that still has
-        # members (leadership has already moved to one of them).
-        team_id = (
-            await db.execute(select(Team.id).where(Team.order_id == order.id))
-        ).scalars().first()
-        if team_id is not None:
-            live_members = (
-                await db.execute(
-                    select(func.count(TeamMember.id)).where(
-                        TeamMember.team_id == team_id
-                    )
-                )
-            ).scalar() or 0
-            if live_members:
-                continue
         still_claimed = (
             await db.execute(
                 select(func.count(Registration.id)).where(

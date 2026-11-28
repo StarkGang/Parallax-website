@@ -154,17 +154,10 @@ async def serialize_registrations(
             )
             txn = res.scalars().first()
         paid_at = order.paid_at if order is not None and order.paid_at else (txn.captured_at if txn else None)
-        # A per-team entry is paid once by whoever created it. The joiner's
-        # event stays on their list, but the money belongs on the payer's bill.
+        # Each registration pays for its own seat: the payer is the order's
+        # owner. There is no team-level payer any more.
         billable = int(r.fee_paise or 0) > 0
-        covered_by_team = bool(
-            team is not None and team.order_id is not None and not billable
-        )
-        payer_id = None
-        if covered_by_team:
-            payer_id = getattr(team, "paid_by_user_id", None)
-        elif order is not None:
-            payer_id = order.user_id
+        payer_id = order.user_id if order is not None else None
 
         refund_status, refunded_paise = reg_refund_info.get(r.id, (None, 0))
         if order is not None and order.status == "refunded" and billable:
@@ -201,13 +194,7 @@ async def serialize_registrations(
                 refund_status=refund_status,
                 refunded_paise=refunded_paise,
                 billable=billable,
-                billing_role=(
-                    "payer"
-                    if billable
-                    else "team_covered"
-                    if covered_by_team
-                    else "self"
-                ),
+                billing_role=("payer" if billable else "self"),
                 payer_user_id=payer_id,
             )
         )
@@ -466,22 +453,9 @@ async def cancel_registration(
     ):
             from app.models.commerce import Refund as RefundRow
 
-            # A ``per_team`` order belongs to the team. If teammates are still
-            # on a team that survives this cancellation, the fee stays with
-            # them instead of being handed back to the leaver.
+            # Each seat carries its own order now; refund this registration's
+            # own share. There is no team-level order to share.
             shared_with_team = False
-            if reg.team_id is not None:
-                team = await db.get(Team, reg.team_id)
-                if team is not None and team.order_id == order.id:
-                    remaining = (
-                        await db.execute(
-                            select(func.count(TeamMember.id)).where(
-                                TeamMember.team_id == team.id,
-                                TeamMember.user_id != reg.user_id,
-                            )
-                        )
-                    ).scalar() or 0
-                    shared_with_team = remaining > 0
             if not shared_with_team:
                 already_committed = int(
                     (

@@ -120,15 +120,9 @@ async def serialize_teams(
         policy = policy_cache[t.edition_id]
         basis = team_fee_basis(event, policy) if event else "per_participant"
         price = team_seat_price(event, policy) if event else 0
-        team_order = await _team_order(db, t) if basis == "per_team" and price > 0 else None
-        # Nothing owed (free/included seat, no order) or the order is paid means
-        # the team fee is settled. An open order means the invite stays locked.
-        leader_paid = not (
-            basis == "per_team"
-            and price > 0
-            and team_order is not None
-            and team_order.status != "paid"
-        )
+        # per_team (leader-pays) is gone: a team is never "unpaid" as a whole;
+        # each member settles their own seat.
+        leader_paid = True
 
         members_raw = list(
             (
@@ -232,12 +226,8 @@ async def _pass_active(db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UU
 
 
 def team_fee_basis(event: Event, policy) -> str:
-    basis = (
-        event.team_fee_basis
-        or getattr(policy, "team_fee_basis_default", None)
-        or "per_participant"
-    )
-    return basis if basis in {"per_participant", "per_team"} else "per_participant"
+    # per_team (leader-pays) has been removed: every member pays their own seat.
+    return "per_participant"
 
 
 def team_seat_price(event: Event, policy) -> int:
@@ -258,31 +248,6 @@ async def _live_seat(
             .limit(1)
         )
     ).scalars().first()
-
-
-async def _team_order(db: AsyncSession, team: Team) -> PaymentOrder | None:
-    """The order that pays for this team (``per_team`` basis).
-
-    It lives on ``Team.order_id`` so a leader change cannot orphan it. Older
-    rows are still found through the creator's seat until the backfill runs.
-    """
-    if team.order_id is not None:
-        return await db.get(PaymentOrder, team.order_id)
-    leader_reg = (
-        await db.execute(
-            select(Registration).where(
-                Registration.team_id == team.id,
-                Registration.user_id == team.leader_id,
-            )
-        )
-    ).scalars().first()
-    if leader_reg is None or leader_reg.order_id is None:
-        return None
-    order = await db.get(PaymentOrder, leader_reg.order_id)
-    if order is not None:
-        team.order_id = order.id
-        team.paid_by_user_id = team.paid_by_user_id or leader_reg.user_id
-    return order
 
 
 async def _new_seat_order(
@@ -355,42 +320,13 @@ async def _attach_seat(
         order = None
 
     seat.team_id = team.id
-    seat.price_basis = seat.price_basis or (
-        "team_per_team" if basis == "per_team" else "team_per_participant"
-    )
+    seat.price_basis = seat.price_basis or "team_per_participant"
     # Keep ``included`` so the pass allowance still recognises the seat; every
     # other team seat is reported as a team seat even when it is free.
     if seat.kind != "included":
         seat.kind = "team"
 
-    # A per-team entry is paid once. If the caller's seat already carries a paid
-    # order, that order becomes the team order; a rider joins without paying.
-    if basis == "per_team":
-        team_order = await _team_order(db, team)
-        if team_order is None and seat.order_id is not None:
-            candidate = await db.get(PaymentOrder, seat.order_id)
-            if candidate is not None:
-                team.order_id = candidate.id
-                team.paid_by_user_id = user_id
-                team_order = candidate
-        if team_order is not None:
-            if team_order.status == "paid":
-                seat.status = "confirmed"
-                seat.reservation_expires_at = None
-                if seat.order_id != team_order.id:
-                    seat.fee_paise = 0
-                    seat.order_id = None
-                await issue_for_registration(db, seat)
-                return seat, None
-            if user_id != team.leader_id:
-                # Ride the leader's open payment without being asked to pay it.
-                seat.order_id = team_order.id
-                seat.fee_paise = 0
-                seat.status = "reserved"
-                seat.reservation_expires_at = datetime.now(UTC) + timedelta(
-                    minutes=int(getattr(policy, "hold_minutes", 30) or 30)
-                )
-                return seat, None
+    # Every member pays for their own seat; there is no shared team order.
     return seat, order
 
 
@@ -441,32 +377,19 @@ async def pending_team_payment(
 ) -> PaymentOrder | None:
     """The open order that confirms a seat on this team.
 
-    For ``per_team`` events only the leader pays; an invited member never sees
-    a bill or Pay button. For ``per_participant`` events every member pays their
-    own seat, so the newest open seat order is returned when the caller has no
-    order of their own.
+    Every member pays for their own seat, so this returns the caller's own open
+    seat order (or the newest open seat order when no user is given).
     """
-    event = await db.get(Event, team.event_id)
-    policy = await current_policy(db, team.edition_id)
-    basis = team_fee_basis(event, policy) if event else "per_participant"
-    if basis == "per_team" and user_id is not None and user_id != team.leader_id:
-        return None
-    if team.order_id is not None:
-        order = await db.get(PaymentOrder, team.order_id)
-        if order is not None and order.status == "created":
-            return order
-        return None
     stmt = select(Registration).where(
         Registration.team_id == team.id,
         Registration.status == "reserved",
         Registration.order_id.is_not(None),
     )
-    seat = None
     if user_id is not None:
         seat = (
             await db.execute(stmt.where(Registration.user_id == user_id))
         ).scalars().first()
-    elif basis != "per_team":
+    else:
         seat = (await db.execute(stmt)).scalars().first()
     if seat is None or seat.order_id is None:
         return None
@@ -503,19 +426,6 @@ async def _cancel_seat(
     if preserve_orders and order.id in preserve_orders:
         # The order pays for a team that is still running: the seat goes, the
         # money stays with the teammates who are still on the roster.
-        return False
-    # One order can pay for several seats (``per_team``): refund it only when no
-    # other live seat still claims it.
-    still_claimed = (
-        await db.execute(
-            select(func.count(Registration.id)).where(
-                Registration.order_id == order.id,
-                Registration.id != reg.id,
-                Registration.status.in_(("confirmed", "reserved", "pending")),
-            )
-        )
-    ).scalar() or 0
-    if still_claimed:
         return False
     if refunded_orders is not None:
         if order.id in refunded_orders:
@@ -789,19 +699,6 @@ async def join_team(
     if policy.team_members_require_pass:
         if not await _pass_active(db, user_id, edition.id):
             raise ValidationFailed("You must hold an active pass to join a team.")
-
-    if (
-        team_fee_basis(event, policy) == "per_team"
-        and team_seat_price(event, policy) > 0
-    ):
-        # The team fee is paid once, by the leader. Until it is in, there is
-        # nothing for a newcomer to ride on, so joining is refused rather than
-        # silently opening a second invoice for the same team.
-        team_order = await _team_order(db, team)
-        if team_order is not None and team_order.status != "paid":
-            raise Conflict(
-                "The team leader must complete payment before members can join this team."
-            )
 
     count = (
         await db.execute(

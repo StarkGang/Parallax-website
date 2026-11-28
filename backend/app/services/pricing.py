@@ -48,7 +48,6 @@ LIVE_SEAT_STATUSES = ("confirmed", "reserved", "pending")
 INCLUDED = "included"
 FREE = "free"
 ADDON = "addon"
-TEAM_PER_TEAM = "team_per_team"
 TEAM_PER_PARTICIPANT = "team_per_participant"
 
 
@@ -113,8 +112,8 @@ def allowance_pack(
 
 
 def team_basis(event: Event, policy: EditionPolicy) -> str:
-    basis = event.team_fee_basis or getattr(policy, "team_fee_basis_default", None)
-    return basis if basis in (TEAM_PER_TEAM, TEAM_PER_PARTICIPANT) else TEAM_PER_PARTICIPANT
+    # per_team (leader-pays) has been removed: every member pays their own seat.
+    return TEAM_PER_PARTICIPANT
 
 
 def _kind_for(event: Event, price: int, covered: bool) -> tuple[str, str, int]:
@@ -1242,7 +1241,6 @@ __all__ = [
     "FREE",
     "INCLUDED",
     "TEAM_PER_PARTICIPANT",
-    "TEAM_PER_TEAM",
     "allowance_pack",
     "basket_add",
     "basket_payload",
