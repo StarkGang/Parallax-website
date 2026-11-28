@@ -1075,10 +1075,7 @@ async def toggle_team_lock(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.U
     if team.leader_id != user_id:
         raise Conflict("Only the team leader can lock or unlock the roster.")
     if team.status == "disbanded":
-        team.status = "active"
-        await _refresh_formation(db, team)
-        await db.flush()
-        return team
+        raise ValidationFailed("This team has been disbanded.")
     team.status = "active" if team.status == "locked" else "locked"
     team.formation_state = "locked" if team.status == "locked" else "ready"
     await db.flush()

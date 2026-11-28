@@ -589,6 +589,7 @@ async def process_webhook(
     event_type = event_payload.get("event")
     if event_type in {"payment.captured", "payment.authorized", "order.paid"}:
         pay_entity = event_payload.get("payload", {}).get("payment", {}).get("entity", {})
+        order_entity = {}
         order_id = pay_entity.get("order_id")
         if not order_id:
             order_entity = event_payload.get("payload", {}).get("order", {}).get("entity", {})
@@ -652,9 +653,7 @@ async def process_webhook(
                         except Exception:
                             pass
                 else:
-                    payment_id = pay_entity.get("id") or (
-                        order_entity.get("payment_id") if "order_entity" in locals() else None
-                    )
+                    payment_id = pay_entity.get("id") or order_entity.get("payment_id")
                     await mark_order_paid(db, order, transaction_id=payment_id)
     elif event_type == "payment.failed":
         # In Razorpay, an individual payment failure within an order does NOT fail the order.
@@ -688,7 +687,7 @@ async def process_webhook(
             )
         except Exception:
             pass
-    elif event_type in {"refund.processed", "refund.failed", "refund.created"}:
+    elif event_type in {"refund.processed", "refund.failed"}:
         refund_entity = event_payload.get("payload", {}).get("refund", {}).get("entity", {})
         gateway_refund_id = refund_entity.get("id")
         if gateway_refund_id:
@@ -995,7 +994,7 @@ async def refund_order(
             )
         ).scalars().first()
         if col_reg is not None:
-            col_reg.refund_status = "completed"
+            col_reg.refund_status = "completed" if settled_now else "processing"
             col_reg.refund_amount_paise = int(refunded_total)
             col_reg.refund_id = refund.id
 

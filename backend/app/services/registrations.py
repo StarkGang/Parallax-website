@@ -540,12 +540,11 @@ async def cancel_registration(
         resource_id=str(reg.id),
         after={"reason": reason},
     )
-    if reg.status == "cancelled":
-        from app.services.passes import drop_attendance
+    from app.services.passes import drop_attendance
 
-        await drop_attendance(
-            db, user_id=user_id, edition_id=reg.edition_id, event_id=reg.event_id
-        )
+    await drop_attendance(
+        db, user_id=user_id, edition_id=reg.edition_id, event_id=reg.event_id
+    )
     await db.flush()
 
 

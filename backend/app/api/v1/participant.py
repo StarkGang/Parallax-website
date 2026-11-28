@@ -663,7 +663,7 @@ async def mock_pay(
     if blocked:
         raise Conflict(blocked, code="PASS_BLOCKED")
     order = await payment_service.order_for(db, order_id)
-    if order.user_id != ctx.user.id:
+    if order.user_id != ctx.user.id or order.edition_id != edition_id:
         raise NotFound("Order not found.")
     await payment_service.mark_order_paid(
         db, order, transaction_id=payment_service.mock_payment_id()

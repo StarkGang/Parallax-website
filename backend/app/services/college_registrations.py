@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -816,10 +817,12 @@ async def _sync_profile_from_registration(
     profile.course = row.course if row.course is not None else profile.course
     profile.branch = row.branch if row.branch is not None else profile.branch
     if row.year_of_study:
-        try:
-            profile.year_of_study = int(str(row.year_of_study).strip()[:1])
-        except (TypeError, ValueError):
-            pass
+        match = re.search(r"\d+", str(row.year_of_study))
+        if match:
+            try:
+                profile.year_of_study = int(match.group(0))
+            except (TypeError, ValueError):
+                pass
     if row.date_of_birth is not None:
         profile.date_of_birth = row.date_of_birth
     profile.city = row.city if row.city is not None else profile.city
@@ -4037,12 +4040,15 @@ async def admin_rows(
     # photo has to come with the list. One query for the page instead of one per
     # attendee keeps the desk list cheap.
     photo_documents: dict[uuid.UUID, uuid.UUID] = {}
+    photo_doc_urls: dict[uuid.UUID, str | None] = {}
     registration_ids = [row.id for row, _ in rows]
     if registration_ids:
-        for registration_id, document_id in (
+        for registration_id, document_id, external_url in (
             await db.execute(
                 select(
-                    RegistrationDocument.registration_id, RegistrationDocument.id
+                    RegistrationDocument.registration_id,
+                    RegistrationDocument.id,
+                    RegistrationDocument.external_url,
                 ).where(
                     RegistrationDocument.registration_id.in_(registration_ids),
                     RegistrationDocument.doc_type == "photo",
@@ -4050,6 +4056,7 @@ async def admin_rows(
             )
         ).all():
             photo_documents[registration_id] = document_id
+            photo_doc_urls[registration_id] = external_url
     # The QR a linked studio card prints is the attendee's own entry payload, so
     # a scan takes the normal ticket path instead of giving a badge its own
     # rights. Batched: one pass query and one ticket query for the whole page.
@@ -4114,6 +4121,7 @@ async def admin_rows(
             "photoDocumentId": (
                 str(photo_documents[row.id]) if row.id in photo_documents else None
             ),
+            "photoExternalUrl": photo_doc_urls.get(row.id),
             "categoryCode": row.category_code,
             "categoryName": row.category_name,
             "feePaise": row.fee_paise,

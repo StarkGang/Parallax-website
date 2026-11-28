@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { BrandedQr } from './BrandedQr.jsx';
 import { logisticsLine } from '../lib/attendee.js';
+import { fallbackImageUrl } from '../lib/imageUrl.js';
 import { normalizeYear } from './AttendeeInputs.jsx';
 import './ParallaxIdCard.css';
 
@@ -537,6 +538,12 @@ export default function ParallaxIdCard({
   const tierPill = customData?.tier || (category?.name ? category.name : roleConfig.tierPill);
   const credentialId = customData?.id || registration?.registrationNumber || 'PX-27-EA130B';
   const resolvedPhoto = customData?.photo || photoUrl || (registration?.photoUrl ? registration.photoUrl : null);
+  const [photoSrc, setPhotoSrc] = useState(resolvedPhoto);
+  const [photoFallbackTried, setPhotoFallbackTried] = useState(false);
+  useEffect(() => {
+    setPhotoSrc(resolvedPhoto);
+    setPhotoFallbackTried(false);
+  }, [resolvedPhoto]);
   const isVerified = customData?.isVerified !== undefined ? customData.isVerified : registration?.verificationStatus === 'approved';
 
   // Gender / meal / bed. Printed on the back so the kitchen and the hostel desk
@@ -586,8 +593,23 @@ export default function ParallaxIdCard({
           </div>
           <div className="slot" />
           <label className={`photo ${allowPhotoUpload ? 'is-clickable' : ''}`} title={allowPhotoUpload ? 'Click to change photo' : ''}>
-            {resolvedPhoto ? (
-              <img src={resolvedPhoto} alt={fullName} />
+            {photoSrc ? (
+              <img
+                src={photoSrc}
+                alt={fullName}
+                referrerPolicy="no-referrer"
+                onError={() => {
+                  if (!photoFallbackTried) {
+                    const fallback = fallbackImageUrl(resolvedPhoto, 480);
+                    if (fallback && fallback !== photoSrc) {
+                      setPhotoFallbackTried(true);
+                      setPhotoSrc(fallback);
+                      return;
+                    }
+                  }
+                  setPhotoSrc(null);
+                }}
+              />
             ) : (
               <svg viewBox="0 0 100 117" aria-hidden="true">
                 <circle cx="50" cy="48" r="19" />

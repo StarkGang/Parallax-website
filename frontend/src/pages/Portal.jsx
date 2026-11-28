@@ -17,7 +17,7 @@ import {
   Users,
 } from 'lucide-react';
 import { authApi, portalApi, publicApi, registrationApi } from '../lib/api.js';
-import { openCheckout } from '../lib/razorpay.js';
+import { payOrder } from '../lib/pay.js';
 import { CompleteReceiptSheet } from '../components/CompleteReceiptSheet.jsx';
 import { PaymentProgress } from '../components/PaymentProgress.jsx';
 import '../components/PassTierCard.css';
@@ -77,38 +77,6 @@ import {
   clearAsyncCache,
   useAsync,
 } from '../components/ui.jsx';
-
-/**
- * Run the checkout for one order and report what happened.
- *
- * Used by add-on bookings and by team seats (a priced team seat is reserved
- * until it is paid), so both paths behave the same on cancel, decline and mock
- * payments.
- */
-async function payOrder(editionId, order, user, title) {
-  if (!order) return { status: 'paid' };
-  if (order.mock) {
-    await portalApi.mockPay(editionId, order.orderId);
-    return { status: 'paid' };
-  }
-  const attendee = {
-    ...user,
-    fullName: user?.fullName || '',
-    email: user?.email || '',
-    phone: user?.phone || '',
-  };
-  const response = await openCheckout(order, attendee, title);
-  if (!response) return { status: 'cancelled' };
-  if (response.failed) {
-    return { status: 'failed', message: response.error?.message };
-  }
-  await portalApi.verifyPayment(editionId, {
-    orderId: order.orderId,
-    razorpayPaymentId: response.razorpay_payment_id,
-    razorpaySignature: response.razorpay_signature,
-  });
-  return { status: 'paid' };
-}
 
 const PORTAL_NAV = [
   ['My Pass & Ticket', '/portal/registration'],
@@ -412,6 +380,11 @@ export function PortalSelectEvents() {
   const confirmedEventIds = new Set(
     (regs.data?.data || [])
       .filter((row) => row.status === 'confirmed')
+      .map((row) => row.eventId),
+  );
+  const reservedEventIds = new Set(
+    (regs.data?.data || [])
+      .filter((row) => row.status === 'reserved')
       .map((row) => row.eventId),
   );
   const addonOptions = (catalogue.data?.data || []).filter(
@@ -760,6 +733,7 @@ export function PortalSelectEvents() {
           <div className="choice-list" style={{ marginTop: '12px' }}>
             {teamEvents.map((event) => {
               const existingTeam = teamByEventId.get(event.id);
+              const isReserved = reservedEventIds.has(event.id);
               const basisLabel =
                 event.teamFeeBasis === 'per_team'
                   ? `${money(event.addonPricePaise)} per team`
@@ -776,15 +750,16 @@ export function PortalSelectEvents() {
                     <small>
                       Team {event.teamMinSize}–{event.teamMaxSize} · {basisLabel}
                       {existingTeam ? ` · In team "${existingTeam.name}"` : ''}
+                      {!existingTeam && isReserved ? ' · Payment pending' : ''}
                     </small>
                   </span>
                   <span className="choice-price">
                     <Button
                       to={existingTeam ? '/portal/teams' : `/portal/teams?event=${event.id}`}
-                      variant={existingTeam ? 'ghost' : 'primary'}
+                      variant={existingTeam || isReserved ? 'ghost' : 'primary'}
                       icon={ArrowRight}
                     >
-                      {existingTeam ? 'Manage Team' : 'Create / Join Team'}
+                      {existingTeam ? 'Manage Team' : isReserved ? 'Complete Payment' : 'Create / Join Team'}
                     </Button>
                   </span>
                 </div>
@@ -1531,7 +1506,7 @@ export function PortalTeams() {
     } else if (!teamEvents.length && form.eventId) {
       setForm((current) => ({ ...current, eventId: '' }));
     }
-  }, [requestedEventId, teamEvents.length, rows.length, regs.data]);
+  }, [requestedEventId, teamEvents, joinedEventIds, form.eventId]);
 
   const run = async (key, action, success) => {
     setBusy(key);

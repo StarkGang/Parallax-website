@@ -127,7 +127,8 @@ async def upload_document(
     )
     await db.commit()
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    assert row is not None
+    if row is None:
+        raise NotFound("Registration not found.")
     return {
         "data": {
             "document": service.document_payload(document, edition_id, row.id),
@@ -159,7 +160,8 @@ async def upload_document_link(
     )
     await db.commit()
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    assert row is not None
+    if row is None:
+        raise NotFound("Registration not found.")
     return {
         "data": {
             "document": service.document_payload(document, edition_id, row.id),
@@ -348,7 +350,8 @@ async def mock_payment(
     )
     await db.commit()
     row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    assert row is not None
+    if row is None:
+        raise NotFound("Registration not found.")
     return {
         "data": {
             "paid": True,

@@ -47,7 +47,7 @@ async def razorpay_webhook(
     except Exception:
         return JSONResponse({"status": "invalid json"}, status_code=400)
 
-    event_id = payload.get("event_id") or payload.get("id") or "evt_unknown"
+    event_id = payload.get("id") or payload.get("event_id") or "evt_unknown"
     await process_webhook(db, payload, event_id=event_id)
     await db.commit()
     return JSONResponse({"status": "ok"})

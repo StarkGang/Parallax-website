@@ -13,6 +13,7 @@ import {
 import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { adminApi } from '../lib/api.js';
+import { resolveImageUrl } from '../lib/imageUrl.js';
 import ParallaxIdCard, {
   ADMIN_PRESETS,
   PALETTES,
@@ -221,11 +222,12 @@ export default function AdminIdCardStudio() {
     ]
       .filter(Boolean)
       .join(' · ');
-    // The list only ships the passport-photo document id; the bytes are served
-    // by the admin document route.
-    const photoUrl = att.photoDocumentId
-      ? adminApi.registrationDocumentUrl(edition.id, att.id, att.photoDocumentId)
-      : '';
+    // The list ships either a Drive external URL or the passport-photo document id.
+    const photoUrl = att.photoExternalUrl
+      ? resolveImageUrl(att.photoExternalUrl, 480)
+      : att.photoDocumentId
+        ? adminApi.registrationDocumentUrl(edition.id, att.id, att.photoDocumentId)
+        : '';
     setActivePresetKey('custom');
     setSavedCredential(null);
     setCardMessage(null);

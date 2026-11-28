@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, CreditCard, LogIn, Users } from 'lucide-react';
 import { portalApi, publicApi } from '../lib/api.js';
@@ -16,11 +16,22 @@ export function TeamInvite() {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [joined, setJoined] = useState(false);
+  const navTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+    };
+  }, []);
 
   const data = preview.data?.data;
 
   const join = async () => {
     if (!data) return;
+    if (!data.edition?.id) {
+      setMessage({ tone: 'error', text: 'This invite is not linked to an active edition.' });
+      return;
+    }
     setBusy('join');
     setMessage(null);
     try {
@@ -47,7 +58,7 @@ export function TeamInvite() {
       }
       setJoined(true);
       setMessage({ tone: 'success', text: 'You are on the team. Your seat is attached.' });
-      setTimeout(() => navigate('/portal/events'), 1200);
+      navTimerRef.current = setTimeout(() => navigate('/portal/events'), 1200);
     } catch (error) {
       const needsPass = /pass/i.test(error.message || '');
       setMessage({

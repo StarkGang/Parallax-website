@@ -29,6 +29,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { useSite } from '../lib/site.jsx';
 import { date, dateTime, fileSize, money } from '../lib/format.js';
 import { openCheckout } from '../lib/razorpay.js';
+import { resolveImageUrl } from '../lib/imageUrl.js';
 import { FOOD_OPTIONS, GENDER_OPTIONS, foodLabel, genderLabel } from '../lib/attendee.js';
 import { ISTE, LOGO, NSSCE } from './Public.jsx';
 import { BrandedQr } from '../components/BrandedQr.jsx';
@@ -893,6 +894,7 @@ export function PortalRegistration() {
     photoBlobUrl ||
     fileState?.photo?.previewUrl ||
     fileState?.passport_photo?.previewUrl ||
+    (photoDoc?.externalUrl ? resolveImageUrl(photoDoc.externalUrl, 480) : null) ||
     (photoDoc?.id && !photoDoc?.externalUrl ? registrationApi.documentUrl(editionId, photoDoc.id) : null);
 
   useEffect(() => {

@@ -374,6 +374,11 @@ async def quotes_match_prices(db: AsyncSession, quote: EventQuote) -> None:
                 f"The price of '{event.title}' changed. Review your basket and pay again.",
                 code="QUOTE_STALE",
             )
+        if base_value(event) != int(line.get("baseValuePaise", -1)):
+            raise Conflict(
+                f"The allowance value of '{event.title}' changed. Review your basket and pay again.",
+                code="QUOTE_STALE",
+            )
     policy = await current_policy(db, quote.edition_id)
     if int(policy.version) != int(quote.policy_version):
         raise Conflict(

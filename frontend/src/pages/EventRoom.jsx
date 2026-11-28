@@ -90,7 +90,7 @@ export function EventRoom() {
       (teams.data?.data || []).find(
         (item) => row && item.eventId === row.eventId,
       ) || null,
-    [teams.data, row?.eventId],
+    [teams.data, row],
   );
 
   const passActive = payload?.passStatus === 'active';
@@ -143,8 +143,10 @@ export function EventRoom() {
         await reload();
         setMessage({ tone: 'success', text: 'Payment confirmed. Your ticket is ready.' });
       } else if (outcome.status === 'cancelled') {
+        await reload();
         setMessage({ tone: 'info', text: 'Payment cancelled. The seat stays reserved until it expires.' });
       } else {
+        await reload();
         setMessage({ tone: 'error', text: outcome.message || 'Payment failed.' });
       }
     } catch (error) {
@@ -428,7 +430,7 @@ export function EventRoom() {
               <Button size="small" variant="ghost" onClick={copyInvite} icon={Copy}>
                 Copy invite
               </Button>
-            ) : (
+            ) : row?.seat ? (
               <div className="step-team-actions">
                 <Button size="small" variant="light" icon={Users} onClick={() => setCreateOpen(true)}>
                   Create a team
@@ -437,6 +439,8 @@ export function EventRoom() {
                   Join with a code
                 </Button>
               </div>
+            ) : (
+              <small className="muted">Add your seat in Step 2 first to form or join a team.</small>
             )
           }
         >

@@ -482,7 +482,7 @@ export function PortalWorklist() {
   }, [teams.data]);
 
   const selectedRows = useMemo(
-    () => rows.filter((row) => selectedSet.has(row.eventId)),
+    () => rows.filter((row) => selectedSet.has(row.eventId) && row.seat?.status !== 'confirmed'),
     [rows, selectedSet],
   );
   const due = quote?.duePaise || 0;
@@ -898,7 +898,7 @@ export function PortalWorklist() {
     if (!row || row.seat || selected.includes(row.eventId)) return;
     if (!(row.actions || []).includes('add')) return;
     toggle(row);
-  }, [params, rows.length]);
+  }, [params, rows.length, busy]);
 
   if (data.loading && !payload) return <Loading label="Loading your events" rows={3} />;
   if (data.error) return <ErrorBox error={data.error} onRetry={data.reload} />;

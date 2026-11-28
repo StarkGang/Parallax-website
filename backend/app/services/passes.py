@@ -17,7 +17,7 @@ from app.models.commerce import (
     Team,
     TeamMember,
 )
-from app.models.edition import ConventionEdition, EditionPolicy, Event
+from app.models.edition import ConventionEdition, EditionPolicy, Event, EventCategory
 from app.schemas.participant import SelectedEvent, SelectionState
 from app.services.editions import accepting_bookings, aware
 from app.services.events import capacity_usage, seats_left_for
@@ -559,6 +559,14 @@ async def selection_state(
         ).scalars()
     )
 
+    categories = {
+        c.id: c.name
+        for c in (
+            await db.execute(
+                select(EventCategory).where(EventCategory.edition_id == user_pass.edition_id)
+            )
+        ).scalars()
+    }
     taken = await capacity_usage(db, events) if events else {}
     deadline = aware(policy.selection_change_deadline)
     locked = bool(deadline and datetime.now(UTC) > deadline)
@@ -579,7 +587,7 @@ async def selection_state(
                 event_id=e.id,
                 slug=e.slug,
                 title=e.title,
-                category=e.slug,
+                category=categories.get(e.category_id, "General"),
                 format=e.format,
                 base_value_paise=e.base_value_paise,
                 addon_price_paise=e.addon_price_paise,
@@ -1035,6 +1043,8 @@ async def sync_included_registrations(
             if row.status == "cancelled":
                 row.status = target_status
                 row.cancelled_at = None
+                row.cancelled_by = None
+                row.cancellation_reason = None
             if row.status == "confirmed":
                 await issue_for_registration(db, row)
             continue
