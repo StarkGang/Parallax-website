@@ -907,14 +907,21 @@ async def process_pending_refund(
     asked for. The rest of the request is dropped, so the desk can start a new
     request for the remainder if it decides to return more later.
     """
-    rf = await db.get(Refund, refund_id)
+    rf = (
+        await db.execute(
+            select(Refund)
+            .where(Refund.id == refund_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().first()
     if rf is None:
         raise NotFound("Refund request not found.")
     order = await payment_service.order_for(db, rf.order_id)
     if order.edition_id != edition_id:
         raise NotFound("Refund request not found in this edition.")
     if rf.status == "processed":
-        return {"data": {"refundId": str(rf.id), "status": rf.status, "amountPaise": rf.amount_paise}}
+        raise Conflict("Refund has already been processed.")
     if rf.status == "processing" and rf.gateway_refund_id:
         settings = get_settings()
         if settings.payments_enabled and not rf.gateway_refund_id.startswith("rfnd_mock_"):
@@ -941,16 +948,24 @@ async def process_pending_refund(
     # creates a fresh gateway/processed refund row cleanly.
     reason_code = rf.reason_code or "admin_confirmed"
     reason_note = payload.reason_note if payload and payload.reason_note else rf.reason_note
-    amount_paise = rf.amount_paise
+    original_amount = int(rf.amount_paise)
+    amount_paise = original_amount
     if payload is not None and payload.amount_paise is not None:
         requested = int(payload.amount_paise)
         if requested <= 0:
             raise ValidationFailed("The refund amount must be greater than zero.")
-        if requested > int(rf.amount_paise):
+        if requested > original_amount:
             raise ValidationFailed(
-                f"This request is only for INR {int(rf.amount_paise) / 100:.2f}."
+                f"This request is only for INR {original_amount / 100:.2f}."
             )
         amount_paise = requested
+    remainder_paise = max(0, original_amount - amount_paise)
+    if remainder_paise > 0:
+        partial_tag = (
+            f"Partial settlement: INR {amount_paise / 100:.2f} of "
+            f"INR {original_amount / 100:.2f} (INR {remainder_paise / 100:.2f} retained)."
+        )
+        reason_note = f"{reason_note} — {partial_tag}" if reason_note else partial_tag
     await db.delete(rf)
     await db.flush()
 
@@ -961,6 +976,22 @@ async def process_pending_refund(
         reason_code=reason_code,
         reason_note=reason_note,
         requested_by_id=ctx.user.id,
+    )
+    await record(
+        db,
+        request,
+        actor_id=ctx.user.id,
+        actor_role=_role(ctx, edition_id),
+        action="refund.processed",
+        resource_type="refund",
+        resource_id=str(new_rf.id),
+        before={"requestedAmountPaise": original_amount, "previousRefundId": str(refund_id)},
+        after={
+            "settledAmountPaise": new_rf.amount_paise,
+            "remainderPaise": remainder_paise,
+            "status": new_rf.status,
+            "orderId": str(order.id),
+        },
     )
     await db.commit()
     return {"data": {"refundId": str(new_rf.id), "status": new_rf.status, "amountPaise": new_rf.amount_paise}}

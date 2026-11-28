@@ -492,7 +492,12 @@ async def create_team(
     # Locked read: a roster must not be created against an event that is being
     # cancelled right now (close_event takes the same row lock).
     event = (
-        await db.execute(select(Event).where(Event.id == event_id).with_for_update())
+        await db.execute(
+            select(Event)
+            .where(Event.id == event_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalars().first()
     if event is None or event.edition_id != edition.id:
         raise NotFound("Event not found.")
@@ -594,7 +599,12 @@ async def join_team(
 
     # Lock the team row so a burst of joins cannot overshoot team_max_size.
     team = (
-        await db.execute(select(Team).where(Team.id == team.id).with_for_update())
+        await db.execute(
+            select(Team)
+            .where(Team.id == team.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
     if team is None or team.status not in LIVE_TEAM_STATUSES:
         raise NotFound("Team with that invite code not found.")
@@ -603,7 +613,10 @@ async def join_team(
         raise Conflict("This convention is no longer accepting new bookings.")
     event = (
         await db.execute(
-            select(Event).where(Event.id == team.event_id).with_for_update()
+            select(Event)
+            .where(Event.id == team.event_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalars().first()
     if team.status == "locked":

@@ -386,7 +386,14 @@ async def release_event_entitlements(
     refunded = 0
     queued = 0  # refunded stays 0: nothing is settled from here any more
     for order_id in paid_orders:
-        order = await db.get(PaymentOrder, order_id)
+        order = (
+            await db.execute(
+                select(PaymentOrder)
+                .where(PaymentOrder.id == order_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().first()
         if order is None or order.status != "paid":
             continue
         still_claimed = (

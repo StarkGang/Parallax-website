@@ -692,7 +692,14 @@ async def _request_seat_refund(
     result = {"refundedPaise": 0, "refundPending": False}
     if reg.order_id is None or int(reg.fee_paise or 0) <= 0:
         return result
-    order = await db.get(PaymentOrder, reg.order_id)
+    order = (
+        await db.execute(
+            select(PaymentOrder)
+            .where(PaymentOrder.id == reg.order_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().first()
     if order is None or order.status != "paid":
         return result
 
