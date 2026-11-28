@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
-from app.core.errors import AppError, Conflict, NotFound
+from app.core.errors import AppError, Conflict, NotFound, ValidationFailed
 from app.core.rate_limit import limiter, memory_limiter
 from app.db.session import get_db
 from app.models.commerce import Ticket
@@ -688,6 +688,14 @@ async def verify_payment(
 
     if order.status == "paid":
         return {"data": {"paid": True, "orderId": str(order.id)}}
+    # A terminal non-paid order must never be re-activated by a verify call:
+    # a refunded order's money is already back with the customer, and a failed
+    # order never captured. Only "created" (and the deferred "expired" case)
+    # may proceed to confirmation.
+    if order.status in ("refunded", "failed"):
+        raise ValidationFailed(
+            f"This order has already been {order.status} and cannot be verified."
+        )
 
     settings = get_settings()
     if settings.payments_enabled:

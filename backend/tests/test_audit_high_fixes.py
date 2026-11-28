@@ -363,3 +363,84 @@ async def test_force_cancel_without_attendance_is_noop(admin_client: AsyncClient
 
     resp = await _force_cancel(admin_client, edition_id, reg.id)
     assert resp.status_code == 200, resp.text
+
+
+async def _participant_user_id(db_session):
+    from app.models.user import User
+
+    return (
+        await db_session.execute(
+            select(User.id).where(User.email == "participant@parallax.local")
+        )
+    ).scalar_one()
+
+
+async def _make_order_for(db_session, edition_id, user_id, status):
+    from app.models.commerce import PaymentOrder
+
+    order = PaymentOrder(
+        edition_id=edition_id,
+        user_id=user_id,
+        purpose="pass",
+        amount_paise=50000,
+        status=status,
+        gateway_order_id=f"order_{uuid.uuid4().hex[:10]}",
+        paid_at=datetime.now(UTC) if status in ("paid", "refunded") else None,
+    )
+    db_session.add(order)
+    await db_session.flush()
+    return order
+
+
+async def _verify(participant_client, edition_id, order_id):
+    return await participant_client.post(
+        f"/api/v1/editions/{edition_id}/payments/verify",
+        json={
+            "orderId": str(order_id),
+            "razorpayPaymentId": "pay_dummy_123456",
+            "razorpaySignature": "sig_dummy_1234567890",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_paid_order_unchanged(participant_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "paid")
+    await db_session.commit()
+    resp = await _verify(participant_client, edition_id, order.id)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_refunded_order_rejected(participant_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "refunded")
+    await db_session.commit()
+    resp = await _verify(participant_client, edition_id, order.id)
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_verify_failed_order_rejected(participant_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "failed")
+    await db_session.commit()
+    resp = await _verify(participant_client, edition_id, order.id)
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_verify_created_order_unchanged(participant_client: AsyncClient, db_session: AsyncSession):
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "created")
+    await db_session.commit()
+    resp = await _verify(participant_client, edition_id, order.id)
+    # Dev/test mock mode: created order still confirms (unchanged behaviour).
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["paid"] is True
