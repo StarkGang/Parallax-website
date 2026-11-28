@@ -504,6 +504,31 @@ async def expire_unpaid(db: AsyncSession) -> int:
         ).scalars()
     )
     for order in stale:
+        # Never expire an order the gateway shows as captured: the customer's
+        # money is held but no pass was issued. Flag it for finance instead of
+        # silently losing the payment. On any gateway uncertainty, leave the
+        # order untouched for a later retry rather than risk expiring it.
+        if settings.payments_enabled and order.gateway_order_id:
+            try:
+                remote = await fetch_gateway_order(order.gateway_order_id)
+            except Exception as exc:  # gateway down / untested path
+                logger.warning(
+                    "expire_unpaid_gateway_check_failed",
+                    order=str(order.id),
+                    error=str(exc)[:200],
+                )
+                continue
+            if remote.get("status") == "paid":
+                order.status = "needs_reconciliation"
+                order.notes = {
+                    **(order.notes or {}),
+                    "needsReconciliation": True,
+                    "reason": "captured_at_gateway_before_expiry",
+                }
+                logger.warning(
+                    "unpaid_order_needs_reconciliation", order=str(order.id)
+                )
+                continue
         order.status = "expired"
     released = await expire_reservations(db)
     if stale:
@@ -555,6 +580,20 @@ async def fetch_gateway_payment(payment_id: str) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
         resp = await client.get(
             f"https://api.razorpay.com/v1/payments/{payment_id}",
+            headers=_auth_header(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_gateway_order(gateway_order_id: str) -> dict[str, Any]:
+    """Read the authoritative order status from Razorpay (e.g. ``paid``)."""
+    settings = get_settings()
+    if not settings.payments_enabled:
+        return {}
+    async with httpx.AsyncClient(timeout=GATEWAY_TIMEOUT) as client:
+        resp = await client.get(
+            f"https://api.razorpay.com/v1/orders/{gateway_order_id}",
             headers=_auth_header(),
         )
         resp.raise_for_status()

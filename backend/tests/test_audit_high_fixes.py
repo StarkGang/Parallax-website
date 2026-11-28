@@ -1,7 +1,7 @@
 """Tests for the audit HIGH fixes (approve import, ticket revoke, refund amount, etc.)."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -748,4 +748,124 @@ async def test_verify_expired_order_bad_signature_stays_expired(
     db_session.expire_all()
     from app.models.commerce import PaymentOrder
 
+    assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
+
+
+# --- F5 D-2: expire_unpaid must not expire captured orders ------------------
+
+async def _make_stale_order(db_session, edition_id, user_id, gateway_order_id=None):
+    from app.models.commerce import PaymentOrder
+
+    order = PaymentOrder(
+        edition_id=edition_id,
+        user_id=user_id,
+        purpose="pass",
+        amount_paise=50000,
+        status="created",
+        gateway_order_id=gateway_order_id or f"order_{uuid.uuid4().hex[:12]}",
+        created_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    db_session.add(order)
+    await db_session.flush()
+    return order
+
+
+@pytest.mark.asyncio
+async def test_expire_unpaid_captured_flagged_for_finance(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.commerce import PaymentOrder
+    from app.services.payments import expire_unpaid
+
+    monkeypatch.setattr(
+        "app.services.payments.get_settings",
+        lambda: SimpleNamespace(payments_enabled=True, unpaid_order_ttl_minutes=30),
+    )
+
+    async def _fake_fetch(_gid):
+        return {"status": "paid"}
+
+    monkeypatch.setattr("app.services.payments.fetch_gateway_order", _fake_fetch)
+
+    order = await _make_stale_order(db_session, uuid.uuid4(), uuid.uuid4())
+    await db_session.commit()
+    order_id = order.id
+
+    await expire_unpaid(db_session)
+    db_session.expire_all()
+    stored = await db_session.get(PaymentOrder, order_id)
+    assert stored.status == "needs_reconciliation"
+    assert (stored.notes or {}).get("needsReconciliation") is True
+
+
+@pytest.mark.asyncio
+async def test_expire_unpaid_captures_unpaid_expired(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.commerce import PaymentOrder
+    from app.services.payments import expire_unpaid
+
+    monkeypatch.setattr(
+        "app.services.payments.get_settings",
+        lambda: SimpleNamespace(payments_enabled=True, unpaid_order_ttl_minutes=30),
+    )
+
+    async def _fake_fetch(_gid):
+        return {"status": "created"}
+
+    monkeypatch.setattr("app.services.payments.fetch_gateway_order", _fake_fetch)
+
+    order = await _make_stale_order(db_session, uuid.uuid4(), uuid.uuid4())
+    await db_session.commit()
+    order_id = order.id
+
+    await expire_unpaid(db_session)
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_expire_unpaid_gateway_error_keeps_order(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.commerce import PaymentOrder
+    from app.services.payments import expire_unpaid
+
+    monkeypatch.setattr(
+        "app.services.payments.get_settings",
+        lambda: SimpleNamespace(payments_enabled=True, unpaid_order_ttl_minutes=30),
+    )
+
+    async def _boom(_gid):
+        raise RuntimeError("gateway down")
+
+    monkeypatch.setattr("app.services.payments.fetch_gateway_order", _boom)
+
+    order = await _make_stale_order(db_session, uuid.uuid4(), uuid.uuid4())
+    await db_session.commit()
+    order_id = order.id
+
+    await expire_unpaid(db_session)
+    db_session.expire_all()
+    assert (await db_session.get(PaymentOrder, order_id)).status == "created"
+
+
+@pytest.mark.asyncio
+async def test_expire_unpaid_payments_disabled_expires(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.commerce import PaymentOrder
+    from app.services.payments import expire_unpaid
+
+    monkeypatch.setattr(
+        "app.services.payments.get_settings",
+        lambda: SimpleNamespace(payments_enabled=False, unpaid_order_ttl_minutes=30),
+    )
+
+    order = await _make_stale_order(db_session, uuid.uuid4(), uuid.uuid4())
+    await db_session.commit()
+    order_id = order.id
+
+    await expire_unpaid(db_session)
+    db_session.expire_all()
     assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
