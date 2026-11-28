@@ -2535,7 +2535,6 @@ export function AdminPolicy() {
       if (!policies.loading && rows.length === 0) {
         setForm({
           includedEventCount: 3,
-          mode: 'up_to',
           cap: '450',
           capInclusive: true,
           allowancePackOrder: 0,
@@ -2544,7 +2543,6 @@ export function AdminPolicy() {
           teamMembersRequirePass: true,
           holdMinutes: 15,
           deadline: '',
-          teamFeeBasisDefault: 'per_participant',
           gstNote: 'Inclusive of all applicable taxes',
           platformFeePercent: '0',
           platformFeeExemptUnder: '0',
@@ -2555,7 +2553,6 @@ export function AdminPolicy() {
     }
     setForm({
       includedEventCount: current.includedEventCount,
-      mode: current.includedSelectionMode,
       cap: current.includedValueCapPaise != null ? rupees(current.includedValueCapPaise) : '',
       capInclusive: current.capInclusive,
       allowancePackOrder: Number(current.allowancePackOrder ?? 0),
@@ -2564,7 +2561,6 @@ export function AdminPolicy() {
       teamMembersRequirePass: current.teamMembersRequirePass,
       holdMinutes: current.holdMinutes,
       deadline: toLocalInput(current.selectionChangeDeadline),
-      teamFeeBasisDefault: current.teamFeeBasisDefault || 'per_participant',
       gstNote: current.gstNote || '',
       platformFeePercent: current.platformFeeBps ? String(current.platformFeeBps / 100) : '0',
       platformFeeExemptUnder: current.platformFeeExemptUnderPaise
@@ -2578,14 +2574,12 @@ export function AdminPolicy() {
 
   const payloadFrom = () => ({
     includedEventCount: form.includedEventCount === '' ? 0 : Number(form.includedEventCount),
-    includedSelectionMode: form.mode,
     includedValueCapPaise: form.cap === '' || form.cap == null ? null : paise(form.cap),
     capInclusive: form.capInclusive,
     allowancePackOrder: Number(form.allowancePackOrder ?? 0),
     lunchIncludedDays: form.lunchDays,
     addonRequiresPass: form.addonRequiresPass,
     teamMembersRequirePass: form.teamMembersRequirePass,
-    teamFeeBasisDefault: form.teamFeeBasisDefault,
     holdMinutes: Number(form.holdMinutes) || 15,
     selectionChangeDeadline: fromLocalInput(form.deadline),
     gstNote: form.gstNote || null,
@@ -2702,12 +2696,6 @@ export function AdminPolicy() {
               <option value="1">1 — Expensive first (maximizes discount)</option>
             </select>
           </Field>
-          <Field label="Selection mode">
-            <select value={form.mode} onChange={(event) => set('mode', event.target.value)}>
-              <option value="up_to">Up to</option>
-              <option value="exact">Exactly</option>
-            </select>
-          </Field>
           <Field label="Included value cap (₹, blank = no cap)">
             <input
               type="number"
@@ -2733,14 +2721,6 @@ export function AdminPolicy() {
               value={form.deadline}
               onChange={(event) => set('deadline', event.target.value)}
             />
-          </Field>
-          <Field label="Default team fee basis">
-            <select
-              value={form.teamFeeBasisDefault}
-              onChange={(event) => set('teamFeeBasisDefault', event.target.value)}
-            >
-              <option value="per_participant">Per participant</option>
-            </select>
           </Field>
           <Field label="GST note">
             <input value={form.gstNote} onChange={(event) => set('gstNote', event.target.value)} />
@@ -2816,7 +2796,7 @@ export function AdminPolicy() {
       </Panel>
 
       <DataTable
-        head={['Version', 'Fallback pass', 'Included', 'Cap', 'Mode', 'Published', 'Reason', '']}
+        head={['Version', 'Included', 'Cap', 'Published', 'Reason', '']}
       >
         {rows.map((row) => (
           <tr key={row.id}>
@@ -2827,7 +2807,6 @@ export function AdminPolicy() {
             <td>
               {row.includedValueCapPaise != null ? money(row.includedValueCapPaise) : 'No cap'}
             </td>
-            <td>{row.includedSelectionMode}</td>
             <td>{date(row.createdAt)}</td>
             <td>{row.reason || '-'}</td>
             <td style={{ textAlign: 'right' }}>

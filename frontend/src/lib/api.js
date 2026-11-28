@@ -263,8 +263,6 @@ export const portalApi = {
     }),
   removeEvent: (editionId, eventId) =>
     api(`/editions/${editionId}/events/${eventId}`, { method: 'DELETE' }),
-  saveSelections: (editionId, eventIds) =>
-    api(`/editions/${editionId}/pass/selections`, { method: 'PUT', body: { eventIds } }),
   registrations: (editionId) => api(`/editions/${editionId}/registrations`),
   registerAddons: (editionId, eventIds) =>
     api(`/editions/${editionId}/registrations`, { method: 'POST', body: { eventIds } }),
