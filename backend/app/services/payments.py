@@ -713,6 +713,22 @@ async def refund_order(
     if amount_paise <= 0:
         raise ValidationFailed("The refund amount must be greater than zero.")
 
+    # Lock the order row for the duration of this transaction so two concurrent
+    # refunds cannot both read the same "already refunded" total and both pass
+    # the cap check. populate_existing refreshes a possibly-stale cached row
+    # before the status is re-checked under the lock.
+    locked = (
+        await db.execute(
+            select(PaymentOrder)
+            .where(PaymentOrder.id == order.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().one()
+    if locked.status != "paid":
+        raise ValidationFailed("Only a paid order can be refunded.")
+    order = locked
+
     # The cap counts money that is committed or queued. Including "pending"
     # prevents the Finance form from opening a second refund while a
     # cancellation-auto-queued pending row is waiting for confirmation.

@@ -512,3 +512,44 @@ async def test_verify_payments_off_dev_mock_still_works(
     resp = await _verify(participant_client, edition_id, order.id)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_refund_order_second_over_cap_rejected(db_session: AsyncSession):
+    """Sequential double refund: a second refund beyond the remaining cap is rejected.
+
+    Concurrency is not runtime-tested (SQLite ignores SELECT ... FOR UPDATE).
+    """
+    from app.core.errors import ValidationFailed
+    from app.models.commerce import PaymentOrder, PaymentTransaction
+    from app.services.payments import refund_order
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = PaymentOrder(
+        edition_id=edition_id,
+        user_id=user_id,
+        purpose="pass",
+        amount_paise=50000,
+        status="paid",
+        gateway_order_id=f"order_{uuid.uuid4().hex[:10]}",
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(order)
+    await db_session.flush()
+    db_session.add(
+        PaymentTransaction(
+            order_id=order.id,
+            gateway_payment_id="pay_x",
+            amount_paise=50000,
+            status="captured",
+        )
+    )
+    await db_session.commit()
+
+    first = await refund_order(db_session, order, 30000, reason_code="test")
+    assert first.amount_paise == 30000
+    await db_session.commit()
+
+    with pytest.raises(ValidationFailed):
+        await refund_order(db_session, order, 30000, reason_code="test")
