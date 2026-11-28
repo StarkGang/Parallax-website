@@ -816,3 +816,88 @@ async def test_expire_unpaid_payments_disabled_expires(db_session, monkeypatch):
     await expire_unpaid(db_session)
     db_session.expire_all()
     assert (await db_session.get(PaymentOrder, order_id)).status == "expired"
+
+
+# --- per_team removal: leave keeps the seat, user can join/create another -----
+
+async def _make_team_event(db_session, edition_id):
+    from app.models.edition import Event, EventCategory
+
+    cat = (
+        await db_session.execute(
+            select(EventCategory).where(EventCategory.edition_id == edition_id).limit(1)
+        )
+    ).scalars().first()
+    if cat is None:
+        cat = EventCategory(edition_id=edition_id, name="General", slug="general")
+        db_session.add(cat)
+        await db_session.flush()
+    now = datetime.now(UTC)
+    ev = Event(
+        edition_id=edition_id,
+        category_id=cat.id,
+        slug=f"ev-{uuid.uuid4().hex[:8]}",
+        title="Team Event",
+        summary="x",
+        format="team",
+        team_min_size=2,
+        team_max_size=4,
+        base_value_paise=20000,
+        addon_price_paise=20000,
+        capacity=50,
+        starts_at=now + timedelta(days=20),
+        ends_at=now + timedelta(days=20, hours=2),
+        registration_opens_at=now - timedelta(days=1),
+        registration_closes_at=now + timedelta(days=18),
+        status="published",
+    )
+    db_session.add(ev)
+    await db_session.flush()
+    return ev
+
+
+@pytest.mark.asyncio
+async def test_leave_keeps_registration_and_can_create_another_team(
+    db_session: AsyncSession, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.models.commerce import Team, TeamMember
+    from app.services import teams as team_service
+
+    async def _policy():
+        return SimpleNamespace(team_members_require_pass=False, hold_minutes=30)
+
+    monkeypatch.setattr("app.services.teams.current_policy", lambda *a, **k: _policy())
+
+    edition = await _make_edition(db_session)
+    edition.status = "published"
+    edition.registration_opens_at = datetime.now(UTC) - timedelta(days=1)
+    edition.registration_closes_at = datetime.now(UTC) + timedelta(days=30)
+    await db_session.flush()
+    event1 = await _make_team_event(db_session, edition.id)
+    event2 = await _make_team_event(db_session, edition.id)
+    user_id = uuid.uuid4()
+    reg1 = await _make_event_reg(db_session, edition.id, user_id, None, status="confirmed")
+    reg1.event_id = event1.id
+    reg2 = await _make_event_reg(db_session, edition.id, user_id, None, status="confirmed")
+    reg2.event_id = event2.id
+    team1 = Team(
+        edition_id=edition.id, event_id=event1.id, name="A",
+        leader_id=user_id, invite_code="AAA11111", invite_code_hash="h1",
+        status="active", formation_state="forming",
+    )
+    db_session.add(team1)
+    await db_session.flush()
+    db_session.add(TeamMember(team_id=team1.id, user_id=user_id, is_leader=True))
+    await db_session.commit()
+    reg1_id, team1_id = reg1.id, team1.id
+
+    await team_service.leave_team(db_session, user_id, team1_id)
+    assert reg1.status == "confirmed"
+    assert reg1.team_id is None
+
+    created = await team_service.create_team(
+        db_session, None, user_id, edition, event2.id, "New Team"
+    )
+    assert created.id is not None
