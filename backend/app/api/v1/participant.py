@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import AuthContext, current_context
 from app.core.config import get_settings
 from app.core.errors import AppError, Conflict, NotFound, ValidationFailed
+from app.core.logging import get_logger
 from app.core.rate_limit import limiter, memory_limiter
 from app.db.session import get_db
 from app.models.commerce import Ticket
@@ -36,6 +37,8 @@ from app.services import (
 )
 
 router = APIRouter(prefix="/editions/{edition_id}", tags=["participant"])
+
+logger = get_logger("participant")
 
 
 async def _edition(db: AsyncSession, edition_id: uuid.UUID) -> ConventionEdition:
@@ -723,6 +726,16 @@ async def verify_payment(
         # trust a caller-supplied payment id (that would hand out a free pass).
         raise ValidationFailed(
             "Payment verification is not available. Use the mock payment endpoint in dev mode."
+        )
+
+    # An expired order is allowed to revive only after the gateway (or dev mock)
+    # has re-confirmed the amount and order id above. Log every revival.
+    if order.status == "expired":
+        logger.info(
+            "expired_order_revived",
+            order_id=str(order.id),
+            user_id=str(order.user_id),
+            amount_paise=order.amount_paise,
         )
 
     await payment_service.mark_order_paid(
