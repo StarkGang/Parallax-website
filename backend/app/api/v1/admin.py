@@ -1162,7 +1162,7 @@ async def approve_event_registration(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Approve a pending event registration (for requires_approval events) and issue its ticket."""
-    from app.models.registration import Registration
+    from app.models.commerce import Registration
     from app.services.tickets import issue_for_registration
     from app.core.cache import cache_delete_pattern
     from app.services.audit import record
