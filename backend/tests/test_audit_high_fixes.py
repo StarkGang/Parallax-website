@@ -224,3 +224,99 @@ def test_refund_action_schema_rejects_zero():
         RefundAction(action="initiate", amount_paise=0)
     with pytest.raises(ValidationError):
         RefundAction(action="initiate", amount_paise=-5)
+
+
+async def _make_order(db_session, edition_id, user_id, status, amount_paise=50000):
+    from app.models.commerce import PaymentOrder
+
+    order = PaymentOrder(
+        edition_id=edition_id,
+        user_id=user_id,
+        purpose="registration",
+        amount_paise=amount_paise,
+        status=status,
+        gateway_order_id=f"order_{uuid.uuid4().hex[:10]}",
+        paid_at=datetime.now(UTC) if status == "paid" else None,
+    )
+    db_session.add(order)
+    await db_session.flush()
+    return order
+
+
+async def _make_event_reg(db_session, edition_id, user_id, order_id, status="confirmed"):
+    reg = Registration(
+        edition_id=edition_id,
+        user_id=user_id,
+        event_id=uuid.uuid4(),
+        kind="addon",
+        fee_paise=50000,
+        status=status,
+        registration_number=f"REG-{uuid.uuid4().hex[:8]}",
+        order_id=order_id,
+    )
+    db_session.add(reg)
+    await db_session.flush()
+    return reg
+
+
+async def _force_cancel(admin_client, edition_id, reg_id, body=None):
+    return await admin_client.post(
+        f"/api/v1/editions/{edition_id}/admin/registrations/{reg_id}/force-cancel",
+        json=body or {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_expires_solo_unpaid_order(admin_client: AsyncClient, db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+
+    edition_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, uuid.uuid4(), "created")
+    reg = await _make_event_reg(db_session, edition_id, uuid.uuid4(), order.id)
+    await db_session.commit()
+    reg_id, order_id = reg.id, order.id
+
+    resp = await _force_cancel(admin_client, edition_id, reg_id)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    stored = await db_session.get(PaymentOrder, order_id)
+    assert stored.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_keeps_shared_unpaid_order(admin_client: AsyncClient, db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+
+    edition_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, user_id, "created")
+    leader = await _make_event_reg(db_session, edition_id, user_id, order.id)
+    await _make_event_reg(db_session, edition_id, uuid.uuid4(), order.id, status="confirmed")
+    await db_session.commit()
+    leader_id, order_id = leader.id, order.id
+
+    resp = await _force_cancel(admin_client, edition_id, leader_id)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    stored = await db_session.get(PaymentOrder, order_id)
+    assert stored.status == "created"
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_leaves_paid_order_untouched(admin_client: AsyncClient, db_session: AsyncSession):
+    from app.models.commerce import PaymentOrder
+
+    edition_id = uuid.uuid4()
+    order = await _make_order(db_session, edition_id, uuid.uuid4(), "paid")
+    reg = await _make_event_reg(db_session, edition_id, uuid.uuid4(), order.id)
+    await db_session.commit()
+    reg_id, order_id = reg.id, order.id
+
+    resp = await _force_cancel(admin_client, edition_id, reg_id)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    stored = await db_session.get(PaymentOrder, order_id)
+    assert stored.status == "paid"

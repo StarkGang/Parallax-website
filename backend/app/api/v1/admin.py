@@ -1258,6 +1258,26 @@ async def force_cancel_registration(
                 )
             )
 
+    # An unpaid (created) order must not dangle after the seat is gone, or a
+    # late payment could revive a cancelled booking. A per_team order is shared
+    # by the roster, so only expire it when no other active registration still
+    # references it (the paid path below handles refunding real money).
+    if reg.order_id is not None:
+        unpaid_order = await db.get(PaymentOrder, reg.order_id)
+        if unpaid_order is not None and unpaid_order.status == "created":
+            other_active = (
+                await db.execute(
+                    select(func.count(Registration.id)).where(
+                        Registration.order_id == reg.order_id,
+                        Registration.id != reg.id,
+                        Registration.status != "cancelled",
+                    )
+                )
+            ).scalar() or 0
+            if other_active == 0:
+                unpaid_order.status = "expired"
+                await db.flush()
+
     refund_data = None
     if payload.issue_refund:
         if reg.kind == "included" or reg.fee_paise == 0:
