@@ -81,14 +81,6 @@ class Team(Base, UUIDPrimaryKey, Timestamps):
     # (live/locked/disbanded) because every existing query reads it; this column
     # says how far the roster is through formation.
     formation_state: Mapped[str] = mapped_column(String(20), default="forming", nullable=False)
-    # The team owns its entry payment (``per_team``) so a leader leaving cannot
-    # orphan an order that already admitted the rest of the roster.
-    order_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("payment_orders.id", ondelete="SET NULL"), index=True
-    )
-    paid_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
 
 
 class TeamMember(Base, UUIDPrimaryKey, Timestamps):
