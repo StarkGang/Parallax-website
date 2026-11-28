@@ -32,3 +32,19 @@ Branch: audit-high-fixes
   - Broader suites: test_event_cancellation_and_attendance fully passed. test_registration_lifecycle has 6 failures that ALSO fail on the starting commit (pre-existing, verified by reverting backend/app to 7d4a9b6). test_audit03/08/college_registration have pre-existing ordering failures (verified earlier).
 - New real bugs found: 0.
 - Stop condition hit: a full round found 0 new real bugs.
+
+### Round 2 (user answered Q1 + Q2)
+- Q2 (align all three expiry paths): added shared helper `expire_order_if_unshared`
+  in `payments.py`; used by `registrations.cancel_registration`, `pricing.remove_seat`,
+  and `admin.force_cancel_registration`. Expires a `created` order only when no other
+  non-cancelled registration references it AND no `Team.order_id` owns it (team orders
+  are excluded entirely — team lifecycle owns them). Confirmed Registration statuses are
+  exactly {confirmed, reserved, pending, cancelled} (`LIVE_SEAT_STATUSES`, pricing.py:47),
+  so `!= "cancelled"` == `IN (confirmed,reserved,pending)`.
+- Q1 (expired verify): expired orders are allowed to revive after the existing gateway
+  amount/order-id re-confirmation (payments_enabled path); added `expired_order_revived`
+  log. Prod-like (payments off, not mock) still rejected by Fix 8.
+- Tests: solo→expired, shared→kept, team→kept for cancel_registration, remove_seat,
+  force_cancel; expired dev revival→paid; expired+bad signature→stays expired.
+- Baseline: 5-file => 20 passed (unchanged); +audit => 51 passed. Frontend build clean.
+- New real bugs found: 0. No open decisions remain from this round.
