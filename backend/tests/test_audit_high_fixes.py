@@ -444,3 +444,71 @@ async def test_verify_created_order_unchanged(participant_client: AsyncClient, d
     # Dev/test mock mode: created order still confirms (unchanged behaviour).
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_payments_on_bad_signature_rejected(
+    participant_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.api.v1.participant.get_settings",
+        lambda: SimpleNamespace(payments_enabled=True, mock_payments_available=False),
+    )
+    monkeypatch.setattr(
+        "app.services.payments.verify_checkout_signature", lambda *a, **k: False
+    )
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "created")
+    await db_session.commit()
+
+    resp = await _verify(participant_client, edition_id, order.id)
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "PAYMENT_SIGNATURE_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_verify_payments_off_prod_like_rejected(
+    participant_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.api.v1.participant.get_settings",
+        lambda: SimpleNamespace(payments_enabled=False, mock_payments_available=False),
+    )
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "created")
+    await db_session.commit()
+    order_id = order.id
+
+    resp = await _verify(participant_client, edition_id, order_id)
+    assert resp.status_code == 422, resp.text
+    db_session.expire_all()
+    from app.models.commerce import PaymentOrder
+
+    stored = await db_session.get(PaymentOrder, order_id)
+    assert stored.status == "created"
+
+
+@pytest.mark.asyncio
+async def test_verify_payments_off_dev_mock_still_works(
+    participant_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.api.v1.participant.get_settings",
+        lambda: SimpleNamespace(payments_enabled=False, mock_payments_available=True),
+    )
+    edition_id = uuid.uuid4()
+    uid = await _participant_user_id(db_session)
+    order = await _make_order_for(db_session, edition_id, uid, "created")
+    await db_session.commit()
+
+    resp = await _verify(participant_client, edition_id, order.id)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["paid"] is True

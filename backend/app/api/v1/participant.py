@@ -718,6 +718,12 @@ async def verify_payment(
                 code="PAYMENT_NOT_CONFIRMED",
                 status_code=409,
             )
+    elif not settings.mock_payments_available:
+        # Payments are disabled and this is not a dev/mock environment: never
+        # trust a caller-supplied payment id (that would hand out a free pass).
+        raise ValidationFailed(
+            "Payment verification is not available. Use the mock payment endpoint in dev mode."
+        )
 
     await payment_service.mark_order_paid(
         db, order, transaction_id=payload.razorpay_payment_id
