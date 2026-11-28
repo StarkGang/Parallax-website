@@ -378,10 +378,8 @@ async def policies(
                 "id": str(p.id),
                 "version": p.version,
                 "isCurrent": p.is_current,
-                "passPricePaise": p.pass_price_paise,
                 "lunchIncludedDays": p.lunch_included_days or [],
                 "includedEventCount": p.included_event_count,
-                "includedSelectionMode": getattr(p, "included_selection_mode", "exact"),
                 "includedValueCapPaise": p.included_value_cap_paise,
                 "capInclusive": p.cap_inclusive,
                 "allowancePackOrder": int(getattr(p, "allowance_pack_order", 0) or 0),
@@ -392,7 +390,6 @@ async def policies(
                 "holdMinutes": p.hold_minutes,
                 "addonRequiresPass": p.addon_requires_pass,
                 "teamMembersRequirePass": p.team_members_require_pass,
-                "teamFeeBasisDefault": p.team_fee_basis_default,
                 "selectionChangeDeadline": edition_service.aware(p.selection_change_deadline).isoformat() if p.selection_change_deadline else None,
                 "reason": p.reason,
                 "createdAt": edition_service.aware(p.created_at).isoformat() if p.created_at else None,
@@ -900,7 +897,16 @@ async def process_pending_refund(
     request: Request,
     ctx: AuthContext = Depends(require_permission("finance.write")),
     db: AsyncSession = Depends(get_db),
+    payload: AdminProcessRefundPayload | None = None,
 ) -> dict:
+    """Settle a pending refund request.
+
+    ``amountPaise`` is optional: leaving it out refunds the whole request (the
+    old behaviour). Sending a smaller amount settles only that slice, which is
+    how the desk records a *partial* refund on a cancellation the attendee
+    asked for. The rest of the request is dropped, so the desk can start a new
+    request for the remainder if it decides to return more later.
+    """
     rf = await db.get(Refund, refund_id)
     if rf is None:
         raise NotFound("Refund request not found.")
@@ -934,8 +940,17 @@ async def process_pending_refund(
     # Retire the pending placeholder before calling refund_order so refund_order
     # creates a fresh gateway/processed refund row cleanly.
     reason_code = rf.reason_code or "admin_confirmed"
-    reason_note = rf.reason_note
+    reason_note = payload.reason_note if payload and payload.reason_note else rf.reason_note
     amount_paise = rf.amount_paise
+    if payload is not None and payload.amount_paise is not None:
+        requested = int(payload.amount_paise)
+        if requested <= 0:
+            raise ValidationFailed("The refund amount must be greater than zero.")
+        if requested > int(rf.amount_paise):
+            raise ValidationFailed(
+                f"This request is only for INR {int(rf.amount_paise) / 100:.2f}."
+            )
+        amount_paise = requested
     await db.delete(rf)
     await db.flush()
 
@@ -2591,7 +2606,8 @@ async def db_playground_seed(
             user_id=target_user.id,
             edition_id=edition_id,
             policy=policy,
-            price_paise=policy.pass_price_paise,
+            # The charged price lives on the registration category, not the policy.
+            price_paise=0,
         )
         pass_ticket = await issue_for_pass(db, pass_obj)
         results["pass"] = {
@@ -2793,7 +2809,7 @@ async def list_teams(
             for member in members:
                 member["seatStatus"] = seat_status.get((team_id, member["userId"]))
 
-    from app.services.teams import team_fee_basis, team_seat_price
+    from app.services.teams import team_seat_price
 
     policy = await edition_service.current_policy(db, edition_id)
 
@@ -2819,7 +2835,6 @@ async def list_teams(
                 "inviteCode": t.invite_code,
                 "maxSize": e.team_max_size,
                 "minSize": e.team_min_size,
-                "feeBasis": team_fee_basis(e, policy),
                 "feePaise": team_seat_price(e, policy),
                 "paymentStatus": _payment_status(t),
                 "seats": seats_by_team.get(t.id, []),

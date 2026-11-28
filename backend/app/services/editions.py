@@ -118,15 +118,12 @@ async def current_policy(db: AsyncSession, edition_id: uuid.UUID) -> EditionPoli
 
 def policy_public(policy: EditionPolicy) -> PolicyPublic:
     return PolicyPublic(
-        pass_price_paise=policy.pass_price_paise,
         lunch_included_days=getattr(policy, "lunch_included_days", None) or [],
         included_event_count=policy.included_event_count,
-        included_selection_mode=getattr(policy, "included_selection_mode", "exact"),
         included_value_cap_paise=getattr(policy, "included_value_cap_paise", None),
         cap_inclusive=getattr(policy, "cap_inclusive", True),
         addon_requires_pass=getattr(policy, "addon_requires_pass", True),
         team_members_require_pass=getattr(policy, "team_members_require_pass", True),
-        team_fee_basis_default=getattr(policy, "team_fee_basis_default", "per_participant"),
         hold_minutes=policy.hold_minutes,
         selection_change_deadline=aware(policy.selection_change_deadline),
         policy_version=policy.version,
@@ -375,16 +372,6 @@ async def check_policy(
         or 0
     )
 
-    next_price = payload.get("pass_price_paise")
-    if current and next_price is not None and current.pass_price_paise != next_price:
-        if paid_passes > 0 and not payload.get("override_price_lock"):
-            blocking.append(
-                "Cannot change the pass price after active passes exist without an override."
-            )
-
-    if next_price is not None and next_price < 0:
-        blocking.append("The pass price cannot be negative.")
-
     count = payload.get("included_event_count")
     if count is not None and count < -1:
         blocking.append("The included event count must be -1 (unlimited) or at least 0.")
@@ -455,17 +442,14 @@ async def apply_policy(
         edition_id=edition_id,
         version=next_version,
         is_current=True,
-        pass_price_paise=payload["pass_price_paise"],
         included_event_count=payload.get("included_event_count", 0),
         lunch_included_days=payload.get("lunch_included_days", []),
-        included_selection_mode=payload.get("included_selection_mode", "exact"),
         included_value_cap_paise=payload.get("included_value_cap_paise"),
         cap_inclusive=payload.get("cap_inclusive", True),
         allowance_pack_order=int(payload.get("allowance_pack_order", 0) or 0),
         addon_requires_pass=payload.get("addon_requires_pass", True),
         team_members_require_pass=payload.get("team_members_require_pass", True),
         selection_change_deadline=payload.get("selection_change_deadline"),
-        team_fee_basis_default=payload.get("team_fee_basis_default", "per_participant"),
         hold_minutes=payload.get("hold_minutes", 15),
         refund_rules=payload.get("refund_rules", {}),
         gst_note=payload.get("gst_note"),
@@ -484,7 +468,7 @@ async def apply_policy(
         action="policy.created",
         resource_type="edition_policy",
         resource_id=str(new_p.id),
-        after={"version": next_version, "pass_price_paise": new_p.pass_price_paise},
+        after={"version": next_version},
     )
     await db.flush()
     cache_delete_pattern("public:*")

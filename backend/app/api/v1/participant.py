@@ -19,7 +19,6 @@ from app.schemas.participant import (
     CheckoutRequest,
     PassView,
     QuoteRequest,
-    SelectionUpdate,
     TeamCreate,
     TeamJoin,
 )
@@ -63,8 +62,6 @@ async def get_pass(
     user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
     if user_pass is None:
         return {"data": None}
-    policy = await edition_service.current_policy(db, edition.id)
-    sel = await pass_service.selection_state(db, user_pass, policy)
     view = PassView(
         id=user_pass.id,
         edition_id=user_pass.edition_id,
@@ -73,50 +70,9 @@ async def get_pass(
         status=user_pass.status,
         lunch_days=user_pass.lunch_days or [],
         paid_at=edition_service.aware(user_pass.paid_at),
-        selection=sel,
         created_at=edition_service.aware(user_pass.created_at),
     )
     return {"data": view.model_dump(by_alias=True)}
-
-
-@router.put("/pass/selections", dependencies=[Depends(limiter("pass_selections", 60, 60))])
-async def update_selections(
-    edition_id: uuid.UUID,
-    payload: SelectionUpdate,
-    request: Request,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    edition = await _edition(db, edition_id)
-    # A released seat must be bookable in the same request that discovers it.
-    await college_service.maybe_enforce_lapsed_compliance(
-        db, edition_id=edition.id, request=request
-    )
-    blocked = await pass_service.pass_gate_blocked(db, ctx.user.id, edition.id)
-    if blocked:
-        raise Conflict(blocked, code="PASS_BLOCKED")
-    user_pass = await pass_service.get_pass(db, ctx.user.id, edition.id)
-    if user_pass is None:
-        raise NotFound("You do not have a pass for this edition.")
-    if user_pass.status != "active":
-        if user_pass.status == "suspended":
-            raise Conflict("Your convention pass has been suspended by the organisers.", code="PASS_BLOCKED")
-        raise Conflict(f"Your convention pass is {user_pass.status}. Event selection is closed.", code="PASS_BLOCKED")
-    policy = await edition_service.current_policy(db, edition.id)
-    sel, order = await pass_service.set_selections(
-        db, request, user_pass, payload.event_ids, policy
-    )
-    settings = get_settings()
-    if order is not None and not settings.payments_enabled and not settings.is_development:
-        raise AppError(
-            "Online payments are not configured. Contact the organisers.",
-            code="PAYMENTS_NOT_CONFIGURED",
-            status_code=503,
-        )
-    out_data = sel.model_dump(by_alias=True)
-    out_data["order"] = _team_payment_payload(order) if order is not None else None
-    await db.commit()
-    return {"data": out_data}
 
 
 @router.post("/registrations", dependencies=[Depends(limiter("addon_create", 20, 60))])

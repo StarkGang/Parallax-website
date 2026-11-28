@@ -25,6 +25,8 @@ from app.models.commerce import (
     Ticket,
 )
 from app.models.registration import CollegeRegistration
+
+from tests.seat_helpers import buy_seat, buy_seat_reserved
 try:
     from tests.test_teams_and_editions import (
         _edition,
@@ -41,17 +43,14 @@ except ImportError:
     )
 
 
-async def _priced_team_event(db_session, edition_id, *, price_paise: int, basis: str):
+async def _priced_team_event(db_session, edition_id, *, price_paise: int):
     event = await _fresh_event(
         db_session,
         edition_id,
-        title=f"Priced team {basis}",
+        title="Priced team event",
         format="team",
         price_paise=price_paise,
     )
-    event.team_fee_basis = basis
-    await db_session.commit()
-    await db_session.refresh(event)
     return event
 
 
@@ -99,41 +98,44 @@ def _payment_of(payload: dict) -> dict | None:
 
 @pytest.mark.asyncio
 async def test_priced_team_seat_is_reserved_until_paid(client: AsyncClient, db_session):
-    """A per-participant team event must charge every member (B3)."""
+    """A per-participant team event charges every member for their own seat.
+
+    The seat is bought through the basket like any other; team creation then
+    attaches that seat to the roster instead of selling a second one.
+    """
     email = "team.priced@test.local"
     await _login(client, email)
     edition = await _edition(client)
     edition_id = edition["id"]
     await _paid_registration(client, edition_id, email)
     event = await _priced_team_event(
-        db_session, uuid.UUID(edition_id), price_paise=80000, basis="per_participant"
+        db_session, uuid.UUID(edition_id), price_paise=80000
     )
 
-    created = await client.post(
-        f"/api/v1/editions/{edition_id}/teams",
-        json={"eventId": str(event.id), "name": "Charging Five"},
-    )
-    assert created.status_code in (200, 201), created.text
-    payment = _payment_of(created.json()["data"])
-    assert payment is not None, "a priced team seat must hand back an order"
-    assert payment["amountPaise"] == 80000
+    order_id, basket = await buy_seat_reserved(client, edition_id, event.id)
+    assert order_id, "a priced team seat must hand back an order"
+    line = next(l for l in basket["lines"] if l.get("eventId") == str(event.id))
+    assert line["duePaise"] == 80000
 
+    event_id = event.id
+    db_session.expire_all()
     seat = (
         await db_session.execute(
             select(Registration).where(
-                Registration.event_id == event.id,
+                Registration.event_id == event_id,
                 Registration.status == "reserved",
             )
         )
     ).scalars().first()
-    assert seat is not None and seat.fee_paise == 80000
+    assert seat is not None
     seat_id = seat.id
+    assert seat.fee_paise == 80000
     assert (
         await db_session.execute(select(Ticket).where(Ticket.registration_id == seat_id))
     ).scalars().first() is None, "a reserved seat must not get a ticket yet"
 
     paid = await client.post(
-        f"/api/v1/editions/{edition_id}/payments/{payment['orderId']}/mock"
+        f"/api/v1/editions/{edition_id}/payments/{order_id}/mock"
     )
     assert paid.status_code == 200, paid.text
     db_session.expire_all()
@@ -143,6 +145,17 @@ async def test_priced_team_seat_is_reserved_until_paid(client: AsyncClient, db_s
         await db_session.execute(select(Ticket).where(Ticket.registration_id == seat_id))
     ).scalars().first()
     assert ticket is not None and ticket.status == "active"
+
+    # The roster attaches the seat the member already paid for.
+    created = await client.post(
+        f"/api/v1/editions/{edition_id}/teams",
+        json={"eventId": str(event_id), "name": "Charging Five"},
+    )
+    assert created.status_code in (200, 201), created.text
+    assert _payment_of(created.json()["data"]) is None, "team creation must not sell a second seat"
+    db_session.expire_all()
+    seat = await db_session.get(Registration, seat_id)
+    assert seat.team_id is not None, "the paid seat joins the roster"
 
 
 @pytest.mark.asyncio
@@ -207,6 +220,8 @@ async def test_leader_leaving_promotes_the_elder(client: AsyncClient, db_session
         format="team",
         price_paise=0,
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, event.id)
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": str(event.id), "name": "Disband Five"},
@@ -217,6 +232,8 @@ async def test_leader_leaving_promotes_the_elder(client: AsyncClient, db_session
 
     await _login(client, member_email)
     await _paid_registration(client, edition_id, member_email)
+    # Joining needs the member's own seat on that event.
+    await buy_seat(client, edition_id, event.id)
     joined = await client.post(
         f"/api/v1/editions/{edition_id}/teams/join", json={"inviteCode": invite}
     )

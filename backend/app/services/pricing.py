@@ -672,16 +672,23 @@ async def basket_remove(
 
 
 # --------------------------------------------------------------------------- #
-# Removing a seat (direct refund)
+# Removing a seat (refund is a desk decision)
 # --------------------------------------------------------------------------- #
-async def _refund_seat(
+async def _request_seat_refund(
     db: AsyncSession,
     *,
     reg: Registration,
     reason_code: str,
     reason_note: str,
 ) -> dict:
-    """Refund one paid seat to its original payment method."""
+    """Record a refund *request* for one cancelled seat.
+
+    A participant cancelling their own event must not move money on its own:
+    the spec has the admin choose a full, partial or no refund from the ledger.
+    This only writes the pending row the finance desk settles (the same shape
+    ``registrations.cancel_registration`` produces), so both cancellation
+    routes now behave identically and nothing leaves the gateway unattended.
+    """
     result = {"refundedPaise": 0, "refundPending": False}
     if reg.order_id is None or int(reg.fee_paise or 0) <= 0:
         return result
@@ -689,8 +696,8 @@ async def _refund_seat(
     if order is None or order.status != "paid":
         return result
 
-    # One order can carry several seats. Refund only this seat's share, and
-    # never more than the order still holds un-refunded.
+    # One order can carry several seats. Request only this seat's share, and
+    # never more than the order still holds un-refunded/un-requested.
     already = (
         await db.execute(
             select(Refund).where(
@@ -699,36 +706,24 @@ async def _refund_seat(
             )
         )
     ).scalars().all()
-    refunded = sum(int(r.amount_paise) for r in already)
-    available = max(0, int(order.amount_paise) - refunded)
+    committed = sum(int(r.amount_paise) for r in already)
+    available = max(0, int(order.amount_paise) - committed)
     amount = min(int(reg.fee_paise), available)
     if amount <= 0:
         return result
 
-    try:
-        from app.services.payments import refund_order
-
-        await refund_order(
-            db,
-            order,
+    db.add(
+        Refund(
+            order_id=order.id,
             amount_paise=amount,
             reason_code=reason_code,
             reason_note=reason_note[:500],
-            requested_by_id=reg.user_id,
+            status="pending",
+            requested_by=reg.user_id,
         )
-        result["refundedPaise"] = amount
-    except Exception as exc:  # gateway outage must not keep the money
-        db.add(
-            Refund(
-                order_id=order.id,
-                amount_paise=amount,
-                reason_code=reason_code,
-                reason_note=f"{reason_note} (gateway refund failed: {str(exc)[:200]})"[:500],
-                status="pending",
-                requested_by_id=reg.user_id,
-            )
-        )
-        result["refundPending"] = True
+    )
+    result["refundPending"] = True
+    result["refundRequestedPaise"] = amount
     return result
 
 
@@ -740,12 +735,11 @@ async def remove_seat(
     edition: ConventionEdition,
     event_id: uuid.UUID,
 ) -> dict:
-    """Remove one live seat and settle its money.
+    """Remove one live seat and record its refund request.
 
-    Uses the same refund matrix as the plan: a paid seat outside the
-    cancellation window is refunded to the original method, an included/free
-    seat simply returns its allowance, and a per-team rider never takes the
-    team's money with them.
+    A paid seat outside the cancellation window becomes a pending refund the
+    finance desk decides on (full, partial or none); an included/free seat
+    simply returns its allowance. No money moves from this path.
     """
     reg = (
         await db.execute(
@@ -802,12 +796,10 @@ async def remove_seat(
         "teamNewLeaderId": None,
     }
     if was_confirmed:
-        # A rider on a per-team payment owns no money; only their own share is
-        # settled (which is zero), and the team keeps the entry it paid for.
         owed = int(reg.fee_paise or 0)
         if owed > 0:
             result.update(
-                await _refund_seat(
+                await _request_seat_refund(
                     db,
                     reg=reg,
                     reason_code="attendee_cancelled",
@@ -857,7 +849,7 @@ async def remove_seat(
         action="registration.cancelled",
         resource_type="registration",
         resource_id=str(reg.id),
-        after={"reason": "worklist removal", "settlement": "refund"},
+        after={"reason": "worklist removal", "settlement": "refund_requested"},
     )
     await db.flush()
     cache_delete_pattern("public:*")
@@ -1150,7 +1142,9 @@ async def build_worklist(
             "count": len(covered_ids),
             "required": policy.included_event_count,
             "unlimited": int(policy.included_event_count) < 0,
-            "mode": policy.included_selection_mode or "up_to",
+            # The allowance is always "up to N included events"; there is no
+            # exact/up-to switch any more.
+            "mode": "up_to",
             "packOrder": int(getattr(policy, "allowance_pack_order", 0) or 0),
             "capPaise": policy.included_value_cap_paise,
             "valuePaise": frozen_value,

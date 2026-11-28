@@ -74,7 +74,7 @@ class Team(Base, UUIDPrimaryKey, Timestamps):
     leader_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     invite_code: Mapped[str] = mapped_column(String(16), default="", nullable=False, index=True)
     invite_code_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="forming", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     max_size: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     min_size: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     # ``solo|forming|ready|locked|disbanded``. ``status`` stays the roster gate
@@ -95,7 +95,6 @@ class TeamMember(Base, UUIDPrimaryKey, Timestamps):
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     is_leader: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_member"),)
 
@@ -195,7 +194,6 @@ class PaymentTransaction(Base, UUIDPrimaryKey, Timestamps):
     gateway_payment_id: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="captured", nullable=False)
-    method_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

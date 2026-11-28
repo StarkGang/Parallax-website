@@ -226,6 +226,7 @@ async def decide(
                 ctx.has("finance.write", edition_id)
                 or ctx.has_global("finance.write")
             ),
+            refund_amount_paise=payload.refund_amount_paise,
         )
     await db.commit()
     return {"data": await service.admin_detail(db, edition_id, registration_id)}
@@ -279,36 +280,6 @@ async def refund(
     )
     await db.commit()
     return {"data": await service.admin_detail(db, edition_id, registration_id)}
-
-
-@router.post("/{registration_id}/category-change")
-async def decide_category_change(
-    edition_id: uuid.UUID,
-    registration_id: uuid.UUID,
-    payload: CategoryChangeDecision,
-    request: Request,
-    ctx: AuthContext = Depends(require_permission("registration.write")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    row = await service.registration_by_id(db, edition_id, registration_id)
-    change = await service.pending_change(db, row.id)
-    if change is None:
-        raise NotFound("No pending category change request.")
-    result = await service.decide_category_change(
-        db,
-        request,
-        row,
-        change,
-        ctx.user,
-        _role(ctx, edition_id),
-        approve_change=payload.decision == "approved",
-        note=payload.note,
-        settlement=payload.settlement,
-    )
-    await db.commit()
-    return {
-        "data": {"result": result, "registration": await service.admin_detail(db, edition_id, registration_id)},
-    }
 
 
 @router.get("/{registration_id}/receipt")

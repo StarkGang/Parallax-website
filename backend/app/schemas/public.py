@@ -7,15 +7,12 @@ from app.schemas.common import CamelModel
 
 
 class PolicyPublic(CamelModel):
-    pass_price_paise: int
     lunch_included_days: list[str] = []
     included_event_count: int
-    included_selection_mode: str
     included_value_cap_paise: int | None = None
     cap_inclusive: bool
     addon_requires_pass: bool
     team_members_require_pass: bool
-    team_fee_basis_default: str
     hold_minutes: int
     selection_change_deadline: datetime | None = None
     policy_version: int
@@ -76,7 +73,6 @@ class EventListItem(CamelModel):
     base_value_paise: int
     included_eligible: bool
     addon_price_paise: int
-    addon_charge_basis: str
     capacity: int
     seats_left: int | None = None
     status: str
@@ -93,7 +89,6 @@ class EventDetail(EventListItem):
     team_guide_html: str | None = None
     registration_opens_at: datetime | None = None
     registration_closes_at: datetime | None = None
-    team_fee_basis: str | None = None
 
 
 class ScheduleItem(CamelModel):

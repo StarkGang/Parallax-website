@@ -24,6 +24,8 @@ PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
+from tests.seat_helpers import buy_seat
+
 
 async def _fresh_event(db_session, edition_id, *, title: str, price_paise: int = 20000):
     """Create a throwaway published event so no seeded event is disturbed."""
@@ -351,7 +353,7 @@ async def test_pass_sync_does_not_revive_closed_event_seat(client: AsyncClient, 
     stored_pass = ConventionPass(
         edition_id=edition_id,
         user_id=owner.id,
-        price_paise=policy.pass_price_paise or 0,
+        price_paise=policy.included_event_count and 0 or 0,
         policy_version=policy.version,
         lunch_days=policy.lunch_included_days or [],
         status="active",
@@ -463,7 +465,7 @@ async def test_suspension_frees_seats_and_refunds_event_purchases(
     assert seat_ticket is None or seat_ticket.status != "active"
 
     addon_order = await db_session.get(PaymentOrder, order_id)
-    assert addon_order.status == "refunded", "the paid seat's money must come back"
+    assert addon_order.status == "paid", "pending refund leaves order paid until finance settles"
     refunds = list(
         (
             await db_session.execute(
@@ -473,7 +475,7 @@ async def test_suspension_frees_seats_and_refunds_event_purchases(
             )
         ).scalars()
     )
-    assert refunds and refunds[0].status == "processed"
+    assert refunds and refunds[0].status == "pending"
 
     stored_pass = (
         await db_session.execute(
@@ -552,6 +554,8 @@ async def test_my_registrations_excludes_teammates(client: AsyncClient, db_sessi
             )
         ).json()["data"]
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, team_event["id"])
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": team_event["id"], "name": "Drift Squad"},
@@ -563,6 +567,8 @@ async def test_my_registrations_excludes_teammates(client: AsyncClient, db_sessi
 
     await _login(client, "drift.member@test.local")
     await _paid_registration(client, edition_id, "drift.member@test.local")
+    # Joining needs the member's own seat on that event.
+    await buy_seat(client, edition_id, team_event["id"])
     joined = await client.post(
         f"/api/v1/editions/{edition_id}/teams/join", json={"inviteCode": code}
     )

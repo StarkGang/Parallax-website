@@ -55,6 +55,9 @@ class RegistrationDecision(StrictCamelModel):
     notes: str | None = Field(default=None, max_length=2000)
     initiate_refund: bool = True
     refund_events: bool = True
+    # Full or partial pass refund. Omitted/None refunds everything still
+    # refundable; a smaller amount records a partial refund instead.
+    refund_amount_paise: int | None = Field(default=None, gt=0)
 
 
 class RequestDocuments(StrictCamelModel):

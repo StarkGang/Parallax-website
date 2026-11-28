@@ -46,6 +46,7 @@ from app.models.registration import (
 from app.models.user import Session as UserSession, User
 
 from tests.lifecycle_helpers import (
+
     ADMIN_EMAIL,
     DECISIONS,
     PNG,
@@ -83,6 +84,8 @@ from tests.lifecycle_helpers import (
     clock,  # noqa: F401  (re-exported fixture)
 )
 
+from tests.seat_helpers import buy_seat
+
 
 # --------------------------------------------------------------------------- #
 # Scenario 1: Admin rejects after booking
@@ -90,6 +93,8 @@ from tests.lifecycle_helpers import (
 
 
 @pytest.fixture(autouse=True)
+
+
 async def _reset_login_budget():
     """This module logs in many times per test; clear the shared login budget."""
     from sqlalchemy import delete as sql_delete
@@ -119,8 +124,8 @@ async def _booked_state(client: AsyncClient, ctx: Ctx, email: str) -> dict:
     # Included pass benefit (E17): pick up to the policy's included count.
     eligible = individual_events(ctx, eligible_only=True)
     chosen = eligible[: ctx.policy.included_event_count]
-    sel = await client.put(
-        f"/api/v1/editions/{ctx.edition_id}/pass/selections",
+    sel = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/basket/events",
         json={"eventIds": [str(e.id) for e in chosen]},
     )
     assert sel.status_code == 200, sel.text
@@ -144,6 +149,8 @@ async def _booked_state(client: AsyncClient, ctx: Ctx, email: str) -> dict:
 
     # Join one team event (E22).
     team_event = team_events(ctx)[0]
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, ctx.edition_id, team_event.id)
     team = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams",
         json={"event_id": str(team_event.id), "name": "Reject Squad"},
@@ -200,15 +207,36 @@ async def test_scenario_1a_reject_with_finance_and_working_gateway(
         )
     ).scalars().all()
     assert all(d.status == "rejected" for d in docs)
-    # The add-on seat's money was returned immediately; the pass money is parked.
-    assert mid.money["refunded"] == addon_fee
+    # Neither pass nor add-on seat money moves automatically: both are queued
+    # as pending refunds for the finance desk to settle.
+    assert mid.money["refunded"] == 0
+    addon_refunds = (
+        await db_session.execute(
+            select(Refund).where(
+                Refund.order_id.in_(
+                    select(PaymentOrder.id).where(
+                        PaymentOrder.user_id == user_id,
+                        PaymentOrder.purpose != "college_registration",
+                    )
+                ),
+                Refund.reason_code == "pass_not_active",
+                Refund.status == "pending",
+            )
+        )
+    ).scalars().all()
+    assert sum(int(r.amount_paise) for r in addon_refunds) == addon_fee
 
-    # Finance completes the pass refund (working-gateway equivalent).
+    # Finance completes the pass refund and processes each queued add-on refund.
     completed = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/admin/registration/{reg_id}/refund",
         json={"action": "completed", "gatewayRefundId": "UTR-1A-123", "note": "Gateway settled."},
     )
     assert completed.status_code == 200, completed.text
+    for rf in addon_refunds:
+        addon_done = await client.post(
+            f"/api/v1/editions/{ctx.edition_id}/admin/refunds/{rf.id}/process",
+        )
+        assert addon_done.status_code == 200, addon_done.text
 
     after = await assert_invariants(
         db_session, ctx, user_id, email=email, label="1a refund completed"
@@ -407,10 +435,10 @@ async def test_scenario_1e_known_flaw_o23_reject_failed_refund_still_paid_approv
 
 
 @pytest.mark.asyncio
-async def test_scenario_1f_rejected_user_resubmits_and_gets_approved(
+async def test_scenario_1f_rejection_is_final_then_the_desk_approves(
     client: AsyncClient, db_session, clock
 ):
-    """Scenario 1f: reject -> resubmit -> approve. Show the money cycle."""
+    """Scenario 1f: reject -> resubmit refused -> desk approves. Show the money."""
     ctx = await edition_ctx(client, db_session)
     email = "s1f.resubmit@test.local"
     await register_paid(client, ctx, email)
@@ -426,13 +454,18 @@ async def test_scenario_1f_rejected_user_resubmits_and_gets_approved(
         db_session, ctx, user_id, email=email, label="1f after reject (parked)"
     )
     assert parked.money["refunded"] == 0
+    # A rejection is final: no window, no deadline, no re-upload.
+    rejected_body = rejected.json()["data"]
+    assert rejected_body["compliance"] is None
+    assert rejected_body["canResubmit"] is False
 
-    # Attendee resubmits (E10): the parked refund is withdrawn.
+    # The attendee cannot resubmit out of a rejection.
     await login(client, email)
     resub = await client.post(f"/api/v1/editions/{ctx.edition_id}/registration/resubmit")
-    assert resub.status_code == 200, resub.text
-    assert resub.json()["data"]["verificationStatus"] == "pending_verification"
+    assert resub.status_code == 409, resub.text
+    assert resub.json()["error"]["code"] == "REJECTION_FINAL"
 
+    # Approving a mistaken rejection withdraws the parked refund and revives the pass.
     await login_admin(client)
     approved = await admin_approve(client, ctx, reg_id)
     assert approved["verificationStatus"] == "approved"
@@ -547,8 +580,8 @@ async def test_scenario_2a_during_window_what_can_user_do(
     )
     results["upload_photo"] = up.status_code
     # E17 included selection change: pass still active -> allowed.
-    sel = await client.put(
-        f"/api/v1/editions/{ctx.edition_id}/pass/selections",
+    sel = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/basket/events",
         json={"eventIds": [str(individual[0].id)]},
     )
     results["selections"] = sel.status_code
@@ -559,6 +592,8 @@ async def test_scenario_2a_during_window_what_can_user_do(
     )
     results["addon"] = addon.status_code
     # E22 team create.
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, ctx.edition_id, team_event.id)
     team = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams",
         json={"eventId": str(team_event.id), "name": "Window Squad"},
@@ -642,6 +677,8 @@ async def test_scenario_2c_teammate_impact_when_docs_unfixed(
 
     # A creates the team, B joins.
     await login(client, email_a)
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, ctx.edition_id, team_event.id)
     created = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams",
         json={"eventId": str(team_event.id), "name": "Duo"},
@@ -650,6 +687,8 @@ async def test_scenario_2c_teammate_impact_when_docs_unfixed(
     invite = created.json()["data"]["inviteCode"]
 
     await login(client, email_b)
+    # Joining needs the member's own seat on that event.
+    await buy_seat(client, ctx.edition_id, team_event.id)
     joined = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams/join",
         json={"inviteCode": invite},
@@ -891,8 +930,8 @@ async def test_scenario_4_full_success_per_category_mock_and_webhook(
             # Included events chosen.
             eligible = individual_events(ctx, eligible_only=True)
             chosen = eligible[: ctx.policy.included_event_count]
-            sel = await client.put(
-                f"/api/v1/editions/{ctx.edition_id}/pass/selections",
+            sel = await client.post(
+                f"/api/v1/editions/{ctx.edition_id}/basket/events",
                 json={"eventIds": [str(e.id) for e in chosen]},
             )
             assert sel.status_code == 200, sel.text
@@ -917,6 +956,8 @@ async def test_scenario_4_full_success_per_category_mock_and_webhook(
                     assert paid.status_code == 200, paid.text
 
             # Team created and joined.
+            # Team creation needs an existing seat: buy one first.
+            await buy_seat(client, ctx.edition_id, team_event.id)
             team = await client.post(
                 f"/api/v1/editions/{ctx.edition_id}/teams",
                 json={"eventId": str(team_event.id), "name": f"Squad {tag}"},
@@ -1129,6 +1170,7 @@ async def test_scenario_5d_suspended_team_leader(client: AsyncClient, db_session
     hands over; teammates handled."""
     ctx = await edition_ctx(client, db_session)
     team_event = team_events(ctx)[0]
+    team_event_id = team_event.id
     email_a = "s5d.leader@test.local"
     email_b = "s5d.member@test.local"
     await register_paid(client, ctx, email_a)
@@ -1137,15 +1179,20 @@ async def test_scenario_5d_suspended_team_leader(client: AsyncClient, db_session
     row_b = await registration_row(db_session, ctx, email_b)
 
     await login(client, email_a)
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, ctx.edition_id, team_event.id)
     created = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams",
         json={"eventId": str(team_event.id), "name": "Lead"},
     )
+    created_team_id = uuid.UUID(created.json()["data"]["id"])
     invite = created.json()["data"]["inviteCode"]
     await login(client, email_b)
-    await client.post(
+    await buy_seat(client, ctx.edition_id, team_event.id)
+    joined = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/teams/join", json={"inviteCode": invite}
     )
+    assert joined.status_code in (200, 201), joined.text
 
     await login_admin(client)
     await client.patch(
@@ -1154,16 +1201,21 @@ async def test_scenario_5d_suspended_team_leader(client: AsyncClient, db_session
     )
 
     # B must still have a valid registration and, if the team survived, be a member.
+    row_b_id = row_b.user_id
     row_b_after = await registration_row(db_session, ctx, email_b)
     assert row_b_after.verification_status != "rejected"
     team = (
-        await db_session.execute(select(Team).where(Team.event_id == team_event.id))
+        await db_session.execute(
+            select(Team)
+            .where(Team.id == created_team_id)
+            .execution_options(populate_existing=True)
+        )
     ).scalars().first()
     if team is not None and team.status != "disbanded":
         # Leadership moved to B (fair handover).
-        assert team.leader_id == row_b.user_id
+        assert team.leader_id == row_b_id
     await assert_invariants(
-        db_session, ctx, row_b.user_id, email=email_b, label="5d teammate after leader suspended"
+        db_session, ctx, row_b_id, email=email_b, label="5d teammate after leader suspended"
     )
 
 
@@ -1484,8 +1536,8 @@ async def test_extra_selection_change_deadline(client: AsyncClient, db_session, 
 
     await login(client, email)
     # Before deadline: allowed.
-    ok = await client.put(
-        f"/api/v1/editions/{ctx.edition_id}/pass/selections",
+    ok = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/basket/events",
         json={"eventIds": [str(eligible[0].id)]},
     )
     assert ok.status_code == 200, ok.text
@@ -1497,8 +1549,8 @@ async def test_extra_selection_change_deadline(client: AsyncClient, db_session, 
         pytest.skip("policy has no selection change deadline")
     clock.set(deadline + timedelta(hours=1))
 
-    after = await client.put(
-        f"/api/v1/editions/{ctx.edition_id}/pass/selections",
+    after = await client.post(
+        f"/api/v1/editions/{ctx.edition_id}/basket/events",
         json={"eventIds": [str(eligible[1].id)]},
     )
     assert after.status_code == 409, after.text
@@ -1528,9 +1580,7 @@ async def test_extra_edition_policy_version_old_buyers_keep_price(
     resp = await client.post(
         f"/api/v1/editions/{ctx.edition_id}/admin/policies",
         json={
-            "passPricePaise": original_price + 50000,
             "includedEventCount": ctx.policy.included_event_count,
-            "includedSelectionMode": ctx.policy.included_selection_mode,
             "holdMinutes": ctx.policy.hold_minutes,
             "reason": "price revision",
             "overridePriceLock": True,

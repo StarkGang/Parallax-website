@@ -834,61 +834,6 @@ async def revoke_own_session(
     await db.flush()
 
 
-async def request_deletion(db: AsyncSession, user: User) -> None:
-    """Close the account without leaving paid entitlements behind.
-
-    This is not wired to a route yet. It used to flip a status nobody read, so
-    an account that asked for deletion kept a live pass and held seats. Sessions
-    already refuse any non-active status; this also releases the seats, revokes
-    the tickets and cancels the entry pass so nothing is left to honour.
-    """
-    from app.models.commerce import ConventionPass, PaymentOrder, Registration
-    from app.services.tickets import revoke_for_pass, revoke_for_registration
-
-    regs = list(
-        (
-            await db.execute(
-                select(Registration).where(
-                    Registration.user_id == user.id,
-                    Registration.status.in_(["confirmed", "reserved"]),
-                )
-            )
-        ).scalars()
-    )
-    for reg in regs:
-        reg.status = "cancelled"
-        reg.cancelled_at = datetime.now(UTC)
-        reg.cancelled_by = "admin"
-        reg.cancellation_reason = "Account deletion requested"
-        await revoke_for_registration(db, reg.id)
-
-    passes = list(
-        (
-            await db.execute(
-                select(ConventionPass).where(ConventionPass.user_id == user.id)
-            )
-        ).scalars()
-    )
-    for user_pass in passes:
-        if user_pass.status == "active":
-            user_pass.status = "cancelled"
-            await revoke_for_pass(db, user_pass.id)
-
-    orders = list(
-        (
-            await db.execute(
-                select(PaymentOrder).where(
-                    PaymentOrder.user_id == user.id,
-                    PaymentOrder.status == "created",
-                )
-            )
-        ).scalars()
-    )
-    for order in orders:
-        order.status = "expired"
-
-    user.status = "deletion_requested"
-    await db.flush()
 
 
 async def memberships_for(
@@ -936,6 +881,5 @@ __all__ = [
     "grant_membership",
     "my_sessions",
     "revoke_own_session",
-    "request_deletion",
     "memberships_for",
 ]

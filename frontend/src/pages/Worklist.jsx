@@ -182,7 +182,7 @@ const PortalPlanCard = memo(function PortalPlanCard({
           <span>Details</span>
           <ArrowUpRight size={11} strokeWidth={2.2} aria-hidden="true" />
         </Link>
-        {canPay ? (
+        {canPay && !blocked ? (
           <button
             type="button"
             className="exc-action is-primary"
@@ -212,9 +212,10 @@ const PortalPlanCard = memo(function PortalPlanCard({
             className="exc-action is-primary"
             onClick={() => onToggle(row)}
             disabled={blocked || !canAdd}
+            title={blocked ? 'An active convention pass is required to add events' : undefined}
           >
-            <span>Add event</span>
-            <Plus size={11} strokeWidth={2.4} aria-hidden="true" />
+            <span>{blocked ? 'Pass required' : 'Add event'}</span>
+            {blocked ? null : <Plus size={11} strokeWidth={2.4} aria-hidden="true" />}
           </button>
         )}
       </div>
@@ -712,15 +713,17 @@ export function PortalWorklist() {
       const body = result.data || {};
       await reloadAll();
       setRemoveRow(null);
-      if (body.refundedPaise > 0) {
+      if (body.refundPending || body.refundRequestedPaise > 0) {
+        // Nothing moves on its own: the desk approves the refund, then the
+        // money is returned. Say that instead of promising an automatic refund.
         setMessage({
           tone: 'success',
-          text: `Event cancelled and seat released. Your refund of ${money(body.refundedPaise)} will be processed once confirmed by the admin/finance desk.`,
+          text: `Event cancelled and seat released. A refund of ${money(body.refundRequestedPaise || removeRow.seat?.feePaise || 0)} is now waiting for admin approval — you are refunded after the admin approves it.`,
         });
       } else if (removeRow.seat?.feePaise > 0) {
         setMessage({
           tone: 'success',
-          text: 'Event cancelled and seat released. Any eligible refund will be processed once confirmed by the admin/finance desk.',
+          text: 'Event cancelled and seat released. Any eligible refund waits for admin approval — you are refunded after the admin approves it.',
         });
       } else {
         setMessage({ tone: 'success', text: 'Event removed. Your pass allowance is free again.' });
@@ -904,6 +907,8 @@ export function PortalWorklist() {
   if (data.error) return <ErrorBox error={data.error} onRetry={data.reload} />;
 
   const passBlocked = Boolean(gate);
+  const noActivePass = Boolean(policyAddon && payload?.passStatus !== 'active');
+  const cannotBuy = passBlocked || noActivePass;
 
   return (
     <>
@@ -941,7 +946,7 @@ export function PortalWorklist() {
           </Link>
         </InlineMessage>
       ) : null}
-      {!passBlocked && policyAddon && !payload?.passStatus ? (
+      {!passBlocked && noActivePass ? (
         <InlineMessage tone="info">
           A pass is needed before seats can be added.{' '}
           <Link to="/portal/registration" style={{ textDecoration: 'underline' }}>
@@ -1063,7 +1068,7 @@ export function PortalWorklist() {
                   key={row.eventId}
                   row={row}
                   selected={selected.includes(row.eventId)}
-                  blocked={passBlocked}
+                  blocked={cannotBuy}
                   busy={busy}
                   onToggle={toggle}
                   onPay={payRow}
@@ -1096,7 +1101,7 @@ export function PortalWorklist() {
                   key={row.eventId}
                   row={row}
                   selected={selected.includes(row.eventId)}
-                  blocked={passBlocked}
+                  blocked={cannotBuy}
                   busy={busy}
                   onToggle={toggle}
                   onPay={payRow}
@@ -1337,9 +1342,9 @@ export function PortalWorklist() {
             </p>
             {removeRow.seat?.feePaise > 0 ? (
               <p className="wl-note" style={{ marginTop: 12 }}>
-                You paid <b>{money(removeRow.seat.feePaise)}</b> for this event. The money goes
-                back to your original payment method, less any charges stated in the refund
-                policy.
+                You paid <b>{money(removeRow.seat.feePaise)}</b> for this event. No money moves
+                now: the registration desk reviews the cancellation and approves the refund,
+                then the amount is returned to your original payment method.
               </p>
             ) : (
               <p className="wl-note" style={{ marginTop: 12 }}>

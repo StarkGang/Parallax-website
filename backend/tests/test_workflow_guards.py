@@ -163,12 +163,27 @@ async def test_selections_issue_event_tickets_and_cancel_revokes(
     )
     assert event is not None, "seed has no included-eligible event"
 
-    saved = await client.put(
-        f"/api/v1/editions/{edition_id}/pass/selections",
+    saved = await client.post(
+        f"/api/v1/editions/{edition_id}/basket/events",
         json={"eventIds": [str(event.id)]},
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["data"]["valid"] is True
+    basket = saved.json()["data"]
+    line = next((l for l in basket["lines"] if l.get("eventId") == str(event.id)), None)
+    assert line is not None, "the basket did not price the event"
+    assert line["duePaise"] == 0, "the pass allowance covers this event"
+
+    order = (
+        await client.post(
+            f"/api/v1/editions/{edition_id}/checkout",
+            json={"quoteId": basket["quoteId"]},
+        )
+    ).json()["data"].get("order")
+    if order:
+        paid = await client.post(
+            f"/api/v1/editions/{edition_id}/payments/{order['orderId']}/mock"
+        )
+        assert paid.status_code == 200, paid.text
 
     tickets = (await client.get(f"/api/v1/editions/{edition_id}/tickets")).json()["data"]
     assert any(
@@ -185,6 +200,7 @@ async def test_selections_issue_event_tickets_and_cancel_revokes(
     ]
     assert included, "included registration was not created"
 
+    # Cancelling the seat still releases it; the refund is the desk's decision.
     removed = await client.delete(
         f"/api/v1/editions/{edition_id}/registrations/{included[0]['id']}"
     )
@@ -192,8 +208,6 @@ async def test_selections_issue_event_tickets_and_cancel_revokes(
 
     after = (await client.get(f"/api/v1/editions/{edition_id}/tickets")).json()["data"]
     assert not any(t["title"] == event.title for t in after)
-    state = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
-    assert state["selection"]["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -401,8 +415,8 @@ async def test_suspended_pass_blocks_event_selection_and_addons(
     event_id = events_res["data"][0]["id"]
 
     # 2. PUT /pass/selections must be rejected with 409 Conflict
-    sel_res = await client.put(
-        f"/api/v1/editions/{edition['id']}/pass/selections",
+    sel_res = await client.post(
+        f"/api/v1/editions/{edition['id']}/basket/events",
         json={"eventIds": [event_id]},
     )
     assert sel_res.status_code == 409, sel_res.text

@@ -30,12 +30,23 @@ export function CompleteReceiptSheet({
     }));
 
   const extraPaymentsTotal = extraPayments.reduce((sum, t) => sum + (t.amountPaise || 0), 0);
+  // Platform fee follows the money: an order whose seats are all refunded must
+  // stop counting its fee as retained. Partial refunds still leave the fee on
+  // the bill (the charge was really collected and only part came back).
   const extraPlatformFeePaise = (() => {
     const seenOrders = new Set();
     let total = 0;
     for (const r of eventRegistrations || []) {
       if ((r.feePaise || 0) <= 0 || !r.orderId || seenOrders.has(r.orderId)) continue;
       seenOrders.add(r.orderId);
+      const orderRows = (eventRegistrations || []).filter((row) => row.orderId === r.orderId);
+      const fullyRefunded =
+        orderRows.length > 0 &&
+        orderRows.every(
+          (row) =>
+            row.refundStatus === 'processed' || row.paymentStatus === 'refunded',
+        );
+      if (fullyRefunded) continue;
       total += Number(r.orderPlatformFeePaise || 0);
     }
     return total;
@@ -56,6 +67,7 @@ export function CompleteReceiptSheet({
     ? Number(registration?.paymentDetails?.platformFeePaise ?? registration?.order?.platformFeePaise ?? 0)
     : 0;
   const passRefundedPaise = isPassPaid ? Number(registration?.refundAmountPaise || 0) : 0;
+  const passRefundPendingPaise = isPassPaid ? Number(registration?.refundPendingPaise || 0) : 0;
   const extraRefundedPaise = extraPayments.reduce(
     (sum, t) =>
       sum +
@@ -64,7 +76,18 @@ export function CompleteReceiptSheet({
         : 0),
     0,
   );
+  // Money on its way back but not settled yet.
+  const extraRefundPendingPaise = extraPayments.reduce(
+    (sum, t) =>
+      sum +
+      (t.refundStatus === 'pending' || t.refundStatus === 'processing'
+        ? Number(t.refundedPaise || 0)
+        : 0),
+    0,
+  );
   const totalRefundedPaise = passRefundedPaise + extraRefundedPaise;
+  const refundInProgressPaise = passRefundPendingPaise + extraRefundPendingPaise;
+  const isRefundInProgress = !isRefundDone && refundInProgressPaise > 0;
   const receiptTotalPaise =
     passPaidPaise + paidPlatformFeePaise + extraPaymentsTotal + extraPlatformFeePaise;
   const netPaidPaise = Math.max(0, receiptTotalPaise - totalRefundedPaise);
@@ -147,10 +170,16 @@ export function CompleteReceiptSheet({
                 <img src={NSSCE} alt="NSSCE" style={{ height: '20px', width: 'auto' }} />
               </div>
               <span
-                className={`badge ${isRefundDone ? 'bad' : hasAnyPayment ? 'good' : 'warn'}`}
+                className={`badge ${isRefundDone || isRefundInProgress ? 'bad' : hasAnyPayment ? 'good' : 'warn'}`}
                 style={{ fontSize: '12px', fontWeight: '700' }}
               >
-                {isRefundDone ? '⟲ REFUNDED' : hasAnyPayment ? '✓ PAID & CONFIRMED' : '⏳ PAYMENT PENDING'}
+                {isRefundDone
+                  ? '⟲ REFUNDED'
+                  : isRefundInProgress
+                    ? '⟲ REFUND IN PROGRESS'
+                    : hasAnyPayment
+                      ? '✓ PAID & CONFIRMED'
+                      : '⏳ PAYMENT PENDING'}
               </span>
               <p style={{ margin: 0, fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
                 {registration?.paidAt ? dateTime(registration.paidAt) : hasAnyPayment ? 'Confirmed' : 'Awaiting payment'}
@@ -216,8 +245,8 @@ export function CompleteReceiptSheet({
                     {attendeeCollege ? <div style={{ fontSize: '11px', color: '#64748b' }}>{attendeeCollege}</div> : null}
                   </td>
                   <td>
-                    <span style={{ color: isRefundDone ? '#dc2626' : isPassPaid ? '#16a34a' : '#d97706', fontWeight: '700' }}>
-                      {isRefundDone ? 'REFUNDED' : isPassPaid ? 'PAID' : 'PAYMENT PENDING'}
+                    <span style={{ color: isRefundDone ? '#dc2626' : isRefundInProgress ? '#d97706' : isPassPaid ? '#16a34a' : '#d97706', fontWeight: '700' }}>
+                      {isRefundDone ? 'REFUNDED' : isRefundInProgress ? 'REFUND IN PROGRESS' : isPassPaid ? 'PAID' : 'PAYMENT PENDING'}
                     </span>
                   </td>
                   <td style={{ textAlign: 'right', fontWeight: '700' }}>
@@ -302,6 +331,16 @@ export function CompleteReceiptSheet({
                   {money(receiptTotalPaise)}
                 </td>
               </tr>
+              {refundInProgressPaise > 0 ? (
+                <tr>
+                  <td colSpan={3} style={{ textAlign: 'right', padding: '8px 4px', color: '#d97706', fontWeight: 600 }}>
+                    Refund in progress (not yet settled):
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '8px 4px', color: '#d97706', fontWeight: 700 }}>
+                    {money(refundInProgressPaise)}
+                  </td>
+                </tr>
+              ) : null}
               {totalRefundedPaise > 0 ? (
                 <>
                   <tr>

@@ -118,7 +118,8 @@ async def serialize_teams(
         if t.edition_id not in policy_cache:
             policy_cache[t.edition_id] = await current_policy(db, t.edition_id)
         policy = policy_cache[t.edition_id]
-        basis = team_fee_basis(event, policy) if event else "per_participant"
+        # Every member pays their own seat; there is no leader-pays basis.
+        basis = "per_participant"
         price = team_seat_price(event, policy) if event else 0
         # per_team (leader-pays) is gone: a team is never "unpaid" as a whole;
         # each member settles their own seat.
@@ -205,7 +206,7 @@ async def _pass_active(db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UU
         )
     ).scalars().first()
     if pass_row is not None:
-        if pass_row.status in ("suspended", "cancelled", "revoked"):
+        if pass_row.status in ("suspended", "cancelled"):
             return False
         if pass_row.status == "active":
             return True
@@ -223,11 +224,6 @@ async def _pass_active(db: AsyncSession, user_id: uuid.UUID, edition_id: uuid.UU
         )
     ).scalar_one_or_none()
     return paid is not None
-
-
-def team_fee_basis(event: Event, policy) -> str:
-    # per_team (leader-pays) has been removed: every member pays their own seat.
-    return "per_participant"
 
 
 def team_seat_price(event: Event, policy) -> int:
@@ -250,23 +246,6 @@ async def _live_seat(
     ).scalars().first()
 
 
-async def _new_seat_order(
-    db: AsyncSession, team: Team, event: Event, user_id: uuid.UUID, amount_paise: int
-) -> PaymentOrder:
-    order = PaymentOrder(
-        edition_id=team.edition_id,
-        user_id=user_id,
-        purpose="registration",
-        amount_paise=amount_paise,
-        status="created",
-        notes={"teamId": str(team.id), "eventId": str(event.id), "kind": "team_seat"},
-    )
-    db.add(order)
-    await db.flush()
-    from app.services.payments import attach_gateway_order
-
-    await attach_gateway_order(db, order)
-    return order
 
 
 async def _ensure_seat(
@@ -309,7 +288,6 @@ async def _attach_seat(
     policy,
 ) -> tuple[Registration | None, PaymentOrder | None]:
     """Give the member one seat on this team, priced by the quote not the team."""
-    basis = team_fee_basis(event, policy)
     if seat is None:
         seat, order = await _ensure_seat(
             db, None, user_id, await db.get(ConventionEdition, team.edition_id), event
@@ -402,74 +380,6 @@ async def pending_team_payment(
 # --------------------------------------------------------------------------- #
 # Teardown and leadership
 # --------------------------------------------------------------------------- #
-async def _cancel_seat(
-    db: AsyncSession,
-    reg: Registration,
-    *,
-    reason: str,
-    refunded_orders: set[uuid.UUID] | None = None,
-    method: str = "refund",
-    preserve_orders: set[uuid.UUID] | None = None,
-) -> bool:
-    """Cancel one team seat, revoke its ticket and settle its own money."""
-    if reg.status != "cancelled":
-        reg.status = "cancelled"
-        reg.cancelled_at = datetime.now(UTC)
-        reg.cancelled_by = "system"
-        reg.cancellation_reason = reason[:500]
-    await revoke_for_registration(db, reg.id)
-    if reg.order_id is None:
-        return False
-    order = await db.get(PaymentOrder, reg.order_id)
-    if order is None or order.status != "paid":
-        return False
-    if preserve_orders and order.id in preserve_orders:
-        # The order pays for a team that is still running: the seat goes, the
-        # money stays with the teammates who are still on the roster.
-        return False
-    if refunded_orders is not None:
-        if order.id in refunded_orders:
-            return False
-        refunded_orders.add(order.id)
-    already_committed = int(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
-                    Refund.order_id == order.id,
-                    Refund.status.in_(("pending", "processing", "processed")),
-                )
-            )
-        ).scalar()
-        or 0
-    )
-    available = max(0, int(order.amount_paise) - already_committed)
-    if available <= 0:
-        return True
-    try:
-        from app.services.payments import refund_order
-
-        await refund_order(
-            db,
-            order,
-            amount_paise=available,
-            reason_code="team_disbanded",
-            reason_note=reason[:500],
-        )
-        return True
-    except Exception as exc:  # a gateway outage must not keep the money
-        logger.warning(
-            "team_seat_refund_failed order=%s error=%s", order.id, str(exc)[:200]
-        )
-        db.add(
-            Refund(
-                order_id=order.id,
-                amount_paise=available,
-                reason_code="team_disbanded",
-                reason_note=f"{reason} (gateway refund failed: {str(exc)[:200]})"[:500],
-                status="pending",
-            )
-        )
-        return False
 
 
 async def _teardown_team(db: AsyncSession, team: Team, *, reason: str) -> int:
@@ -579,7 +489,11 @@ async def create_team(
     event_id: uuid.UUID,
     name: str,
 ) -> Team:
-    event = await db.get(Event, event_id)
+    # Locked read: a roster must not be created against an event that is being
+    # cancelled right now (close_event takes the same row lock).
+    event = (
+        await db.execute(select(Event).where(Event.id == event_id).with_for_update())
+    ).scalars().first()
     if event is None or event.edition_id != edition.id:
         raise NotFound("Event not found.")
     if event.format != "team":
@@ -687,7 +601,11 @@ async def join_team(
 
     if not accepting_bookings(edition):
         raise Conflict("This convention is no longer accepting new bookings.")
-    event = await db.get(Event, team.event_id)
+    event = (
+        await db.execute(
+            select(Event).where(Event.id == team.event_id).with_for_update()
+        )
+    ).scalars().first()
     if team.status == "locked":
         raise Conflict("This team roster has been locked by the team leader.")
     if event is None or not event_open(event):
@@ -798,46 +716,8 @@ async def leave_team(
     return new_leader
 
 
-async def _seat_for(
-    db: AsyncSession,
-    *,
-    team: Team,
-    event: Event,
-    user_id: uuid.UUID,
-    policy,
-    existing: Registration | None = None,
-) -> tuple[Registration, PaymentOrder | None]:
-    """Compatibility wrapper: attach a seat using the team's pricing rules."""
-    seat, order = await _attach_seat(
-        db,
-        team=team,
-        event=event,
-        user_id=user_id,
-        seat=existing,
-        policy=policy,
-    )
-    if seat is None:
-        raise ValidationFailed("Could not create a seat for this team.")
-    return seat, order
 
 
-async def _maybe_register_team(
-    db: AsyncSession, team: Team, event: Event, policy=None
-) -> None:
-    if policy is None:
-        policy = await current_policy(db, team.edition_id)
-    seat, _order = await _ensure_seat(
-        db, None, team.leader_id, await db.get(ConventionEdition, team.edition_id), event
-    )
-    if seat is not None:
-        await _attach_seat(
-            db,
-            team=team,
-            event=event,
-            user_id=team.leader_id,
-            seat=seat,
-            policy=policy,
-        )
 
 
 async def on_team_registration_cancelled(
@@ -928,41 +808,10 @@ async def get_team(db: AsyncSession, team_id: uuid.UUID) -> Team:
     return row
 
 
-async def team_registration(db: AsyncSession, team_id: uuid.UUID) -> Registration | None:
-    team = await db.get(Team, team_id)
-    stmt = select(Registration).where(Registration.team_id == team_id)
-    if team is not None:
-        leader_row = (
-            await db.execute(stmt.where(Registration.user_id == team.leader_id))
-        ).scalars().first()
-        if leader_row is not None:
-            return leader_row
-    return (await db.execute(stmt)).scalars().first()
 
 
-async def member_counts(db: AsyncSession, team_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
-    if not team_ids:
-        return {}
-    rows = list(
-        (
-            await db.execute(
-                select(TeamMember.team_id, func.count(TeamMember.id))
-                .where(TeamMember.team_id.in_(team_ids))
-                .group_by(TeamMember.team_id)
-            )
-        ).all()
-    )
-    return {tid: count for tid, count in rows}
 
 
-async def team_seats(db: AsyncSession, event_id: uuid.UUID) -> int:
-    return (
-        await db.execute(
-            select(func.count(TeamMember.id))
-            .join(Team, TeamMember.team_id == Team.id)
-            .where(Team.event_id == event_id, Team.status.in_(LIVE_TEAM_STATUSES))
-        )
-    ).scalar() or 0
 
 
 async def toggle_team_lock(db: AsyncSession, user_id: uuid.UUID, team_id: uuid.UUID) -> Team:
@@ -1034,7 +883,7 @@ async def invite_preview(db: AsyncSession, code: str) -> dict:
             "venue": event.venue_room,
             "baseValuePaise": int(event.base_value_paise or 0),
             "listPaise": int(event.addon_price_paise or 0),
-            "teamBasis": team_fee_basis(event, policy),
+            "teamBasis": "per_participant",
         },
         "edition": {"id": str(edition.id) if edition else None, "slug": edition.slug if edition else None},
     }
@@ -1049,7 +898,6 @@ __all__ = [
     "normalize_team_name",
     "pending_team_payment",
     "promote_or_disband",
-    "team_fee_basis",
     "team_seat_price",
     "invite_code",
     "list_for_user",
@@ -1057,13 +905,9 @@ __all__ = [
     "_pass_active",
     "create_team",
     "join_team",
-    "_maybe_register_team",
     "leave_team",
     "toggle_team_lock",
     "rotate_invite",
     "get_team",
-    "team_registration",
-    "member_counts",
-    "team_seats",
     "validate_team_name",
 ]

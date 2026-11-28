@@ -373,56 +373,6 @@ async def resubmit(
     return {"data": await service.serialize_registration(db, row)}
 
 
-@router.post("/category-change", dependencies=[Depends(limiter("registration_category_change", 10, 300))])
-async def request_category_change(
-    edition_id: uuid.UUID,
-    payload: CategoryChangeRequest,
-    request: Request,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    settings = get_settings()
-    if not settings.payments_enabled and not settings.is_development:
-        raise AppError(
-            "Category changes need online payments, which are not configured.",
-            code="PAYMENTS_NOT_CONFIGURED",
-            status_code=503,
-        )
-    change = await service.request_category_change(
-        db, request, ctx.user, edition_id, payload.category_id, payload.note
-    )
-    await db.commit()
-    return {"data": {"id": str(change.id), "status": change.status}}
-
-
-@router.get("/category-change/payment")
-async def category_change_payment(
-    edition_id: uuid.UUID,
-    ctx: AuthContext = Depends(current_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    row = await service.registration_for_user(db, ctx.user.id, edition_id)
-    if row is None:
-        raise NotFound("Registration not found.")
-    change = await service.awaiting_change(db, row.id)
-    if change is None or change.order_id is None:
-        raise NotFound("No additional payment is pending.")
-    order = await db.get(PaymentOrder, change.order_id)
-    if order is None:
-        raise NotFound("Payment order not found.")
-    settings = get_settings()
-    return {
-        "data": {
-            "orderId": str(order.id),
-            "amountPaise": order.amount_paise,
-            "gatewayOrderId": order.gateway_order_id,
-            "razorpayKeyId": settings.razorpay_key_id,
-            "mock": settings.mock_payments_available,
-            "status": order.status,
-        }
-    }
-
-
 @router.post(
     "/notifications/{notification_id}/read",
     dependencies=[Depends(limiter("notification_read", 60, 60))],

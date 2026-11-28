@@ -1467,8 +1467,6 @@ function formFromEvent(item) {
       includedEligible: true,
       requiresApproval: false,
       sortOrder: 0,
-      addonChargeBasis: 'per_participant',
-      teamFeeBasis: 'per_participant',
       iconId: null,
       bannerUrl: '',
     };
@@ -1501,8 +1499,6 @@ function formFromEvent(item) {
     includedEligible: item.includedEligible !== false,
     requiresApproval: Boolean(item.requiresApproval),
     sortOrder: item.sortOrder ?? 0,
-    addonChargeBasis: item.addonChargeBasis || 'per_participant',
-    teamFeeBasis: item.teamFeeBasis || 'per_participant',
     iconId: item.iconId || null,
     bannerUrl: item.bannerUrl || '',
   };
@@ -1607,8 +1603,6 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
         baseValuePaise: paise(form.baseValue),
         includedEligible: form.includedEligible,
         addonPricePaise: paise(form.addonPrice),
-        addonChargeBasis: form.addonChargeBasis,
-        teamFeeBasis: form.teamFeeBasis || 'per_participant',
         capacity: Number(form.capacity) || 0,
         capacityUnit: form.capacityUnit,
         startsAt: fromLocalInput(form.startsAt),
@@ -1866,23 +1860,6 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
             value={form.addonPrice}
             onChange={(event) => set('addonPrice', event.target.value)}
           />
-        </Field>
-        <Field label="Add-on charge basis">
-          <select
-            value={form.addonChargeBasis}
-            onChange={(event) => set('addonChargeBasis', event.target.value)}
-          >
-            <option value="per_participant">Per participant</option>
-            <option value="per_team">Per team</option>
-          </select>
-        </Field>
-        <Field label="Team fee basis">
-          <select
-            value={form.teamFeeBasis}
-            onChange={(event) => set('teamFeeBasis', event.target.value)}
-          >
-            <option value="per_participant">Per participant</option>
-          </select>
         </Field>
         <Field label="Team min size">
           <input
@@ -2557,7 +2534,6 @@ export function AdminPolicy() {
     if (!current) {
       if (!policies.loading && rows.length === 0) {
         setForm({
-          passPrice: '500',
           includedEventCount: 3,
           mode: 'up_to',
           cap: '450',
@@ -2578,7 +2554,6 @@ export function AdminPolicy() {
       return;
     }
     setForm({
-      passPrice: rupees(current.passPricePaise),
       includedEventCount: current.includedEventCount,
       mode: current.includedSelectionMode,
       cap: current.includedValueCapPaise != null ? rupees(current.includedValueCapPaise) : '',
@@ -2602,7 +2577,6 @@ export function AdminPolicy() {
   const set = (key, value) => setForm((value_) => ({ ...value_, [key]: value }));
 
   const payloadFrom = () => ({
-    passPricePaise: paise(form.passPrice),
     includedEventCount: form.includedEventCount === '' ? 0 : Number(form.includedEventCount),
     includedSelectionMode: form.mode,
     includedValueCapPaise: form.cap === '' || form.cap == null ? null : paise(form.cap),
@@ -2710,18 +2684,6 @@ export function AdminPolicy() {
           <Badge tone="accent">Current v{current?.version}</Badge>
         </div>
         <FieldGrid>
-          <Field
-            label="Fallback pass price (₹)"
-            hint="Registration tiers set what attendees actually pay. This price is only for manual passes and desk seeding."
-          >
-            <input
-              type="number"
-              min="0"
-              step="50"
-              value={form.passPrice}
-              onChange={(event) => set('passPrice', event.target.value)}
-            />
-          </Field>
           <Field label="Included event count (-1 = unlimited under cap)">
             <input
               type="number"
@@ -2861,7 +2823,6 @@ export function AdminPolicy() {
             <td>
               v{row.version} {row.isCurrent ? <Badge tone="good">Current</Badge> : null}
             </td>
-            <td>{money(row.passPricePaise)}</td>
             <td>{row.includedEventCount}</td>
             <td>
               {row.includedValueCapPaise != null ? money(row.includedValueCapPaise) : 'No cap'}

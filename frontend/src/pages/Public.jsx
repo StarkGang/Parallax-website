@@ -2535,7 +2535,7 @@ export function FAQPage() {
     ? `Yes. Every participant needs their own pass, from ${money(cheapestTier.feePaise)} (${registrationTiers
         .map((tier) => `${tier.name} ${money(tier.feePaise)}`)
         .join(' / ')}). Event add-on fees never replace it.`
-    : `Yes. Every participant needs their own ${money(policy?.passPricePaise)} pass. Event add-on fees never replace it.`;
+    : 'Yes. Every participant needs their own pass, priced by their registration category. Event add-on fees never replace it.';
 
   const rows = [
     {
@@ -2652,9 +2652,7 @@ export function FAQPage() {
               <div>
                 <span>Starting Pass</span>
                 <b>
-                  {cheapestTier
-                    ? `From ${money(cheapestTier.feePaise)}`
-                    : money(policy?.passPricePaise)}
+                  {cheapestTier ? `From ${money(cheapestTier.feePaise)}` : 'See tiers'}
                 </b>
               </div>
               <div>

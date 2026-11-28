@@ -50,8 +50,10 @@ async def test_list_users_masks_email_and_hides_phone_without_pii(
     edition = (await db_session.execute(select(ConventionEdition))).scalars().first()
     users = await _seed_users(db_session, 3, edition.id)
 
+    # Filter to the seeded rows: the list is paged and other tests' users share
+    # this database, so an unfiltered first page is not stable.
     rows, total = await user_service.list_users(
-        db_session, edition.id, include_pii=False
+        db_session, edition.id, q="pii", include_pii=False
     )
     by_id = {row["id"]: row for row in rows}
     row = by_id[str(users[0].id)]
@@ -66,7 +68,9 @@ async def test_list_users_returns_pii_when_permitted(db_session: AsyncSession):
     edition = (await db_session.execute(select(ConventionEdition))).scalars().first()
     users = await _seed_users(db_session, 1, edition.id)
 
-    rows, _ = await user_service.list_users(db_session, edition.id, include_pii=True)
+    rows, _ = await user_service.list_users(
+        db_session, edition.id, q="pii", include_pii=True
+    )
     row = {r["id"]: r for r in rows}[str(users[0].id)]
 
     assert row["email"] == users[0].email

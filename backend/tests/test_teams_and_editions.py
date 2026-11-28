@@ -23,6 +23,8 @@ PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
+from tests.seat_helpers import buy_seat
+
 
 async def _edition(client: AsyncClient) -> dict:
     resp = await client.get("/api/v1/public/editions/current")
@@ -132,6 +134,8 @@ async def test_locked_team_stays_visible_and_counted(client: AsyncClient, db_ses
         db_session, uuid.UUID(edition_id), title="Team Lock Event", format="team"
     )
 
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, event.id)
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": str(event.id), "name": "Locked Llamas"},
@@ -171,6 +175,8 @@ async def test_leader_can_leave_a_multi_member_team(client: AsyncClient, db_sess
     event = await _fresh_event(
         db_session, uuid.UUID(edition_id), title="Team Leave Event", format="team"
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, event.id)
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": str(event.id), "name": "Busy Badgers"},
@@ -180,6 +186,8 @@ async def test_leader_can_leave_a_multi_member_team(client: AsyncClient, db_sess
 
     await _login(client, member)
     await _paid_registration(client, edition_id, member)
+    # Joining needs the member's own seat on that event.
+    await buy_seat(client, edition_id, event.id)
     joined = await client.post(
         f"/api/v1/editions/{edition_id}/teams/join",
         json={"inviteCode": team["inviteCode"]},
@@ -204,6 +212,8 @@ async def test_join_team_refuses_a_closed_event(client: AsyncClient, db_session)
     event = await _fresh_event(
         db_session, uuid.UUID(edition_id), title="Team Close Event", format="team"
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, event.id)
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": str(event.id), "name": "Closing Coyotes"},

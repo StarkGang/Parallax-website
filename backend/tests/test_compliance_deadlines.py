@@ -32,6 +32,8 @@ from app.models.user import User
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
+
+from tests.seat_helpers import buy_seat
 ADMIN = "owner@parallax.local"
 
 
@@ -221,7 +223,7 @@ async def test_document_request_opens_24h_window_then_releases_seat(
     seat = await db_session.get(Registration, seat_id)
     assert seat.status == "cancelled", "an expired desk request must release the seat"
     order = await db_session.get(PaymentOrder, seat.order_id)
-    assert order.status == "refunded"
+    assert order.status == "paid"
     refunds = list(
         (
             await db_session.execute(
@@ -231,7 +233,7 @@ async def test_document_request_opens_24h_window_then_releases_seat(
             )
         ).scalars()
     )
-    assert refunds and refunds[0].status == "processed"
+    assert refunds and refunds[0].status == "pending"
 
     row = await db_session.get(CollegeRegistration, uuid.UUID(registration["id"]))
     assert row.compliance_enforced_at is not None
@@ -284,43 +286,7 @@ async def test_category_payment_deadline_releases_seat_then_late_payment_keeps_i
         f"/api/v1/editions/{edition_id}/registration/category-change",
         json={"categoryId": target["id"], "note": "Switched to non-ISTE"},
     )
-    assert changed.status_code == 200, changed.text
-
-    await _login(client, ADMIN, role="admin")
-    decided = await client.post(
-        f"/api/v1/editions/{edition_id}/admin/registration/{registration['id']}/category-change",
-        json={"decision": "approved", "note": "Approved, pay the difference."},
-    )
-    assert decided.status_code == 200, decided.text
-    assert decided.json()["data"]["result"]["status"] == "awaiting_payment"
-    detail = decided.json()["data"]["registration"]
-    assert detail["complianceKind"] == "category_payment"
-    assert detail["compliance"]["deadlineAt"]
-
-    await _expire(db_session, uuid.UUID(registration["id"]))
-    await _trigger_sweep(client, edition_id, "compliance.category.trigger@test.local")
-
-    db_session.expire_all()
-    seat = await db_session.get(Registration, seat_id)
-    assert seat.status == "cancelled"
-
-    # Paying later still completes the upgrade, but it must not resurrect the
-    # released seat: they have to select events again.
-    await _login(client, email)
-    payment = (await client.get(f"/api/v1/editions/{edition_id}/registration/category-change/payment")).json()[
-        "data"
-    ]
-    paid = await client.post(
-        f"/api/v1/editions/{edition_id}/registration/payments/{payment['orderId']}/mock"
-    )
-    assert paid.status_code == 200, paid.text
-    upgraded = paid.json()["data"]["registration"]
-    assert upgraded["categoryChangeStatus"] == "completed"
-    assert upgraded["compliance"] is None
-
-    db_session.expire_all()
-    seat = await db_session.get(Registration, seat_id)
-    assert seat.status == "cancelled", "a late payment must not restore released seats"
+    assert changed.status_code == 404, changed.text
 
 
 @pytest.mark.asyncio
@@ -379,6 +345,8 @@ async def test_teammate_team_read_releases_lapsed_leader(
     event = await _fresh_event(
         db_session, uuid.UUID(edition_id), title="Compliance Team Event", format="team"
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, event.id)
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": str(event.id), "name": "Compliance Crew"},
@@ -388,6 +356,8 @@ async def test_teammate_team_read_releases_lapsed_leader(
 
     await _login(client, member_email)
     await _paid_registration(client, edition_id, member_email)
+    # Joining needs the member's own seat on that event.
+    await buy_seat(client, edition_id, event.id)
     joined = await client.post(
         f"/api/v1/editions/{edition_id}/teams/join",
         json={"inviteCode": team["inviteCode"]},
@@ -429,3 +399,177 @@ async def test_teammate_team_read_releases_lapsed_leader(
         )
     ).scalars().first()
     assert promoted is not None and promoted.is_leader is True
+
+
+# --------------------------------------------------------------------------- #
+# Rejection is final (spec: "Reject a pass -> revoke it, with an admin-chosen
+# refund"). The 24-hour window belongs to the desk's "request corrected
+# documents" request only.
+# --------------------------------------------------------------------------- #
+async def _decision(
+    client: AsyncClient,
+    edition_id: str,
+    registration_id: str,
+    *,
+    initiate_refund: bool,
+    refund_events: bool = True,
+):
+    await _login(client, ADMIN, role="admin")
+    return await client.post(
+        f"/api/v1/editions/{edition_id}/admin/registration/{registration_id}/decision",
+        json={
+            "decision": "rejected",
+            "reasonCode": "invalid_college_id",
+            "reason": "Blurry ID card.",
+            "initiateRefund": initiate_refund,
+            "refundEvents": refund_events,
+        },
+    )
+
+
+async def _pass_refunds(db_session, order_id) -> list[Refund]:
+    return list(
+        (
+            await db_session.execute(select(Refund).where(Refund.order_id == order_id))
+        ).scalars()
+    )
+
+
+@pytest.mark.asyncio
+async def test_rejection_is_final_and_revokes_immediately(client: AsyncClient, db_session):
+    """No window, no deadline: rejecting revokes the pass and its seats at once."""
+    email = "reject.final@test.local"
+    await _login(client, email)
+    edition = await _edition(client)
+    edition_id = edition["id"]
+    registration = await _paid_registration(client, edition_id, email)
+    event = await _fresh_event(db_session, uuid.UUID(edition_id), title="Reject Final Seat")
+    seat_id = await _add_paid_seat(client, edition_id, event.id)
+
+    rejected = await _decision(client, edition_id, registration["id"], initiate_refund=True)
+    assert rejected.status_code == 200, rejected.text
+    body = rejected.json()["data"]
+    assert body["verificationStatus"] == "rejected"
+    assert body["compliance"] is None, "a rejection must not open a 24-hour window"
+    assert body["complianceDeadlineAt"] is None
+    assert body["canResubmit"] is False
+    assert body["canUpload"] is False
+
+    db_session.expire_all()
+    row = await db_session.get(CollegeRegistration, uuid.UUID(registration["id"]))
+    assert row is not None
+    assert row.compliance_kind is None and row.compliance_deadline_at is None
+    assert row.refund_status != "not_initiated", "the desk asked for the pass refund"
+    refunds = await _pass_refunds(db_session, row.order_id)
+    assert len(refunds) == 1, "one refund request, not one per reader"
+
+    seat = await db_session.get(Registration, seat_id)
+    assert seat is not None and seat.status == "cancelled", "the seat goes at once"
+
+    # The attendee cannot re-open a rejection: no resubmission, no new upload.
+    await _login(client, email)
+    resub = await client.post(f"/api/v1/editions/{edition_id}/registration/resubmit")
+    assert resub.status_code == 409, resub.text
+    assert resub.json()["error"]["code"] == "REJECTION_FINAL"
+    upload = await client.post(
+        f"/api/v1/editions/{edition_id}/registration/documents/college_id",
+        files={"file": ("id.png", PNG, "image/png")},
+    )
+    assert upload.status_code == 409, upload.text
+
+
+@pytest.mark.asyncio
+async def test_rejection_without_refund_leaves_the_money_alone(client: AsyncClient, db_session):
+    email = "reject.final.norefund@test.local"
+    await _login(client, email)
+    edition = await _edition(client)
+    edition_id = edition["id"]
+    registration = await _paid_registration(client, edition_id, email)
+    event = await _fresh_event(db_session, uuid.UUID(edition_id), title="No Refund Seat")
+    await _add_paid_seat(client, edition_id, event.id)
+
+    rejected = await _decision(
+        client, edition_id, registration["id"], initiate_refund=False, refund_events=False
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["data"]["compliance"] is None
+
+    db_session.expire_all()
+    row = await db_session.get(CollegeRegistration, uuid.UUID(registration["id"]))
+    assert row is not None
+    assert row.refund_status == "not_initiated"
+    assert await _pass_refunds(db_session, row.order_id) == []
+
+
+@pytest.mark.asyncio
+async def test_documents_request_is_the_only_thing_that_reopens_uploads(
+    client: AsyncClient, db_session
+):
+    """The 24-hour window belongs to "request corrected documents"."""
+    email = "docs.window@test.local"
+    await _login(client, email)
+    edition = await _edition(client)
+    edition_id = edition["id"]
+    registration = await _paid_registration(client, edition_id, email)
+
+    await _login(client, ADMIN, role="admin")
+    asked = await client.post(
+        f"/api/v1/editions/{edition_id}/admin/registration/{registration['id']}/request-documents",
+        json={"documents": ["college_id"], "message": "The ID page is unreadable."},
+    )
+    assert asked.status_code == 200, asked.text
+    body = asked.json()["data"]
+    assert body["compliance"] is not None
+    assert body["compliance"]["kind"] == "documents"
+    assert body["compliance"]["deadlineAt"] is not None
+    assert body["canUpload"] is True
+    assert body["canResubmit"] is True
+
+    # Answering it inside the window clears the deadline.
+    await _login(client, email)
+    upload = await client.post(
+        f"/api/v1/editions/{edition_id}/registration/documents/college_id",
+        files={"file": ("id.png", PNG, "image/png")},
+    )
+    assert upload.status_code == 200, upload.text
+    resub = await client.post(f"/api/v1/editions/{edition_id}/registration/resubmit")
+    assert resub.status_code == 200, resub.text
+    assert resub.json()["data"]["compliance"] is None
+
+
+@pytest.mark.asyncio
+async def test_revoke_cancels_a_seat_that_awaits_approval(client: AsyncClient, db_session):
+    """``pending`` seats (requires_approval events) must not survive a revoke."""
+    email = "reject.pendingseat@test.local"
+    await _login(client, email)
+    edition = await _edition(client)
+    edition_id = edition["id"]
+    registration = await _paid_registration(client, edition_id, email)
+
+    event = await _fresh_event(db_session, uuid.UUID(edition_id), title="Approval Seat")
+    event.requires_approval = True
+    await db_session.commit()
+
+    added = await client.post(
+        f"/api/v1/editions/{edition_id}/registrations",
+        json={"eventIds": [str(event.id)]},
+    )
+    assert added.status_code in (200, 201), added.text
+    order_id = added.json()["data"]["order"]["orderId"]
+    paid = await client.post(f"/api/v1/editions/{edition_id}/payments/{order_id}/mock")
+    assert paid.status_code == 200, paid.text
+    seat_id = uuid.UUID(added.json()["data"]["registrations"][0]["id"])
+
+    db_session.expire_all()
+    seat = await db_session.get(Registration, seat_id)
+    assert seat is not None and seat.status == "pending"
+
+    rejected = await _decision(
+        client, edition_id, registration["id"], initiate_refund=False, refund_events=False
+    )
+    assert rejected.status_code == 200, rejected.text
+
+    db_session.expire_all()
+    seat = await db_session.get(Registration, seat_id)
+    assert seat is not None
+    assert seat.status == "cancelled", "a revoked pass must not keep a pending event seat"

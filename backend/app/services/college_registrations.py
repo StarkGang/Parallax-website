@@ -617,7 +617,7 @@ def _missing_documents(
 def _can_replace(row: CollegeRegistration, *, allow_resubmission: bool) -> bool:
     if row.payment_status == "refunded" or row.refund_status == "completed":
         return False
-    return row.verification_status not in {"approved"}
+    return row.verification_status not in {"approved", "rejected"}
 
 
 def _can_submit_documents(row: CollegeRegistration, *, allow_resubmission: bool) -> bool:
@@ -634,7 +634,9 @@ def _can_submit_documents(row: CollegeRegistration, *, allow_resubmission: bool)
     if row.verification_status == "approved":
         return False
     if row.verification_status == "rejected":
-        return allow_resubmission
+        # A rejection is final: the desk must ask for corrected documents to
+        # re-open uploads.
+        return False
     if row.verification_status == "resubmission_required":
         return allow_resubmission
     return True
@@ -771,13 +773,10 @@ async def serialize_registration(
         "canResubmit": bool(
             row.payment_status == "paid"
             and allow_resubmission
-            and row.verification_status in {"rejected", "resubmission_required"}
+            # Only a desk "request corrected documents" can be answered.
+            and row.verification_status == "resubmission_required"
         ),
-        "canChangeCategory": bool(
-            row.payment_status == "paid"
-            and row.refund_status != "completed"
-            and row.category_change_status != "pending"
-        ),
+        "canChangeCategory": False,
         "canPay": row.payment_status == "pending" and row.verification_status == "payment_pending",
         "canDownloadReceipt": row.payment_status in {"paid", "refunded"},
         "canDownloadConfirmation": row.verification_status == "approved",
@@ -1786,14 +1785,20 @@ async def resubmit(
         raise Conflict("Resubmission is disabled for this edition.", code="RESUBMISSION_DISABLED")
     if row.payment_status != "paid":
         raise Conflict("Complete the payment before requesting verification.")
+    if row.verification_status == "rejected":
+        raise Conflict(
+            "This registration was rejected by the organisers and cannot be resubmitted. "
+            "Contact the registration desk if documents need to be corrected.",
+            code="REJECTION_FINAL",
+        )
     if row.refund_status in {"initiated", "processing", "completed"}:
         if not await _cancel_parked_refunds(db, row):
             raise Conflict(
                 "A refund is already in progress or completed for this registration.",
                 code="REFUND_IN_PROGRESS",
             )
-    if row.verification_status not in {"rejected", "resubmission_required"}:
-        raise Conflict("Only a rejected registration can be resubmitted.")
+    if row.verification_status != "resubmission_required":
+        raise Conflict("Only a requested document correction can be resubmitted.")
     category = await db.get(RegistrationCategory, row.category_id)
     documents = list(
         (
@@ -2283,10 +2288,25 @@ async def _refund_or_park_pass(
     reason_code: str,
     full_reason: str,
     try_gateway: bool,
+    amount_paise: int | None = None,
 ) -> None:
-    """Initiate a gateway pass refund or park a pending refund request."""
+    """Initiate a gateway pass refund or park a pending refund request.
+
+    ``amount_paise`` lets the desk refund part of the pass at decision time; the
+    rest stays on the registration and can be refunded later from the ledger.
+    """
     if row.payment_status != "paid":
         return
+    refundable = await _refundable_paise(db, row)
+    amount = refundable if amount_paise is None else int(amount_paise)
+    if amount > refundable:
+        raise ValidationFailed(
+            f"Only {refundable} paise is still refundable on this registration.",
+            code="REFUND_EXCEEDS_COLLECTED",
+            details={"refundablePaise": refundable},
+        )
+    if amount <= 0:
+        raise ValidationFailed("The refund amount must be greater than zero.")
     if try_gateway:
         try:
             await initiate_refund(
@@ -2295,8 +2315,8 @@ async def _refund_or_park_pass(
                 row,
                 actor,
                 actor_role,
-                amount_paise=await _refundable_paise(db, row),
-                note=f"Automatic refund on cancellation: {full_reason}",
+                amount_paise=amount,
+                note=f"Refund on cancellation: {full_reason}",
             )
             return
         except Exception as exc:
@@ -2312,7 +2332,7 @@ async def _refund_or_park_pass(
             )
             return
 
-    pending_amount = await _refundable_paise(db, row)
+    pending_amount = amount
     if row.order_id is not None and pending_amount > 0:
         existing_request = (
             await db.execute(
@@ -2357,6 +2377,7 @@ async def reject(
     initiate_refund_workflow: bool,
     refund_events: bool = True,
     can_initiate_refund: bool = True,
+    refund_amount_paise: int | None = None,
 ) -> CollegeRegistration:
     code = (reason_code or "").strip() or "other"
     custom = (reason or "").strip()
@@ -2395,7 +2416,6 @@ async def reject(
         refund_paid_events=bool(refund_events),
         # Money only moves if this operator may move it; otherwise the add-on
         # refunds are parked for the finance desk like the pass refund below.
-        try_gateway=bool(refund_events and can_initiate_refund),
         actor_id=actor.id,
     )
 
@@ -2415,7 +2435,11 @@ async def reject(
             actor_role,
             reason_code=code,
             full_reason=full_reason,
+            # The pass refund is still a gateway action when the operator may
+            # move money; only *event* refunds are always parked (see
+            # release_event_entitlements).
             try_gateway=bool(can_initiate_refund),
+            amount_paise=refund_amount_paise,
         )
 
     await record(
@@ -2582,7 +2606,6 @@ async def maybe_enforce_lapsed_compliance(
         edition_id=edition_id,
         limit=limit,
         request=request,
-        try_gateway=try_gateway,
     )
 
 
@@ -2737,7 +2760,6 @@ async def _enforce_compliance_row(
             edition_id=row.edition_id,
             reason=reason,
             refund_paid_events=refund_events,
-            try_gateway=bool(refund_events and try_gateway),
         )
         if refund_pass:
             await _refund_or_park_pass(
@@ -2748,7 +2770,7 @@ async def _enforce_compliance_row(
                 "system",
                 reason_code="resubmission_expired",
                 full_reason=reason,
-                try_gateway=try_gateway,
+                try_gateway=True,
             )
     else:
         reason = "24-hour category-change payment window expired"
@@ -2758,7 +2780,6 @@ async def _enforce_compliance_row(
             edition_id=row.edition_id,
             reason=reason,
             refund_paid_events=True,
-            try_gateway=try_gateway,
         )
     row.compliance_enforced_at = datetime.now(UTC)
     await notify(

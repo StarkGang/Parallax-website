@@ -75,20 +75,15 @@ class PolicyView(CamelModel):
     id: uuid.UUID
     version: int
     is_current: bool = False
-    pass_price_paise: int
     lunch_included_days: list[str] = []
     included_event_count: int
-    included_selection_mode: str
     included_value_cap_paise: int | None = None
     cap_inclusive: bool = True
-    # 0 = cheapest first, 1 = expensive first
-    allowance_pack_order: int = Field(default=0, ge=0, le=1)
     # 0 = cheapest first, 1 = expensive first
     allowance_pack_order: int = Field(default=0, ge=0, le=1)
     selection_change_deadline: datetime | None = None
     addon_requires_pass: bool = True
     team_members_require_pass: bool = True
-    team_fee_basis_default: str = "per_participant"
     hold_minutes: int = 15
     refund_rules: dict = {}
     gst_note: str | None = None
@@ -100,10 +95,8 @@ class PolicyView(CamelModel):
 
 
 class PolicyUpdate(StrictCamelModel):
-    pass_price_paise: int
     lunch_included_days: list[str] = []
     included_event_count: int
-    included_selection_mode: str = Field(default="exact", pattern="^(exact|up_to)$")
     included_value_cap_paise: int | None = None
     cap_inclusive: bool = True
     # 0 = cheapest first, 1 = expensive first
@@ -111,7 +104,6 @@ class PolicyUpdate(StrictCamelModel):
     selection_change_deadline: datetime | None = None
     addon_requires_pass: bool = True
     team_members_require_pass: bool = True
-    team_fee_basis_default: str = Field(default="per_participant", pattern="^per_participant$")
     hold_minutes: int = 15
     refund_rules: dict = {}
     gst_note: str | None = None
@@ -144,8 +136,6 @@ class EventUpsert(StrictCamelModel):
     base_value_paise: int = 0
     included_eligible: bool = True
     addon_price_paise: int = 0
-    addon_charge_basis: str = Field(default="per_participant", pattern="^(per_participant|per_team)$")
-    team_fee_basis: str | None = Field(default="per_participant")
     capacity: int = 50
     capacity_unit: str = Field(default="participants", pattern="^(participants|entries)$")
     starts_at: datetime

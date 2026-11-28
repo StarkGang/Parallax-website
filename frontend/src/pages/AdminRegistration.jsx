@@ -335,6 +335,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     notes: '',
     initiateRefund: true,
     refundEvents: true,
+    refundAmount: '',
   });
   const [docForm, setDocForm] = useState({
     documents: ['college_id'],
@@ -362,7 +363,6 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
     note: '',
     reference: '',
   });
-  const [changeNote, setChangeNote] = useState('');
   // In-page document viewer: the review sheet stays mounted underneath, so
   // closing the viewer never loses the admin's position or unsaved notes.
   const [viewer, setViewer] = useState(null);
@@ -484,8 +484,12 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
           notes: rejectForm.notes || null,
           initiateRefund: rejectForm.initiateRefund,
           refundEvents: rejectForm.refundEvents,
+          refundAmountPaise:
+            rejectForm.initiateRefund && rejectForm.refundAmount !== ''
+              ? paise(rejectForm.refundAmount)
+              : null,
         }),
-      'Registration rejected. The participant has been notified and the pass has been revoked.',
+      'Registration rejected. The pass is revoked and the participant has 24 hours to re-upload documents.',
     );
 
   const requestDocs = () =>
@@ -553,20 +557,7 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
       'Refund status updated and audited.',
     );
 
-  const decideChange = (decision) =>
-    run(
-      'change',
-      () =>
-        adminApi.decideRegistrationCategoryChange(editionId, registrationId, {
-          decision,
-          note: changeNote || null,
-          settlement: decision === 'approved' ? 'additional_payment' : null,
-        }),
-      `Category change ${decision}.`,
-    );
-
   const isIste = data.category?.code === 'iste_member';
-  const change = data.categoryChange;
   const canApprove =
     data.paymentStatus === 'paid' &&
     data.verificationStatus !== 'approved' &&
@@ -861,57 +852,6 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
         </Panel>
       </div>
 
-      {change ? (
-        <Panel>
-          <div className="panel-head-row">
-            <div>
-              <Eyebrow>CATEGORY CHANGE REQUEST</Eyebrow>
-              <b>
-                {data.category?.name} → {change.toCategory?.name}
-              </b>
-              <p className="muted">
-                Fee {money(change.fromFeePaise)} → {money(change.toFeePaise)} · difference{' '}
-                {money(change.settlementAmountPaise)} · status {change.status}
-              </p>
-            </div>
-            <Pill value={change.status} />
-          </div>
-          {change.note ? <p className="muted">Participant reason: “{change.note}”</p> : null}
-          {change.status === 'pending' ? (
-            <>
-              <Field label="Decision note">
-                <textarea
-                  rows="2"
-                  value={changeNote}
-                  onChange={(event) => setChangeNote(event.target.value)}
-                />
-              </Field>
-              <div className="banner-actions">
-                <Button
-                  variant="success"
-                  onClick={() => decideChange('approved')}
-                  disabled={busy === 'change'}
-                  icon={Check}
-                >
-                  Approve change
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={() => decideChange('rejected')}
-                  disabled={busy === 'change'}
-                >
-                  Decline change
-                </Button>
-              </div>
-              <p className="muted">
-                A higher fee creates an additional payment order. A lower fee creates a tracked
-                refund. The category only changes after settlement.
-              </p>
-            </>
-          ) : null}
-        </Panel>
-      ) : null}
-
       <Panel>
         <div className="panel-head-row">
           <div>
@@ -1201,6 +1141,23 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               </small>
             </span>
           </label>
+          {rejectForm.initiateRefund ? (
+            <Field
+              label="Pass refund amount (₹, blank = full)"
+              hint="Leave blank to refund everything still refundable, or enter a smaller amount for a partial refund."
+            >
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={rejectForm.refundAmount}
+                placeholder="Full refund"
+                onChange={(event) =>
+                  setRejectForm({ ...rejectForm, refundAmount: event.target.value })
+                }
+              />
+            </Field>
+          ) : null}
           <label className="check-row">
             <input
               type="checkbox"
@@ -1224,6 +1181,10 @@ function RegistrationDetail({ editionId, registrationId, version, onClose, onCha
               {busy === 'reject' ? 'Rejecting' : 'Reject registration'}
             </Button>
           </div>
+          <p className="muted" style={{ fontSize: '12px', marginTop: '8px' }}>
+            The participant gets 24 hours to re-upload documents. If they do not, the pass,
+            event seats and team placement stay revoked and the refund choices above apply.
+          </p>
         </form>
       </Sheet>
 

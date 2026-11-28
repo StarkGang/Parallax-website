@@ -20,6 +20,8 @@ from app.models.registration import CollegeRegistration, RegistrationCategory
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
+
+from tests.seat_helpers import buy_seat
 PDF = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 
 
@@ -395,52 +397,7 @@ async def test_user_edits_resubmission_and_category_change(client: AsyncClient):
         f"/api/v1/editions/{edition_id}/registration/category-change",
         json={"categoryId": non_iste["id"], "note": "I moved to a B.Tech programme."},
     )
-    assert changed.status_code == 200, changed.text
-
-    # Admin approves; the higher fee becomes an additional payment.
-    await _login(client, "owner@parallax.local", role="admin")
-    decision = await client.post(
-        f"/api/v1/editions/{edition_id}/admin/registration/"
-        f"{(await _config_admin(client, edition_id))['id']}/category-change",
-        json={"decision": "approved", "settlement": "additional_payment"},
-    )
-    assert decision.status_code == 200, decision.text
-    assert decision.json()["data"]["result"]["settlementType"] == "additional_payment"
-
-    # The participant pays the difference; the category only changes on success.
-    await _login(client, "edit.student@test.local")
-    delta = await client.get(
-        f"/api/v1/editions/{edition_id}/registration/category-change/payment"
-    )
-    assert delta.status_code == 200, delta.text
-    assert delta.json()["data"]["amountPaise"] == 30100
-    delta_paid = await client.post(
-        f"/api/v1/editions/{edition_id}/registration/payments/"
-        f"{delta.json()['data']['orderId']}/mock"
-    )
-    assert delta_paid.status_code == 200, delta_paid.text
-    assert delta_paid.json()["data"]["registration"]["category"]["code"] == "non_iste"
-    assert delta_paid.json()["data"]["registration"]["feePaise"] == 60000
-    assert delta_paid.json()["data"]["registration"]["additionalPaidPaise"] == 30100
-
-    # A move to a cheaper category becomes a tracked refund, not an instant
-    # "refunded" flag.
-    downgrade = await client.post(
-        f"/api/v1/editions/{edition_id}/registration/category-change",
-        json={"categoryId": poly["id"], "note": "Back to polytechnic."},
-    )
-    assert downgrade.status_code == 200, downgrade.text
-    await _login(client, "owner@parallax.local", role="admin")
-    downgrade_decision = await client.post(
-        f"/api/v1/editions/{edition_id}/admin/registration/"
-        f"{(await _config_admin(client, edition_id))['id']}/category-change",
-        json={"decision": "approved"},
-    )
-    assert downgrade_decision.status_code == 200, downgrade_decision.text
-    downgraded = downgrade_decision.json()["data"]["registration"]
-    assert downgraded["category"]["code"] == "polytechnic"
-    assert downgraded["refundStatus"] == "initiated"
-    assert downgraded["refund"]["amountPaise"] == 30100
+    assert changed.status_code == 404, changed.text
 
 
 async def _config_admin(client: AsyncClient, edition_id: str) -> dict:
@@ -453,7 +410,8 @@ async def _config_admin(client: AsyncClient, edition_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_rejection_resubmission_then_approval(client: AsyncClient):
+async def test_rejection_is_final_until_the_desk_approves(client: AsyncClient):
+    """A rejection revokes the registration; the attendee cannot re-upload into it."""
     edition_id = await _edition_id(client)
     await _login(client, "resubmit.student@test.local")
     registration = await _register_paid(
@@ -472,18 +430,24 @@ async def test_rejection_resubmission_then_approval(client: AsyncClient):
         },
     )
     assert rejected.status_code == 200, rejected.text
-    assert rejected.json()["data"]["canResubmit"] is True
+    rejected_data = rejected.json()["data"]
+    assert rejected_data["verificationStatus"] == "rejected"
+    assert rejected_data["canResubmit"] is False
+    assert rejected_data["canUpload"] is False
+    assert rejected_data["compliance"] is None, "a rejection opens no 24-hour window"
+    assert rejected_data["complianceDeadlineAt"] is None
 
     await _login(client, "resubmit.student@test.local")
     replacement = await _upload(
         client, edition_id, "college_id", filename="corrected.png"
     )
-    assert replacement.status_code == 200, replacement.text
+    assert replacement.status_code == 409, replacement.text
     resubmitted = await client.post(f"/api/v1/editions/{edition_id}/registration/resubmit")
-    assert resubmitted.status_code == 200, resubmitted.text
-    assert resubmitted.json()["data"]["verificationStatus"] == "pending_verification"
-    assert resubmitted.json()["data"]["rejectionReason"] is None
+    assert resubmitted.status_code == 409, resubmitted.text
+    assert resubmitted.json()["error"]["code"] == "REJECTION_FINAL"
+    assert resubmitted.json()["data"]["verificationStatus"] if "data" in resubmitted.json() else True
 
+    # The only way back is the desk approving a rejection it made by mistake.
     await _login(client, "owner@parallax.local", role="admin")
     approved = await client.post(
         f"/api/v1/editions/{edition_id}/admin/registration/{registration_id}/decision",
@@ -661,12 +625,13 @@ async def test_paid_registration_unlocks_pass_ticket_events_and_teams(
         if event["format"] == "individual"
     ][:2]
     assert individual
-    selection = await client.put(
-        f"/api/v1/editions/{edition_id}/pass/selections",
+    selection = await client.post(
+        f"/api/v1/editions/{edition_id}/basket/events",
         json={"eventIds": [event["id"] for event in individual]},
     )
     assert selection.status_code == 200, selection.text
-    assert selection.json()["data"]["count"] == 2
+    basket = selection.json()["data"]
+    assert len([l for l in basket["lines"] if l.get("action") == "create"]) == 2
 
     # Team registration works once the pass is active.
     team_event = next(
@@ -677,6 +642,8 @@ async def test_paid_registration_unlocks_pass_ticket_events_and_teams(
             )
         ).json()["data"]
     )
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, team_event["id"])
     created = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": team_event["id"], "name": "Unlock Squad"},
@@ -705,6 +672,8 @@ async def test_rejected_pass_stays_dead_no_resurrection_or_booking(client: Async
     team_event = next(e for e in events if e["format"] == "team")
 
     # The attendee forms a team while their pass is still active.
+    # Team creation needs an existing seat: buy one first.
+    await buy_seat(client, edition_id, team_event["id"])
     created_team = await client.post(
         f"/api/v1/editions/{edition_id}/teams",
         json={"eventId": team_event["id"], "name": "Doomed Squad"},
@@ -730,8 +699,8 @@ async def test_rejected_pass_stays_dead_no_resurrection_or_booking(client: Async
     assert pass_view["status"] == "cancelled"
 
     # ...event selection is blocked...
-    selection = await client.put(
-        f"/api/v1/editions/{edition_id}/pass/selections",
+    selection = await client.post(
+        f"/api/v1/editions/{edition_id}/basket/events",
         json={"eventIds": [e["id"] for e in individual[:2]]},
     )
     assert selection.status_code == 409, selection.text
@@ -777,8 +746,8 @@ async def test_rejected_pass_stays_dead_no_resurrection_or_booking(client: Async
     await _login(client, email)
     pass_view = (await client.get(f"/api/v1/editions/{edition_id}/pass")).json()["data"]
     assert pass_view["status"] == "active"
-    selection = await client.put(
-        f"/api/v1/editions/{edition_id}/pass/selections",
+    selection = await client.post(
+        f"/api/v1/editions/{edition_id}/basket/events",
         json={"eventIds": [e["id"] for e in individual[:2]]},
     )
     assert selection.status_code == 200, selection.text

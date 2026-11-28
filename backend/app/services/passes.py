@@ -60,7 +60,7 @@ async def get_pass(
         # terminal. This branch used to overwrite "refunded" with "suspended",
         # so re-activating the account handed the pass back and re-issued its
         # entry ticket.
-        if user_pass.status in ("active", "pending"):
+        if user_pass.status == "active":
             user_pass.status = "suspended"
             await revoke_for_pass(db, user_pass.id)
             await release_event_entitlements(
@@ -72,7 +72,7 @@ async def get_pass(
             await db.flush()
         return user_pass
 
-    if user_pass is not None and user_pass.status in ("active", "suspended", "cancelled", "revoked"):
+    if user_pass is not None and user_pass.status in ("active", "suspended", "cancelled"):
         return user_pass
 
     # Self-healing pass bridge: if the user has a paid college registration, activate immediately
@@ -223,7 +223,7 @@ async def pass_gate_blocked(db: AsyncSession, user_id: uuid.UUID, edition_id: uu
     if user_pass is not None:
         if user_pass.status == "suspended":
             return "Your convention pass has been suspended by the organisers. Event selection and add-on purchases are closed."
-        if user_pass.status in ("cancelled", "revoked"):
+        if user_pass.status == "cancelled":
             return "Your convention pass is not active. Event selection and add-on purchases are closed."
 
     from app.models.registration import CollegeRegistration
@@ -286,24 +286,24 @@ async def release_event_entitlements(
     edition_id: uuid.UUID,
     reason: str,
     refund_paid_events: bool = True,
-    try_gateway: bool = True,
     actor_id: uuid.UUID | None = None,
 ) -> dict[str, int]:
     """Free every event seat a pass holder still holds, and return their money.
 
     A pass that is no longer active must not leave the attendee holding paid
     seats: the seat blocks someone else, and the ticket is a promise the door
-    cannot honour. Rejection and full refunds always did this, but suspension
-    and a plain pass-status change did not, so the portal kept listing
-    "confirmed" seats for a cancelled pass.
+    cannot honour. ``pending`` seats (an event that needs desk approval) count
+    as held seats too and are cancelled here, so a revoke really does remove
+    every event registration. Rejection and full refunds always did this, but
+    suspension and a plain pass-status change did not, so the portal kept
+    listing "confirmed" seats for a cancelled pass.
 
-    Paid add-on orders are refunded straight away. When the gateway call fails
-    the money is recorded as a pending refund instead of disappearing.
-
-    ``try_gateway=False`` is for callers whose operator may not move money
-    (a rejection without ``finance.write``): the seats are still freed and a
-    pending refund request is left for the finance desk instead of starting a
-    gateway refund on their behalf.
+    Money never moves from here. Every paid order whose seats this releases gets
+    one **pending** refund request with its full remaining amount; the finance
+    desk approves it in the ledger. That is the same rule as a user
+    cancellation, and it means an admin reject/revoke cannot take money out of
+    the gateway by accident. ``refund_paid_events=False`` (the desk unticked the
+    box) creates nothing and the money stays on the order as paid and retained.
     """
     from app.models.commerce import PaymentOrder, Refund
     from app.services.teams import purge_user_from_teams
@@ -314,7 +314,11 @@ async def release_event_entitlements(
                 select(Registration).where(
                     Registration.user_id == user_id,
                     Registration.edition_id == edition_id,
-                    Registration.status.in_(["confirmed", "reserved"]),
+                    # ``pending`` matters: a seat on a ``requires_approval`` event
+                    # waits there for the desk. Leaving it behind meant a revoked
+                    # pass kept a live event registration that the roster still
+                    # listed, so the revoke never actually removed the seat.
+                    Registration.status.in_(["confirmed", "reserved", "pending"]),
                 )
             )
         ).scalars()
@@ -380,7 +384,7 @@ async def release_event_entitlements(
     await db.flush()
 
     refunded = 0
-    queued = 0
+    queued = 0  # refunded stays 0: nothing is settled from here any more
     for order_id in paid_orders:
         order = await db.get(PaymentOrder, order_id)
         if order is None or order.status != "paid":
@@ -409,48 +413,20 @@ async def release_event_entitlements(
         available = max(0, int(order.amount_paise) - already_committed)
         if available <= 0:
             continue
-        if not try_gateway:
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=available,
-                    reason_code="pass_not_active",
-                    reason_note=reason[:500],
-                    status="pending",
-                    requested_by=actor_id,
-                )
-            )
-            queued += 1
-            continue
-        try:
-            from app.services.payments import refund_order
-
-            await refund_order(
-                db,
-                order,
+        # Money never leaves the gateway from here. An admin reject/revoke (and
+        # every system cascade that frees seats) only *queues* the refund, so the
+        # desk decides it in the ledger - the same rule as a user cancellation.
+        db.add(
+            Refund(
+                order_id=order.id,
                 amount_paise=available,
                 reason_code="pass_not_active",
                 reason_note=reason[:500],
-                requested_by_id=actor_id,
+                status="pending",
+                requested_by=actor_id,
             )
-            refunded += 1
-        except Exception as exc:  # a gateway outage must not lose the money
-            logger.warning(
-                "event_refund_on_pass_release_failed order=%s error=%s",
-                order_id,
-                str(exc)[:200],
-            )
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=available,
-                    reason_code="pass_not_active",
-                    reason_note=f"{reason} (gateway refund failed: {str(exc)[:200]})"[:500],
-                    status="pending",
-                    requested_by=actor_id,
-                )
-            )
-            queued += 1
+        )
+        queued += 1
     if regs:
         cache_delete_pattern("public:*")
         cache_delete_pattern("admin:dashboard:*")
@@ -500,478 +476,6 @@ async def _paid_selection_delta_paise(
         )
     ).scalar_one()
     return int(total or 0)
-
-
-def _message(
-    mode: str,
-    count: int,
-    required: int,
-    cap_paise: int | None,
-    value: int,
-    cap_inclusive: bool,
-    due_paise: int = 0,
-) -> str | None:
-    if _count_valid(mode, count, required):
-        if due_paise > 0:
-            return (
-                f"Selections exceed the included allowance by INR {due_paise / 100:.2f}. "
-                "Pay the difference to confirm."
-            )
-        return None
-    if mode == "exact":
-        return f"Select exactly {required} included event{'s' if required != 1 else ''}."
-    return f"Select up to {required} included event{'s' if required != 1 else ''}."
-
-
-async def selection_state(
-    db: AsyncSession, user_pass: ConventionPass, policy: EditionPolicy
-) -> SelectionState:
-    chosen_ids = set(await selections_for(db, user_pass.id))
-
-    events = list(
-        (
-            await db.execute(
-                select(Event)
-                .where(
-                    Event.edition_id == user_pass.edition_id,
-                    Event.included_eligible.is_(True),
-                    Event.status.in_(["published", "open"]),
-                )
-                .order_by(Event.sort_order, Event.starts_at)
-            )
-        ).scalars()
-    )
-
-    categories = {
-        c.id: c.name
-        for c in (
-            await db.execute(
-                select(EventCategory).where(EventCategory.edition_id == user_pass.edition_id)
-            )
-        ).scalars()
-    }
-    taken = await capacity_usage(db, events) if events else {}
-    deadline = aware(policy.selection_change_deadline)
-    locked = bool(deadline and datetime.now(UTC) > deadline)
-
-    selected_events = []
-    total_val = 0
-    count = 0
-    for e in events:
-        is_sel = e.id in chosen_ids
-        seats = taken.get(e.id, 0)
-        seats_left = seats_left_for(e, seats)
-        selectable = is_sel or (not locked and (seats_left is None or seats_left > 0))
-        if is_sel:
-            count += 1
-            total_val += e.base_value_paise
-        selected_events.append(
-            SelectedEvent(
-                event_id=e.id,
-                slug=e.slug,
-                title=e.title,
-                category=categories.get(e.category_id, "General"),
-                format=e.format,
-                base_value_paise=e.base_value_paise,
-                addon_price_paise=e.addon_price_paise,
-                starts_at=aware(e.starts_at),
-                accent=e.accent,
-                selected=is_sel,
-                status=e.status,
-                capacity=e.capacity,
-                seats_taken=seats,
-                seats_left=seats_left,
-                selectable=selectable,
-            )
-        )
-
-    mode = policy.included_selection_mode or "exact"
-    cap_paise = policy.included_value_cap_paise
-    cap_inclusive = bool(policy.cap_inclusive)
-    required = policy.included_event_count
-
-    excess_paise = _compute_cap_excess(total_val, cap_paise, cap_inclusive)
-    paid_delta_paise = await _paid_selection_delta_paise(
-        db, user_pass.user_id, user_pass.edition_id, user_pass.id
-    )
-    due_paise = max(0, excess_paise - paid_delta_paise)
-    valid = _count_valid(mode, count, required) and not locked
-
-    return SelectionState(
-        pass_id=user_pass.id,
-        pass_status=user_pass.status,
-        selections=selected_events,
-        count=count,
-        value_paise=total_val,
-        cap_paise=cap_paise,
-        remaining_paise=max(0, cap_paise - total_val) if cap_paise is not None else None,
-        excess_paise=excess_paise,
-        paid_delta_paise=paid_delta_paise,
-        due_paise=due_paise,
-        required_count=required,
-        up_to=mode == "up_to",
-        mode=mode,
-        cap_inclusive=cap_inclusive,
-        valid=valid,
-        deadline=deadline,
-        locked=locked,
-        message=(
-            "Included selections are locked after the change deadline."
-            if locked
-            else _message(mode, count, required, cap_paise, total_val, cap_inclusive, due_paise)
-        ),
-    )
-
-
-async def set_selections(
-    db: AsyncSession,
-    request: Request,
-    user_pass: ConventionPass,
-    event_ids: list[uuid.UUID],
-    policy: EditionPolicy,
-) -> tuple[SelectionState, "object | None"]:
-    from app.models.commerce import PaymentOrder
-
-    deadline = aware(policy.selection_change_deadline)
-    if deadline and datetime.now(UTC) > deadline:
-        raise Conflict("The deadline to change included event selections has passed.")
-    if user_pass.status not in ("pending", "active"):
-        raise Conflict("This pass is no longer active, so its selections cannot be changed.")
-    edition = await db.get(ConventionEdition, user_pass.edition_id)
-    if edition is not None and not accepting_bookings(edition):
-        raise Conflict("This convention is no longer accepting new bookings.")
-
-    # Serialise concurrent saves: one row lock on the pass stops parallel
-    # requests from the same attendee, the event locks below stop two different
-    # attendees from claiming the same last seat.
-    await db.execute(
-        select(ConventionPass.id).where(ConventionPass.id == user_pass.id).with_for_update()
-    )
-
-    unique_ids = list(dict.fromkeys(event_ids))
-    if len(unique_ids) != len(event_ids):
-        raise ValidationFailed("The same event was selected twice.")
-
-    mode = policy.included_selection_mode or "exact"
-    required = policy.included_event_count
-    if not _count_valid(mode, len(unique_ids), required):
-        raise ValidationFailed(
-            f"Select exactly {required} included events."
-            if mode == "exact"
-            else f"Select up to {required} included events."
-        )
-
-    events: list[Event] = []
-    if unique_ids:
-        events = list(
-            (
-                await db.execute(
-                    select(Event)
-                    .where(
-                        Event.id.in_(unique_ids),
-                        Event.edition_id == user_pass.edition_id,
-                    )
-                    .with_for_update()
-                )
-            ).scalars()
-        )
-        if len(events) != len(unique_ids):
-            raise NotFound("One or more events were not found.")
-        for event in events:
-            if not event.included_eligible or event.status not in ("published", "open"):
-                raise ValidationFailed(f"'{event.title}' is not eligible for included selection.")
-            if event.format == "team":
-                # Claiming a team event as an included seat produced a lone
-                # "confirmed" seat on a team fixture that no team covered.
-                raise ValidationFailed(
-                    f"'{event.title}' is a team event. And a team seat is created by "
-                    "joining or creating a team.",
-                    code="TEAM_EVENT_REQUIRES_TEAM",
-                )
-
-    if events:
-        from app.services.events import capacity_usage
-
-        event_titles = {event.id: event.title for event in events}
-        conflicting = list(
-            (
-                await db.execute(
-                    select(Registration).where(
-                        Registration.user_id == user_pass.user_id,
-                        Registration.edition_id == user_pass.edition_id,
-                        Registration.event_id.in_(unique_ids),
-                        Registration.kind.in_(["addon", "team"]),
-                        Registration.status.in_(["confirmed", "reserved", "pending"]),
-                    )
-                )
-            ).scalars()
-        )
-        real_conflicts = []
-        team_conflicts = []
-        for row in conflicting:
-            if row.status == "reserved":
-                # Stale unpaid add-on reservation: cancel it so attendee can claim as included pass event
-                row.status = "cancelled"
-                row.cancelled_at = datetime.now(UTC)
-                row.cancelled_by = "superseded"
-                row.cancellation_reason = "Superseded by included pass selection"
-                if row.order_id is not None:
-                    old_order = await db.get(PaymentOrder, row.order_id)
-                    if old_order is not None and old_order.status == "created":
-                        old_order.status = "expired"
-                from app.services.tickets import revoke_for_registration
-                await revoke_for_registration(db, row.id)
-            elif row.team_id is not None:
-                # A team seat is one seat: claiming the same event as an
-                # included event used to create a second confirmed row and a
-                # second ticket for the same person, and the event counted them
-                # twice against its capacity.
-                team_conflicts.append(row)
-            else:
-                real_conflicts.append(row)
-        if team_conflicts or real_conflicts:
-            names = ", ".join(
-                event_titles.get(row.event_id, "an event")
-                for row in (team_conflicts + real_conflicts)
-            )
-            if team_conflicts:
-                raise Conflict(
-                    f"You are already on a team for {names}. A team seat is already your seat "
-                    "for that event, so it cannot also be claimed with your pass."
-                )
-            raise Conflict(
-                f"An add-on booking already exists for {names}. Cancel it before including it in the pass."
-            )
-
-        already_chosen = set(await selections_for(db, user_pass.id))
-        taken = await capacity_usage(db, events)
-        own_ids = set(
-            (
-                await db.execute(
-                    select(Registration.event_id).where(
-                        Registration.user_id == user_pass.user_id,
-                        Registration.event_id.in_(unique_ids),
-                        Registration.status.in_(["confirmed", "reserved"]),
-                    )
-                )
-            ).scalars()
-        )
-        for event in events:
-            if event.id in already_chosen:
-                continue
-            used = taken.get(event.id, 0)
-            # An entry-counted event is measured in teams, not people, so the
-            # attendee's own seat cannot be discounted from it.
-            if (event.capacity_unit or "participants") != "entries" and event.id in own_ids:
-                used -= 1
-            if event.capacity and used >= event.capacity:
-                raise Conflict(
-                    f"'{event.title}' is full. Remove it from your selection or contact the organisers."
-                )
-
-    total = sum(e.base_value_paise for e in events)
-    excess_paise = _compute_cap_excess(
-        total, policy.included_value_cap_paise, bool(policy.cap_inclusive)
-    )
-    paid_delta_paise = await _paid_selection_delta_paise(
-        db, user_pass.user_id, user_pass.edition_id, user_pass.id
-    )
-    due_paise = max(0, excess_paise - paid_delta_paise)
-
-    if due_paise > 0:
-        # Only one difference order may be open at a time. Leaving the previous
-        # one alive let an attendee pay twice for the same difference when they
-        # changed their mind between two saved drafts.
-        await db.execute(
-            update(PaymentOrder)
-            .where(
-                PaymentOrder.user_id == user_pass.user_id,
-                PaymentOrder.edition_id == user_pass.edition_id,
-                PaymentOrder.purpose == "included_selection_delta",
-                PaymentOrder.status == "created",
-                PaymentOrder.linked_record_id == user_pass.id,
-            )
-            .values(status="expired")
-        )
-        order = PaymentOrder(
-            edition_id=user_pass.edition_id,
-            user_id=user_pass.user_id,
-            purpose="included_selection_delta",
-            amount_paise=due_paise,
-            status="created",
-            linked_record_id=user_pass.id,
-            notes={
-                "passId": str(user_pass.id),
-                "eventIds": [str(eid) for eid in unique_ids],
-                "excessPaise": excess_paise,
-                "paidDeltaPaise": paid_delta_paise,
-            },
-        )
-        db.add(order)
-        await db.flush()
-        from app.services.payments import attach_gateway_order
-
-        await attach_gateway_order(db, order)
-        state = await selection_state(db, user_pass, policy)
-        # The saved rows are still the previous selection until the difference
-        # is paid, so describe the draft the order is for instead of the stale
-        # saved state.
-        state.count = len(unique_ids)
-        state.value_paise = total
-        state.excess_paise = excess_paise
-        state.paid_delta_paise = paid_delta_paise
-        state.due_paise = due_paise
-        if policy.included_value_cap_paise is not None:
-            state.remaining_paise = max(0, policy.included_value_cap_paise - total)
-        state.valid = _count_valid(
-            policy.included_selection_mode, len(unique_ids), policy.included_event_count
-        )
-        state.message = _message(
-            policy.included_selection_mode,
-            len(unique_ids),
-            policy.included_event_count,
-            policy.included_value_cap_paise,
-            total,
-            bool(policy.cap_inclusive),
-            due_paise,
-        )
-        return state, order
-
-    await db.execute(
-        delete(IncludedEventSelection).where(IncludedEventSelection.pass_id == user_pass.id)
-    )
-
-    snapshots = {e.id: e.base_value_paise for e in events}
-    for eid in unique_ids:
-        db.add(
-            IncludedEventSelection(
-                pass_id=user_pass.id,
-                event_id=eid,
-                base_value_paise_snapshot=snapshots.get(eid, 0),
-                status="active",
-            )
-        )
-
-    await db.flush()
-    await sync_included_registrations(db, user_pass, unique_ids)
-    cache_delete_pattern("public:*")
-    cache_delete_pattern("admin:dashboard:*")
-    return await selection_state(db, user_pass, policy), None
-
-
-async def apply_paid_selection_delta(db: AsyncSession, order) -> None:
-    """Confirm included event selections after an over-cap difference is paid.
-
-    Nothing is saved when the order is created: seats and tickets only appear
-    after the money is verified, so an abandoned checkout never grants entry.
-    """
-    from app.models.commerce import Refund
-
-    pass_id = order.linked_record_id
-    if pass_id is None and isinstance(order.notes, dict) and order.notes.get("passId"):
-        pass_id = uuid.UUID(str(order.notes["passId"]))
-    user_pass = await db.get(ConventionPass, pass_id) if pass_id else None
-    raw_ids = (order.notes or {}).get("eventIds") or []
-    event_ids = [uuid.UUID(str(eid)) for eid in raw_ids]
-
-    async def _refund(reason_code: str, note: str) -> None:
-        from sqlalchemy import func
-
-        already_committed = (
-            (
-                await db.execute(
-                    select(func.coalesce(func.sum(Refund.amount_paise), 0)).where(
-                        Refund.order_id == order.id,
-                        Refund.status.in_(("pending", "processing", "processed")),
-                    )
-                )
-            )
-            .scalars()
-            .one()
-        ) or 0
-        available = max(0, int(order.amount_paise) - int(already_committed))
-        if available > 0:
-            db.add(
-                Refund(
-                    order_id=order.id,
-                    amount_paise=available,
-                    reason_code=reason_code,
-                    reason_note=note[:500],
-                    status="pending",
-                )
-            )
-
-    blocked = await pass_gate_blocked(db, order.user_id, order.edition_id)
-    if user_pass is None or user_pass.status != "active" or blocked:
-        await _refund(
-            "pass_blocked",
-            blocked or "Convention pass is no longer active.",
-        )
-        return
-
-    events = list(
-        (
-            await db.execute(
-                select(Event).where(
-                    Event.id.in_(event_ids),
-                    Event.edition_id == user_pass.edition_id,
-                    Event.included_eligible.is_(True),
-                    Event.status.in_(["published", "open"]),
-                )
-            )
-        ).scalars()
-    )
-    if len(events) != len(event_ids):
-        await _refund(
-            "event_unavailable",
-            "One or more selected events closed before payment completed.",
-        )
-        return
-
-    from app.services.editions import current_policy
-
-    policy = await current_policy(db, user_pass.edition_id)
-    total = sum(e.base_value_paise for e in events)
-    required_excess = _compute_cap_excess(
-        total, policy.included_value_cap_paise, bool(policy.cap_inclusive)
-    )
-    # Money already paid before this order. A second order for a difference
-    # that is already covered (a stale draft, or two tabs paying at once) is
-    # refunded instead of charging the same difference twice. An order that no
-    # longer covers the difference (an event value changed while it sat unpaid)
-    # is refunded too, so nothing is confirmed underpaid.
-    paid_total = await _paid_selection_delta_paise(
-        db, user_pass.user_id, user_pass.edition_id, user_pass.id
-    )
-    prior_paid = max(0, paid_total - int(order.amount_paise))
-    covered = prior_paid + int(order.amount_paise)
-    count_ok = _count_valid(
-        policy.included_selection_mode, len(event_ids), policy.included_event_count
-    )
-    if not count_ok or prior_paid >= required_excess or covered < required_excess:
-        await _refund(
-            "duplicate_selection_delta",
-            "The included-event difference was already covered or the selection changed.",
-        )
-        return
-
-    await db.execute(
-        delete(IncludedEventSelection).where(IncludedEventSelection.pass_id == user_pass.id)
-    )
-    snapshots = {e.id: e.base_value_paise for e in events}
-    for eid in event_ids:
-        db.add(
-            IncludedEventSelection(
-                pass_id=user_pass.id,
-                event_id=eid,
-                base_value_paise_snapshot=snapshots.get(eid, 0),
-                status="active",
-            )
-        )
-    await db.flush()
-    await sync_included_registrations(db, user_pass, event_ids)
-    cache_delete_pattern("public:*")
-    cache_delete_pattern("admin:dashboard:*")
 
 
 async def sync_included_registrations(
@@ -1067,7 +571,5 @@ __all__ = [
     "activate_pass_for_registration",
     "release_event_entitlements",
     "selections_for",
-    "selection_state",
-    "set_selections",
     "sync_included_registrations",
 ]

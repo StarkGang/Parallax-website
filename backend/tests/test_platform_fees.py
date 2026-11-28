@@ -48,16 +48,13 @@ async def test_platform_fee_applied_to_pass_and_event_orders(client: AsyncClient
     upd = await client.post(
         f"/api/v1/editions/{edition_id}/admin/policies",
         json={
-            "passPricePaise": cur["passPricePaise"],
             "lunchIncludedDays": cur["lunchIncludedDays"],
             "includedEventCount": cur["includedEventCount"],
-            "includedSelectionMode": cur["includedSelectionMode"],
             "includedValueCapPaise": cur["includedValueCapPaise"],
             "capInclusive": cur["capInclusive"],
             "allowancePackOrder": cur.get("allowancePackOrder", 0),
             "addonRequiresPass": cur["addonRequiresPass"],
             "teamMembersRequirePass": cur["teamMembersRequirePass"],
-            "teamFeeBasisDefault": cur["teamFeeBasisDefault"],
             "holdMinutes": cur["holdMinutes"],
             "gstNote": cur.get("gstNote"),
             "platformFeeBps": 250,

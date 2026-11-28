@@ -167,7 +167,6 @@ async def serialize_events(
                 base_value_paise=e.base_value_paise,
                 included_eligible=e.included_eligible,
                 addon_price_paise=e.addon_price_paise,
-                addon_charge_basis=e.addon_charge_basis,
                 capacity=e.capacity,
                 seats_left=seats_left,
                 status=e.status,
@@ -286,7 +285,6 @@ async def public_event(
         ),
         registration_opens_at=_aware(row.registration_opens_at),
         registration_closes_at=_aware(row.registration_closes_at),
-        team_fee_basis=row.team_fee_basis,
     )
 
 
@@ -494,7 +492,10 @@ async def close_event(
             await db.execute(
                 select(Registration).where(
                     Registration.event_id == event.id,
-                    Registration.status.in_(["confirmed", "reserved"]),
+                    # ``pending`` seats (approval-required events) are held seats
+                    # too; leaving them behind kept a live registration and a
+                    # roster row for an event that no longer runs.
+                    Registration.status.in_(["confirmed", "reserved", "pending"]),
                 )
             )
         ).scalars()
@@ -692,8 +693,6 @@ async def upsert_event(
         "base_value_paise",
         "included_eligible",
         "addon_price_paise",
-        "addon_charge_basis",
-        "team_fee_basis",
         "capacity",
         "capacity_unit",
         "starts_at",
@@ -713,7 +712,6 @@ async def upsert_event(
             val = payload[field]
             if field == "venue_room" and val is None:
                 val = ""
-            elif field == "team_fee_basis" and not val:
                 val = "per_participant"
             setattr(event, field, val)
 
@@ -796,8 +794,6 @@ async def event_admin_payload(db: AsyncSession, event: Event) -> dict[str, Any]:
         "baseValuePaise": event.base_value_paise,
         "includedEligible": event.included_eligible,
         "addonPricePaise": event.addon_price_paise,
-        "addonChargeBasis": event.addon_charge_basis,
-        "teamFeeBasis": event.team_fee_basis,
         "capacity": event.capacity,
         "capacityUnit": event.capacity_unit,
         "status": event.status,

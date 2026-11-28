@@ -570,8 +570,6 @@ export function PortalRegistration() {
   const [payment, setPayment] = useState(null);
   const [fileState, setFileState] = useState({});
   const [localRegistration, setLocalRegistration] = useState(null);
-  const [changeSheet, setChangeSheet] = useState(false);
-  const [changeForm, setChangeForm] = useState({ categoryId: '', note: '' });
   const [showIdCard, setShowIdCard] = useState(false);
   const [broadcastPrompt, setBroadcastPrompt] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -944,17 +942,8 @@ export function PortalRegistration() {
   const selectedCategory =
     categories.find((item) => item.id === form.categoryId) || registration?.category || categories[0];
 
-  const targetRequirements = registration?.categoryChange?.toCategory?.requiredDocuments || [];
   const requirements = isPaid
-    ? [
-        ...(registration?.documentRequirements || []),
-        ...targetRequirements.filter(
-          (item) =>
-            !(registration?.documentRequirements || []).some(
-              (existing) => existing.type === item.type,
-            ),
-        ),
-      ]
+    ? registration?.documentRequirements || []
     : selectedCategory?.requiredDocuments || [];
 
   const documentFor = (type) =>
@@ -1249,25 +1238,6 @@ export function PortalRegistration() {
     } catch (err) {
       setMessage({ tone: 'error', text: err.message || 'Checkout failed.' });
       setPayStage(null);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const requestCategoryChange = async (e) => {
-    e.preventDefault();
-    setBusy('change');
-    setMessage(null);
-    try {
-      await registrationApi.requestCategoryChange(editionId, {
-        categoryId: changeForm.categoryId,
-        note: changeForm.note || null,
-      });
-      setChangeSheet(false);
-      setChangeForm({ categoryId: '', note: '' });
-      refresh('Category change request submitted for review.');
-    } catch (err) {
-      setMessage({ tone: 'error', text: err.message });
     } finally {
       setBusy('');
     }
@@ -1707,11 +1677,6 @@ export function PortalRegistration() {
               >
                 View & Print Receipt
               </Button>
-              {registration.canChangeCategory ? (
-                <Button onClick={() => setChangeSheet(true)} variant="ghost">
-                  Request Category Change
-                </Button>
-              ) : null}
               {broadcastUrl ? (
                 <a
                   href={broadcastUrl}
@@ -1726,28 +1691,6 @@ export function PortalRegistration() {
               ) : null}
             </div>
           </div>
-
-          {/* Category change decision: the desk's answer must be visible to
-              the participant, otherwise requests disappear into a void. */}
-          {registration.categoryChange ? (
-            <Panel>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
-                <div>
-                  <Eyebrow>CATEGORY CHANGE REQUEST</Eyebrow>
-                  <p className="muted" style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
-                    Requested move to <b style={{ color: '#e2e8f0' }}>{registration.categoryChange.toCategory?.name || 'selected category'}</b>
-                    {registration.categoryChange.requestedAt ? ` · ${date(registration.categoryChange.requestedAt)}` : ''}
-                  </p>
-                </div>
-                <StatusPill value={registration.categoryChange.status} />
-              </div>
-              {registration.categoryChange.adminNote ? (
-                <p style={{ margin: 0, fontSize: '13px', color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <b style={{ color: '#94a3b8' }}>Desk note:</b> {registration.categoryChange.adminNote}
-                </p>
-              ) : null}
-            </Panel>
-          ) : null}
 
           {/* Uploaded Documents Status */}
           <Panel>
@@ -2443,51 +2386,6 @@ export function PortalRegistration() {
         })()}
         slow={slowPayment}
       />
-
-      <Sheet
-        open={changeSheet}
-        title="Request a Category Change"
-        onClose={() => setChangeSheet(false)}
-        eyebrow="Ticket Update"
-      >
-        <form className="admin-form" onSubmit={requestCategoryChange}>
-          <p className="muted" style={{ fontSize: '13px' }}>
-            To upgrade or change your pass tier, select the new category below. The registration desk will review and adjust any fee difference.
-          </p>
-          <Field label="New Category">
-            <select
-              value={changeForm.categoryId}
-              onChange={(e) => setChangeForm({ ...changeForm, categoryId: e.target.value })}
-              required
-            >
-              <option value="">Select Category</option>
-              {categories
-                .filter((cat) => cat.enabled && cat.id !== registration?.category?.id)
-                .map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name} · {money(cat.feePaise)}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <Field label="Reason for Change">
-            <textarea
-              rows="3"
-              value={changeForm.note}
-              onChange={(e) => setChangeForm({ ...changeForm, note: e.target.value })}
-              placeholder="e.g. Recently received ISTE Membership card..."
-            />
-          </Field>
-          <div className="sheet-actions">
-            <Button variant="ghost" onClick={() => setChangeSheet(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={busy === 'change' || !changeForm.categoryId} icon={ArrowRight}>
-              {busy === 'change' ? 'Submitting...' : 'Submit Request'}
-            </Button>
-          </div>
-        </form>
-      </Sheet>
 
       {/* Interactive ID Card Sheet */}
       <Sheet

@@ -38,10 +38,7 @@ class ConventionEdition(Base, UUIDPrimaryKey, Timestamps):
     registration_opens_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     registration_closes_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     contact_email: Mapped[str | None] = mapped_column(String(320))
-    contact_phone: Mapped[str | None] = mapped_column(String(24))
     logo_icon_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("icons.id", ondelete="SET NULL"))
-    banner_key: Mapped[str | None] = mapped_column(String(300))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
@@ -52,18 +49,10 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
     )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    pass_price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     included_event_count: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     lunch_included_days: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    included_selection_mode: Mapped[str] = mapped_column(
-        String(12), default="up_to", nullable=False
-    )
     included_value_cap_paise: Mapped[int | None] = mapped_column(Integer)
     cap_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # 0 = cheapest first (default), 1 = most expensive first
-    allowance_pack_order: Mapped[int] = mapped_column(
-        SmallInteger, default=0, server_default=text("0"), nullable=False
-    )
     # 0 = cheapest first (default), 1 = most expensive first
     allowance_pack_order: Mapped[int] = mapped_column(
         SmallInteger, default=0, server_default=text("0"), nullable=False
@@ -73,7 +62,6 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
         Boolean, default=True, nullable=False
     )
     selection_change_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    team_fee_basis_default: Mapped[str] = mapped_column(String(20), default="flat_per_team", nullable=False)
     hold_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
     refund_rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     gst_note: Mapped[str | None] = mapped_column(Text)
@@ -84,8 +72,6 @@ class EditionPolicy(Base, UUIDPrimaryKey, Timestamps):
         Integer, default=0, server_default=text("0"), nullable=False
     )
     reason: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
     __table_args__ = (
         Index(
             "uq_edition_policy_current",
@@ -166,8 +152,6 @@ class Event(Base, UUIDPrimaryKey, Timestamps):
     base_value_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     included_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     addon_price_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    addon_charge_basis: Mapped[str] = mapped_column(String(20), default="per_participant", nullable=False)
-    team_fee_basis: Mapped[str | None] = mapped_column(String(20))
     capacity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     capacity_unit: Mapped[str] = mapped_column(String(20), default="participants", nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

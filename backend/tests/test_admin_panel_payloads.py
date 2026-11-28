@@ -221,8 +221,6 @@ async def test_event_category_and_policy_panels_accept_their_payloads(admin_clie
             "baseValuePaise": 10000,
             "includedEligible": True,
             "addonPricePaise": 5000,
-            "addonChargeBasis": "per_participant",
-            "teamFeeBasis": "per_participant",
             "capacity": 50,
             "capacityUnit": "participants",
             "startsAt": iso(start),
@@ -244,15 +242,12 @@ async def test_event_category_and_policy_panels_accept_their_payloads(admin_clie
 
     # AdminPolicy.payloadFrom()
     policy = {
-        "passPricePaise": 50000,
         "includedEventCount": 3,
-        "includedSelectionMode": "up_to",
         "includedValueCapPaise": 45000,
         "capInclusive": True,
         "lunchIncludedDays": ["day1", "day2"],
         "addonRequiresPass": True,
         "teamMembersRequirePass": True,
-        "teamFeeBasisDefault": "per_participant",
         "holdMinutes": 15,
         "selectionChangeDeadline": None,
         "gstNote": "Inclusive of all applicable taxes",

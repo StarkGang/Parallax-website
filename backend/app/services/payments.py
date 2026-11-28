@@ -455,11 +455,6 @@ async def mark_order_paid(
 
         await apply_paid_category_change(db, order)
 
-    elif order.purpose == "included_selection_delta":
-        from app.services.passes import apply_paid_selection_delta
-
-        await apply_paid_selection_delta(db, order)
-
     await db.flush()
     try:
         from app.services.telegram import dispatch_payment_telegram_alert
@@ -1001,7 +996,6 @@ async def refund_order(
                     edition_id=user_pass.edition_id,
                     reason="Legacy pass order refunded",
                     refund_paid_events=True,
-                    try_gateway=settled_now,
                     actor_id=requested_by_id,
                 )
         if order.purpose == "college_registration" or (

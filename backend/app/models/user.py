@@ -31,8 +31,6 @@ class User(Base, UUIDPrimaryKey, Timestamps):
     phone_e164: Mapped[str | None] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
     __table_args__ = (Index("ix_users_email_normalized", "email_normalized"),)
 
 

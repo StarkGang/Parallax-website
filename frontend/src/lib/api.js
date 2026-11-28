@@ -326,13 +326,6 @@ export const registrationApi = {
     }),
   resubmit: (editionId) =>
     api(`/editions/${editionId}/registration/resubmit`, { method: 'POST' }),
-  requestCategoryChange: (editionId, payload) =>
-    api(`/editions/${editionId}/registration/category-change`, {
-      method: 'POST',
-      body: payload,
-    }),
-  categoryChangePayment: (editionId) =>
-    api(`/editions/${editionId}/registration/category-change/payment`),
   markNotificationRead: (editionId, id) =>
     api(`/editions/${editionId}/registration/notifications/${id}/read`, {
       method: 'POST',
@@ -491,11 +484,6 @@ export const adminApi = {
     }),
   refundRegistration: (editionId, id, payload) =>
     api(`${registrationAdminBase(editionId)}/${id}/refund`, {
-      method: 'POST',
-      body: payload,
-    }),
-  decideRegistrationCategoryChange: (editionId, id, payload) =>
-    api(`${registrationAdminBase(editionId)}/${id}/category-change`, {
       method: 'POST',
       body: payload,
     }),

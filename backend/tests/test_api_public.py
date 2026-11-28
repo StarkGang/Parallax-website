@@ -32,7 +32,6 @@ async def test_current_edition_and_catalogue(client: AsyncClient):
     edition = resp.json()["data"]
     assert edition["slug"] in ("parallax-2027", "parallax-2027")
     assert "Parallax 202" in edition["name"]
-    assert edition["policy"]["passPricePaise"] == 50000
 
     # Categories
     cat_resp = await client.get("/api/v1/public/editions/parallax-2027/categories")

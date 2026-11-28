@@ -85,8 +85,6 @@ async def _event(
         base_value_paise=base,
         addon_price_paise=price,
         included_eligible=included_eligible,
-        addon_charge_basis="per_participant",
-        team_fee_basis="per_team" if fmt == "team" else None,
         capacity=100,
         capacity_unit="participants",
         starts_at=now + timedelta(days=20),
@@ -112,17 +110,16 @@ async def policy_guard(db_session: AsyncSession):
         ).scalars()
     )
     snapshot = [
-        (r.id, r.included_event_count, r.included_value_cap_paise, r.cap_inclusive, r.included_selection_mode)
+        (r.id, r.included_event_count, r.included_value_cap_paise, r.cap_inclusive)
         for r in rows
     ]
     yield
-    for rid, count, cap, inclusive, mode in snapshot:
+    for rid, count, cap, inclusive in snapshot:
         row = await db_session.get(EditionPolicy, rid)
         if row is not None:
             row.included_event_count = count
             row.included_value_cap_paise = cap
             row.cap_inclusive = inclusive
-            row.included_selection_mode = mode
     await db_session.commit()
 
 
@@ -131,7 +128,6 @@ async def _set_policy(db: AsyncSession, ctx, *, count: int, cap: int | None):
     policy.included_event_count = count
     policy.included_value_cap_paise = cap
     policy.cap_inclusive = True
-    policy.included_selection_mode = "up_to"
     await db.commit()
 
 
@@ -281,6 +277,12 @@ async def test_stale_quote_is_refused_when_a_price_changes(client: AsyncClient, 
 async def test_cancelling_with_refund_creates_exactly_one_refund(
     client: AsyncClient, db_session, policy_guard
 ):
+    """A user cancellation records a refund *request*; the desk decides the money.
+
+    Spec: the admin chooses a full, partial or no refund for an event the
+    attendee cancels. The old behaviour refunded the gateway immediately from
+    this route, which left the attendee's money moving before any admin saw it.
+    """
     ctx = await edition_ctx(client, db_session)
     await _set_policy(db_session, ctx, count=0, cap=None)
     await _pass_holder(client, ctx, "refund")
@@ -292,14 +294,23 @@ async def test_cancelling_with_refund_creates_exactly_one_refund(
     event_id = event.id
     resp = await client.delete(f"{BASE}/{ctx.edition_id}/events/{event_id}")
     assert resp.status_code == 200, resp.text
+    removed = resp.json()["data"]
+    assert removed["removed"] is True
+    assert removed["refundedPaise"] == 0, "no money may move without the desk"
+    assert removed["refundPending"] is True
+    assert removed["refundRequestedPaise"] == 12000
+
     db_session.expire_all()
     refunds = (
         await db_session.execute(
             select(Refund).where(Refund.order_id == uuid.UUID(order_id))
         )
     ).scalars().all()
-    assert len(refunds) == 1, "a retry must not stack a second refund"
+    assert len(refunds) == 1, "a retry must not stack a second refund request"
     assert refunds[0].amount_paise == 12000
+    assert refunds[0].status == "pending"
+    order = await db_session.get(PaymentOrder, uuid.UUID(order_id))
+    assert order.status == "paid", "the order stays paid until the desk settles it"
 
     seat = (
         await db_session.execute(
@@ -310,6 +321,15 @@ async def test_cancelling_with_refund_creates_exactly_one_refund(
         )
     ).scalars().first()
     assert seat is not None
+
+    # The desk chooses partial: only the amount it sends is refunded.
+    await login(client, "owner@parallax.local", role="admin")
+    settled = await client.post(
+        f"{BASE}/{ctx.edition_id}/admin/refunds/{refunds[0].id}/process",
+        json={"amountPaise": 5000},
+    )
+    assert settled.status_code == 200, settled.text
+    assert settled.json()["data"]["amountPaise"] == 5000
 
 
 # --------------------------------------------------------------------------- #
