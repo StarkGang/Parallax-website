@@ -735,11 +735,9 @@ export function PortalSelectEvents() {
               const existingTeam = teamByEventId.get(event.id);
               const isReserved = reservedEventIds.has(event.id);
               const basisLabel =
-                event.teamFeeBasis === 'per_team'
-                  ? `${money(event.addonPricePaise)} per team`
-                  : event.addonPricePaise > 0
-                    ? `${money(event.addonPricePaise)} per member`
-                    : 'Free';
+                event.addonPricePaise > 0
+                  ? `${money(event.addonPricePaise)} per member`
+                  : 'Free';
               return (
                 <div className="choice" key={event.id} style={{ cursor: 'default' }}>
                   <span className="choice-check">
@@ -1602,9 +1600,7 @@ export function PortalTeams() {
                   ) : selectedEvent ? (
                     <small className="muted" style={{ display: 'block', marginTop: '6px' }}>
                       {selectedEvent.addonPricePaise > 0
-                        ? selectedEvent.teamFeeBasis === 'per_team'
-                          ? `Fee: ${money(selectedEvent.addonPricePaise)} per team (paid once; teammates join free).`
-                          : `Fee: ${money(selectedEvent.addonPricePaise)} per participant (each member pays their own seat).`
+                        ? `Fee: ${money(selectedEvent.addonPricePaise)} per participant (each member pays their own seat).`
                         : 'Free team event (pass required).'}
                     </small>
                   ) : null}
@@ -1796,19 +1792,6 @@ export function PortalTeams() {
                     : 'Lock before event start to freeze team members.'}
                 </small>
               </div>
-            ) : null}
-            {team.isLeader && team.feeBasis === 'per_team' && team.feePaise > 0 && !team.leaderPaid ? (
-              <InlineMessage tone="info">
-                The team fee is not settled yet. Teammates can join now and ride this team's
-                payment; pay it to confirm every seat.
-              </InlineMessage>
-            ) : null}
-            {!team.isLeader && team.feeBasis === 'per_team' && team.feePaise > 0 ? (
-              <InlineMessage tone={team.leaderPaid ? 'info' : 'warn'}>
-                {team.leaderPaid
-                  ? 'Covered by your team leader — no separate team fee is due from you.'
-                  : 'Awaiting your team leader’s team payment — no separate fee is due from you.'}
-              </InlineMessage>
             ) : null}
             {team.payment ? (
               <InlineMessage tone="warn">

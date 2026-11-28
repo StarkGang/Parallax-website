@@ -113,7 +113,7 @@ export function TeamInvite() {
             <span>Entry</span>
             <b>
               {data.event.listPaise > 0 ? money(data.event.listPaise) : 'Free'}
-              {data.event.teamBasis === 'per_team' ? ' / team' : ' / person'}
+              {' / person'}
             </b>
           </div>
           <div className="wl-invite-stat">

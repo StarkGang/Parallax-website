@@ -1882,7 +1882,6 @@ function EventForm({ editionId, categories, initial, onDone, onClose }) {
             onChange={(event) => set('teamFeeBasis', event.target.value)}
           >
             <option value="per_participant">Per participant</option>
-            <option value="per_team">Per team</option>
           </select>
         </Field>
         <Field label="Team min size">
@@ -2779,7 +2778,6 @@ export function AdminPolicy() {
               onChange={(event) => set('teamFeeBasisDefault', event.target.value)}
             >
               <option value="per_participant">Per participant</option>
-              <option value="per_team">Per team</option>
             </select>
           </Field>
           <Field label="GST note">

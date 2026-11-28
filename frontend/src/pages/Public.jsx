@@ -1781,11 +1781,9 @@ export function EventDetail() {
               <div>
                 <span>Fee basis</span>
                 <b>
-                  {event.teamFeeBasis === 'per_team'
-                    ? 'Once per team'
-                    : event.teamFeeBasis === 'per_participant'
-                      ? 'Per participant'
-                      : 'Set by the pass'}
+                  {event.teamFeeBasis === 'per_participant'
+                    ? 'Per participant'
+                    : 'Set by the pass'}
                 </b>
               </div>
               <div>
